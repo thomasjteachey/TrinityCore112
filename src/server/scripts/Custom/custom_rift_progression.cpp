@@ -30,9 +30,11 @@
 // names (SetGUID) - the closest enemy - and nothing else moves it. Being hit,
 // seeing someone, or whoever did the most damage play no part.
 //
-// And League's recall: on Summoner's Rift the Hearthstone (and a shaman's Astral
-// Recall) takes its caster to its own fountain instead of home - the same cast,
-// broken by damage the same way - and is ready again at once.
+// And League's recall: spell 94120 "Recall", taught for the match
+// (RiftProgression), an 8 s cast that works in combat and breaks when the caster
+// moves or is hit, takes its caster to its own fountain. On Summoner's Rift the
+// Hearthstone and a shaman's Astral Recall do the same instead of going home,
+// and are ready again at once.
 
 #include "AddonRequestRoutes.h"
 #include "Battleground.h"
@@ -161,10 +163,32 @@ class spell_rift_recall : public SpellScript
     }
 };
 
+// 94120 Recall
+class spell_rift_recall_league : public SpellScript
+{
+    PrepareSpellScript(spell_rift_recall_league);
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Battleground* bg = RiftOf(GetCaster());
+        if (!bg)
+            return;
+        Player* player = GetCaster()->ToPlayer();
+        if (WorldSafeLocsEntry const* fountain = bg->GetClosestGraveyard(player))
+            player->NearTeleportTo(fountain->Loc.X, fountain->Loc.Y, fountain->Loc.Z, player->GetOrientation());
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_rift_recall_league::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 void AddSC_custom_rift_progression()
 {
     AddonRequestRoutes::Register("RIFTPICK", &RiftProgression::HandlePickRequest);
     AddonRequestRoutes::Register("RIFTSTATE", &RiftProgression::HandleStateRequest);
     RegisterSpellScript(spell_rift_recall);
+    RegisterSpellScript(spell_rift_recall_league);
     RegisterCreatureAI(npc_rift_minion);
 }

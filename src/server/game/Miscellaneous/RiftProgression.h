@@ -21,6 +21,7 @@
 #include "Define.h"
 
 #include <string_view>
+#include <vector>
 
 class Player;
 class SpellInfo;
@@ -88,9 +89,17 @@ namespace RiftProgression
 
     // Match experience, in League's own units (a melee minion is ~59).
     TC_GAME_API void AddExperience(Player* player, float leagueXp);
-    // Rift gold, in League gold (1 League gold = 1 silver). With popup, the
+    // Rift gold, in League gold (1 League gold = 1 gold). With popup, the
     // CENTURION_Rift addon floats "+N gold" over the character (RIFTGOLD line).
     TC_GAME_API void AddGold(Player* player, uint32 leagueGold, bool popup = false);
+    // League's build paths (world `rift_item_recipe`): an item bought while the
+    // character holds some of its components costs its price less theirs - all
+    // the way down the tree, a missing component priced the same way - and the
+    // components held go into it. `price` is the vendor's price in copper; the
+    // result is what this character pays, and `consumed` the item entries to take
+    // once the purchase has gone through (Player::BuyItemFromVendorSlot).
+    TC_GAME_API uint32 ShopPrice(Player* player, uint32 item, uint32 price, std::vector<uint32>& consumed);
+    TC_GAME_API void TakeComponents(Player* player, std::vector<uint32> const& consumed);
     // The League level the character has reached this match (1..18).
     TC_GAME_API uint8 GetLeagueLevel(Player const* player);
 

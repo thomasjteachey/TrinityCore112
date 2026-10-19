@@ -24837,6 +24837,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
     }
 
     uint32 price = 0;
+    std::vector<uint32> riftComponents;     // Summoner's Rift: components going into the item
     if (crItem->IsGoldRequired(pProto) && pProto->BuyPrice > 0) //Assume price cannot be negative (do not know why it is int32)
     {
         uint32 maxCount = MAX_MONEY_AMOUNT / pProto->BuyPrice;
@@ -24851,6 +24852,11 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
         // reputation discount
         price = uint32(floor(price * GetReputationPriceDiscount(creature)));
 
+        // Summoner's Rift: League's build paths - the components held pay for
+        // their share and go into the item.
+        if (count == 1 && RiftProgression::IsInMatch(this))
+            price = RiftProgression::ShopPrice(this, item, price, riftComponents);
+
         if (!HasEnoughMoney(price))
         {
             SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, item, 0);
@@ -24862,6 +24868,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
     {
         if (!_StoreOrEquipNewItem(vendorslot, item, count, bag, slot, price, pProto, creature, crItem, true))
             return false;
+        RiftProgression::TakeComponents(this, riftComponents);
     }
     else if (IsEquipmentPos(bag, slot))
     {
@@ -24872,6 +24879,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
         }
         if (!_StoreOrEquipNewItem(vendorslot, item, count, bag, slot, price, pProto, creature, crItem, false))
             return false;
+        RiftProgression::TakeComponents(this, riftComponents);
     }
     else
     {

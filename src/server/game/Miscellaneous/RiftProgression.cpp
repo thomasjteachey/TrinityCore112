@@ -24,6 +24,7 @@
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "Log.h"
+#include "ObjectMgr.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "Player.h"
 #include "SpellInfo.h"
@@ -55,12 +56,49 @@ namespace
     // climbs to the character's real level.
     uint8 constexpr START_LEVEL = 10;
 
-    uint32 constexpr ITEM_HEARTHSTONE = 6948;
+    // League's recall: Centurion spell 94120 "Recall" (8 s cast, usable in
+    // combat, broken by moving or taking damage; custom_rift_progression.cpp
+    // sends the caster to its fountain). Known only for the match.
+    uint32 constexpr SPELL_RIFT_RECALL = 94120;
+    // Valor's Reward, a League item passive (scripts/Custom/custom_rift_items.cpp).
+    uint32 constexpr SPELL_VALORS_REWARD = 94141;
 
     // The fountain shops' League items (import/rift/scripts/rift_shop.py): bought
     // for the match, gone with it.
     uint32 constexpr SHOP_ITEM_FIRST = 991000;
     uint32 constexpr SHOP_ITEM_LAST = 991099;
+
+    // League's build paths (world `rift_item_recipe`): an item's components.
+    std::unordered_map<uint32, std::vector<uint32>> Recipes;
+
+    // What `entry` costs given the components left in `pool`: its price less its
+    // components' prices (the combine cost), plus each component the character
+    // does not hold, itself priced this way. Held components leave the pool.
+    uint32 RecipeCost(uint32 entry, std::unordered_map<uint32, uint32>& pool, std::vector<uint32>& consumed, uint8 depth = 0)
+    {
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+        uint32 const full = proto ? uint32(std::max<int32>(proto->BuyPrice, 0)) : 0;
+        auto const itr = Recipes.find(entry);
+        if (itr == Recipes.end() || depth > 4)
+            return full;
+        uint32 parts = 0;
+        for (uint32 component : itr->second)
+            if (ItemTemplate const* cp = sObjectMgr->GetItemTemplate(component))
+                parts += uint32(std::max<int32>(cp->BuyPrice, 0));
+        uint32 cost = full > parts ? full - parts : 0;
+        for (uint32 component : itr->second)
+        {
+            auto const held = pool.find(component);
+            if (held != pool.end() && held->second)
+            {
+                --held->second;
+                consumed.push_back(component);
+            }
+            else
+                cost += RecipeCost(component, pool, consumed, depth + 1);
+        }
+        return cost;
+    }
 
     void TakeShopItems(Player* player)
     {
@@ -411,6 +449,26 @@ namespace
         player->SendActionButtons(1);
     }
 
+    void TakeRecall(Player* player)
+    {
+        bool removed = false;
+        for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+            if (ActionButton const* ab = player->GetActionButton(button))
+                if (ab->GetType() == ACTION_BUTTON_SPELL && ab->GetAction() == SPELL_RIFT_RECALL)
+                {
+                    player->removeActionButton(button);
+                    removed = true;
+                }
+        if (removed)
+            player->SendActionButtons(1);
+        if (player->HasSpell(SPELL_RIFT_RECALL))
+            player->RemoveSpell(SPELL_RIFT_RECALL, false, false);
+        // RemoveSpell is only written at the next save; a crash before it must
+        // not leave the recall in the spellbook.
+        CharacterDatabase.PExecute("DELETE FROM character_spell WHERE guid = {} AND spell = {}",
+            player->GetGUID().GetCounter(), SPELL_RIFT_RECALL);
+    }
+
     // A chain's first unlock puts the spell on the bars: back on its own button
     // when that is free, otherwise on the first free button of the usual bars.
     void PlaceUnlockedSpell(Player* player, State const& state, uint32 first, uint32 spell)
@@ -538,6 +596,18 @@ void ProbeStorage()
                 } while (rows->NextRow());
             }
         TC_LOG_INFO("server.loading", ">> Summoner's Rift core abilities: lists for {} class(es).", Whitelist.size());
+
+        Recipes.clear();
+        if (WorldDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'rift_item_recipe'"))
+            if (QueryResult rows = WorldDatabase.Query("SELECT item, component FROM rift_item_recipe ORDER BY item, slot"))
+            {
+                do
+                {
+                    Field* f = rows->Fetch();
+                    Recipes[f[0].GetUInt32()].push_back(f[1].GetUInt32());
+                } while (rows->NextRow());
+            }
+        TC_LOG_INFO("server.loading", ">> Summoner's Rift shop: {} item(s) with a build path.", Recipes.size());
     }
 
     StoragePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash'") != nullptr;
@@ -594,9 +664,6 @@ void Enter(Player* player)
     // The temporal gear - the field set issued for the level the match starts at
     // - goes on while the character still has its real level to equip it with.
     Tournament::ApplyRiftLoadout(player, std::min<uint8>(START_LEVEL, state.RealLevel));
-    // The recall (scripts/Custom/custom_rift_progression.cpp) is the Hearthstone.
-    if (!player->HasItemCount(ITEM_HEARTHSTONE, 1, true))
-        player->AddItem(ITEM_HEARTHSTONE, 1);
     player->SetMoney(START_GOLD * COPPER_PER_LEAGUE_GOLD);
     player->ResetTalents(true);
 
@@ -610,6 +677,9 @@ void Enter(Player* player)
     player->GiveLevel(state.StartLevel, true);
     player->SendTalentsInfoData(false);
     HideLockedButtons(player, state);
+    if (!player->HasSpell(SPELL_RIFT_RECALL))
+        player->LearnSpell(SPELL_RIFT_RECALL, false);
+    PlaceUnlockedSpell(player, state, 0, SPELL_RIFT_RECALL);
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
     ShowProgress(player, state);
@@ -636,6 +706,7 @@ void Leave(Player* player)
     }
 
     TakeShopItems(player);
+    TakeRecall(player);
     player->GiveLevel(state.RealLevel, true);
     player->SetUInt32Value(PLAYER_XP, state.RealXp);
     RestoreTalents(player, state.RealTalents);
@@ -645,6 +716,27 @@ void Leave(Player* player)
     if (state.Persistent)
         CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
     SendLine(player, "RIFT:END");
+}
+
+uint32 ShopPrice(Player* player, uint32 item, uint32 price, std::vector<uint32>& consumed)
+{
+    consumed.clear();
+    if (!player || !Recipes.count(item))
+        return price;
+    std::unordered_map<uint32, uint32> pool;
+    for (uint32 entry = SHOP_ITEM_FIRST; entry <= SHOP_ITEM_LAST; ++entry)
+        if (uint32 const count = player->GetItemCount(entry, false))
+            pool[entry] = count;
+    uint32 const cost = RecipeCost(item, pool, consumed);
+    return std::min(cost, price);
+}
+
+void TakeComponents(Player* player, std::vector<uint32> const& consumed)
+{
+    if (!player)
+        return;
+    for (uint32 entry : consumed)
+        player->DestroyItemCount(entry, 1, true, false);
 }
 
 void OnLogin(Player* player)
@@ -674,6 +766,7 @@ void OnLogin(Player* player)
     Field* fields = row->Fetch();
     uint8 const realLevel = fields[0].GetUInt8();
     TakeShopItems(player);
+    TakeRecall(player);
     player->GiveLevel(realLevel, true);
     player->SetUInt32Value(PLAYER_XP, fields[1].GetUInt32());
     player->SetMoney(fields[2].GetUInt32());
@@ -807,6 +900,13 @@ void OnLevelChanged(Player* player)
     {
         ++state->MatchLevel;
         state->PendingPicks += PICKS_PER_LEVEL;
+    }
+    // Valor's Reward (Catalyst of the Protector and what builds from it).
+    if (player->HasAura(SPELL_VALORS_REWARD) && player->IsAlive())
+    {
+        player->ModifyHealth(150);
+        if (player->GetMaxPower(POWER_MANA) > 0)
+            player->ModifyPower(POWER_MANA, 200);
     }
     ShowProgress(player, *state);
     SendState(player, *state);

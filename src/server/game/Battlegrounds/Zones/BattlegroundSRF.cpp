@@ -10,6 +10,7 @@
 #include "MotionMaster.h"
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
+#include "Pet.h"
 #include "Player.h"
 #include "RiftProgression.h"
 #include "SpellAuras.h"
@@ -682,6 +683,7 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
     if (_brushTimer >= SRF_BRUSH_TICK)
     {
         UpdateBrush(_brushTimer);
+        ReleaseIdleCombat();
         _brushTimer = 0;
     }
 }
@@ -937,7 +939,10 @@ Unit* BattlegroundSRF::FindMinionTarget(Creature* minion, TeamId team, float ran
         if (bgPlayer.Team == TeamValue(enemy))
             if (Player* player = ObjectAccessor::FindPlayer(guid))
                 if (player->GetMap() == map)
+                {
                     consider(player, acquire);
+                    consider(EnemyPetOf(player), acquire);
+                }
 
     float const structureReach = std::max(acquire, SRF_MINION_STRUCTURE_RANGE);
     for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
@@ -985,6 +990,62 @@ bool BattlegroundSRF::IsAlly(Unit* unit, TeamId team) const
     return false;
 }
 
+Pet* BattlegroundSRF::EnemyPetOf(Player* player) const
+{
+    Pet* pet = player ? player->GetPet() : nullptr;
+    return pet && pet->IsAlive() && pet->GetMap() == player->GetMap() ? pet : nullptr;
+}
+
+bool BattlegroundSRF::IsChampionPet(Unit* unit) const
+{
+    if (!unit || !unit->IsPet())
+        return false;
+    Unit* owner = unit->GetOwner();
+    return owner && owner->GetTypeId() == TYPEID_PLAYER;
+}
+
+// A minion, turret or turret eye that is in combat with a player it is not
+// fighting - not its target, and not attacked by that player - lets go of
+// them. The stock rule keeps a player in combat for as long as any creature
+// holds them, and Rift units never evade, so one turret shot or a minion that
+// had moved on kept a champion in combat until that unit died.
+void BattlegroundSRF::ReleaseIdleCombat()
+{
+    Map* map = FindBgMap();
+    if (!map)
+        return;
+    std::vector<CombatReference*> drop;
+    auto release = [&](Creature* creature, ObjectGuid target)
+    {
+        if (!creature)
+            return;
+        drop.clear();
+        for (auto const& [guid, ref] : creature->GetCombatManager().GetPvECombatRefs())
+        {
+            if (!guid.IsPlayer() || guid == target)
+                continue;
+            Unit* other = ref->GetOther(creature);
+            if (other && AttackOf(other) == creature)
+                continue;
+            drop.push_back(ref);
+        }
+        for (CombatReference* ref : drop)
+            ref->EndCombat();
+    };
+
+    for (Minion const& m : _minions)
+        if (Creature* creature = map->GetCreature(m.Guid))
+            release(creature, creature->GetVictim() ? creature->GetVictim()->GetGUID() : ObjectGuid::Empty);
+    for (uint8 slot = 0; slot < _structures.size(); ++slot)
+    {
+        Creature* structure = map->GetCreature(BgCreatures[slot]);
+        ObjectGuid const target = _turrets[slot].Target;
+        release(structure, target);
+        if (!_turrets[slot].Eye.IsEmpty())
+            release(map->GetCreature(_turrets[slot].Eye), target);
+    }
+}
+
 // League's minion target priority, 1 highest:
 //   1 an enemy champion attacking an allied champion (the ally within 1000)
 //   2 an enemy minion attacking an allied champion
@@ -1005,6 +1066,8 @@ uint8 BattlegroundSRF::MinionPriority(Creature* minion, TeamId team, Unit* targe
     for (Minion const& m : _minions)
         if (m.Guid == target->GetGUID())
             return alliedChampion ? 2 : alliedMinion ? 3 : 5;
+    if (IsChampionPet(target))
+        return alliedChampion ? 2 : alliedMinion ? 3 : 5;
     // a structure: a turret firing on an allied minion comes before the minions
     for (uint8 slot = 0; slot < _structures.size(); ++slot)
         if (BgCreatures[slot] == target->GetGUID())
@@ -1413,8 +1476,9 @@ void BattlegroundSRF::UpdateProgression(uint32 diff)
 
 // ------------------------------------------------------------------- turrets
 
-// League's turret priority: melee minions, then casters, then champions,
-// closest first within each; the target is held while it stays in range.
+// League's turret priority: melee minions, then casters and champions' pets,
+// then champions, closest first within each; the target is held while it stays
+// in range.
 Unit* BattlegroundSRF::PickTurretTarget(Creature* turret, TeamId team) const
 {
     Map* map = turret->GetMap();
@@ -1444,7 +1508,10 @@ Unit* BattlegroundSRF::PickTurretTarget(Creature* turret, TeamId team) const
         if (bgPlayer.Team == TeamValue(OtherTeam(team)))
             if (Player* player = ObjectAccessor::FindPlayer(guid))
                 if (player->GetMap() == map)
+                {
                     consider(player, 3);
+                    consider(EnemyPetOf(player), 2);
+                }
     return best;
 }
 
@@ -1512,6 +1579,8 @@ void BattlegroundSRF::UpdateTurrets()
             ts.WarmStacks = std::min<uint8>(ts.WarmStacks + 1, SRF_TURRET_WARMUP_MAX);
             ts.SinceChampionShot = 0;
         }
+        else if (IsChampionPet(target))
+            share = SRF_TURRET_PLAYER_SHARE;
         else
             for (Minion const& m : _minions)
                 if (m.Guid == target->GetGUID())

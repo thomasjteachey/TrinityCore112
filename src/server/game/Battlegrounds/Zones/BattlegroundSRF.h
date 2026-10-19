@@ -182,6 +182,8 @@ protected:
     void BuildObjectivesBlock(WorldPacket& data) final override;
 };
 
+class Pet;
+
 class BattlegroundSRF : public Battleground
 {
 public:
@@ -272,6 +274,12 @@ private:
     // League's targeting: who a unit is attacking, and how much a minion wants a target.
     Unit* AttackOf(Unit* unit) const;
     bool IsAlly(Unit* unit, TeamId team) const;
+    // A hunter's or warlock's pet: an enemy champion's pet is fought like a minion.
+    Pet* EnemyPetOf(Player* player) const;
+    bool IsChampionPet(Unit* unit) const;
+    // League has no combat state to hold: Rift units let go of players they are
+    // no longer fighting (see UpdateBrush's tick).
+    void ReleaseIdleCombat();
     uint8 MinionPriority(Creature* minion, TeamId team, Unit* target) const;
     uint32 WaveInterval() const;
     void FireBolt(Unit* source, Unit* target, uint32 spellId, int32 damage);
