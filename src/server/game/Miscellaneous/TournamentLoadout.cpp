@@ -1324,6 +1324,66 @@ void ApplyBattlegroundLoadout(Player* player)
         player->GetName(), battleground->GetMapId(), issued, putAway);
 }
 
+// The Rift's temporal gear is the field kit, slot by slot: no twins, no
+// template pieces, no weapon of the same shape - the kit, and nothing for a slot
+// it has no piece for. The originals go aside exactly as a tournament match puts
+// them aside, so the way back is the tournament's own.
+void ApplyRiftLoadout(Player* player)
+{
+    if (!player || player->IsGameMaster() || HasBattlegroundLoadout(player))
+        return;
+
+    WorldSession const* session = player->GetSession();
+    bool const transient = !session || session->IsTransientPlayerSession();
+    if (!transient && !StashTablePresent)
+        return;
+
+    SwapGuard guard(player);
+
+    std::vector<LoadoutEntry> const entries = BuildLoadout(player);
+    CharacterDatabaseTransaction trans = transient ? CharacterDatabaseTransaction(nullptr) : CharacterDatabase.BeginTransaction();
+
+    uint32 putAway = 0;
+    for (LoadoutEntry const& entry : entries)
+    {
+        if (!entry.Original)
+            continue;
+        if (transient)
+            player->DestroyItem(entry.Bag, entry.Slot, true);
+        else
+            StashOriginal(player, entry, trans);
+        ++putAway;
+    }
+
+    uint32 issued = 0;
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD || player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            continue;
+        uint32 const kit = PickKitPiece(player, slot);
+        uint16 dest = 0;
+        if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
+            continue;
+        Item* item = player->EquipNewItem(dest, kit, true);
+        if (!item)
+            continue;
+        ApplyStatsIfDead(player, item);
+        if (!transient)
+            InsertRow(trans, player->GetGUID().GetCounter(), LOADOUT_ROW_SUBSTITUTE, item->GetGUID().GetCounter(),
+                PackPosition(item->GetBagSlot(), item->GetSlot()));
+        ++issued;
+    }
+
+    if (!transient)
+    {
+        player->SaveInventoryAndGoldToDB(trans);
+        CharacterDatabase.CommitTransaction(trans);
+        MarkActive(player->GetGUID(), true);
+    }
+
+    TC_LOG_DEBUG("bg.battleground", "Rift loadout: dressed {} in the field set: {} issued, {} put away.", player->GetName(), issued, putAway);
+}
+
 void RestoreBattlegroundLoadout(Player* player)
 {
     if (!player || !StashTablePresent)

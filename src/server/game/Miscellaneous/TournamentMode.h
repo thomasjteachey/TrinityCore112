@@ -340,6 +340,11 @@ namespace Tournament
     bool AreMatchConsumablesBanned();   // Centurion.Tournament.BgBanConsumables
 
     void ApplyBattlegroundLoadout(Player* player);    // Battleground::AddPlayer
+    // Summoner's Rift: its own rules, not the tournament's. Every worn slot the
+    // field kit covers is dressed from it and everything else equippable is put
+    // away, in the same rows - so RestoreBattlegroundLoadout and the login route
+    // give it all back. RiftProgression::Enter, at the character's real level.
+    void ApplyRiftLoadout(Player* player);
     void RestoreBattlegroundLoadout(Player* player);  // Battleground::RemovePlayerAtLeave
     void RestoreLoadoutAfterLogin(Player* player);    // the crash and logout route
     bool HasBattlegroundLoadout(Player const* player);

@@ -3612,9 +3612,10 @@ void Player::RecountUsedTalentsFromTalentMap()
 void Player::InitTalentForLevel()
 {
     uint8 level = GetLevel();
-    // A Summoner's Rift match plays from level 1 with the character's talents
-    // still learned (RiftProgression): resetting them here would wipe them and
-    // save the wipe. The match switches their effects off instead.
+    // A Summoner's Rift match plays from level 10 (RiftProgression). Its active
+    // spec was put aside and reset; the OTHER spec still holds a full build that
+    // no match level pays for, and resetting it here would wipe it and save the
+    // wipe - as would folding the specs together below the dual-spec level.
     bool const riftKeepsTalents = RiftProgression::SuppressTalentReset(this);
     // talents base at level diff (talents = level - 9 but some can be used already)
     if (level < 10)
@@ -3630,7 +3631,7 @@ void Player::InitTalentForLevel()
     }
     else
     {
-        if (level < sWorld->getIntConfig(CONFIG_MIN_DUALSPEC_LEVEL) || m_specsCount == 0)
+        if ((level < sWorld->getIntConfig(CONFIG_MIN_DUALSPEC_LEVEL) && !riftKeepsTalents) || m_specsCount == 0)
         {
             m_specsCount = 1;
             m_activeSpec = 0;
@@ -30848,6 +30849,10 @@ void Player::UpdateSpecCount(uint8 count)
 void Player::ActivateSpec(uint8 spec)
 {
     if (GetActiveSpec() == spec)
+        return;
+
+    // A Rift match levels one spec only; the other keeps the build it walked in with.
+    if (RiftProgression::SuppressTalentReset(this))
         return;
 
     if (spec > GetSpecsCount())

@@ -57,6 +57,7 @@
 #include <limits>
 #include <vector>
 #include "Miscellaneous/TournamentMode.h"
+#include "RiftProgression.h"
 
 namespace
 {
@@ -1925,6 +1926,10 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
             player->ResurrectPlayer(1.0f);
             player->SpawnCorpseBones();
         }
+
+        // A Summoner's Rift character gets its real level (and talents, money)
+        // back first: its own gear needs that level to be worn again.
+        RiftProgression::Leave(player);
 
         // Its own gear back, before anything else undoes the join. A character
         // that is not here to be handed it - logged out, disconnected, cut off

@@ -274,16 +274,8 @@ float constexpr SRF_TURRET_MINION_SHARE = 0.45f;
 float constexpr SRF_TURRET_PLAYER_SHARE = 0.20f;
 float constexpr SRF_TURRET_PLAYER_RAMP  = 0.10f;
 float constexpr SRF_TURRET_PLAYER_MAX   = 0.60f;
-// A shot leaves from the turret's crystal and flies at League's 1200 units a
-// second, homing on its target; it lands when it reaches the target's chest.
-float constexpr SRF_SHOT_ORIGIN_HEIGHT  = Yards(475.0f);
-float constexpr SRF_SHOT_SPEED          = Yards(1200.0f);
-float constexpr SRF_SHOT_HIT_DISTANCE   = Yards(75.0f);
-float constexpr SRF_SHOT_AIM_HEIGHT     = Yards(60.0f);
-// Caster minions: League's 550 range and 650-unit-a-second bolt, one every 1.6 s.
+// Caster minions: League's 550 range, a bolt every 1.6 s.
 float constexpr SRF_CASTER_RANGE        = Yards(550.0f);
-float constexpr SRF_CASTER_BOLT_SPEED   = Yards(650.0f);
-float constexpr SRF_CASTER_BOLT_HEIGHT  = Yards(55.0f);
 uint32 constexpr SRF_CASTER_ATTACK_TIME = 1600;
 // League's rewards (Season 3), in League gold and experience. Experience goes
 // to the enemy champions within 1600 units of a minion that dies, shared
@@ -380,7 +372,6 @@ BattlegroundSRF::BattlegroundSRF()
     _waveTimer = 0;
     _minionTimer = 0;
     _turretTimer = 0;
-    _shotTimer = 0;
     _fountainTimer = 0;
     _structureTimer = 0;
     _passiveGoldTimer = 0;
@@ -424,14 +415,12 @@ void BattlegroundSRF::Reset()
     _structures.fill(StructureState());
     _turrets.fill(TurretState());
     _minions.clear();
-    _shots.clear();
     for (auto& team : _lanePaths)
         for (std::vector<Position>& lane : team)
             lane.clear();
     _waveTimer = 0;
     _minionTimer = 0;
     _turretTimer = 0;
-    _shotTimer = 0;
     _fountainTimer = 0;
     _structureTimer = 0;
     _passiveGoldTimer = 0;
@@ -563,13 +552,6 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
     {
         _turretTimer = 0;
         UpdateTurrets();
-    }
-
-    _shotTimer += diff;
-    if (_shotTimer >= BG_SRF_SHOT_TICK)
-    {
-        UpdateShots(_shotTimer);
-        _shotTimer = 0;
     }
 
     _fountainTimer += diff;
@@ -1138,35 +1120,14 @@ void BattlegroundSRF::UpdateTurrets()
             share = std::min(SRF_TURRET_PLAYER_SHARE + SRF_TURRET_PLAYER_RAMP * ts.ConsecutiveHits, SRF_TURRET_PLAYER_MAX);
             ++ts.ConsecutiveHits;
         }
-        bool const order = team == TEAM_ALLIANCE;
-        FireProjectile(turret, target, order ? BG_SRF_ENTRY_ORDER_SHOT : BG_SRF_ENTRY_CHAOS_SHOT,
-            order ? BG_SRF_ENTRY_ORDER_SHOT_IMPACT : BG_SRF_ENTRY_CHAOS_SHOT_IMPACT,
-            SRF_SHOT_ORIGIN_HEIGHT, SRF_SHOT_SPEED, std::max<int32>(1, int32(target->GetMaxHealth() * share)));
+        FireBolt(turret, target, team == TEAM_ALLIANCE ? BG_SRF_SPELL_ORDER_TURRET_SHOT : BG_SRF_SPELL_CHAOS_TURRET_SHOT,
+            std::max<int32>(1, int32(target->GetMaxHealth() * share)));
     }
 }
 
-void BattlegroundSRF::FireProjectile(Unit* source, Unit* target, uint32 orbEntry, uint32 impactEntry,
-    float originHeight, float speed, int32 damage)
+void BattlegroundSRF::FireBolt(Unit* source, Unit* target, uint32 spellId, int32 damage)
 {
-    Position const from(source->GetPositionX(), source->GetPositionY(), source->GetPositionZ() + originHeight);
-    TempSummon* orb = source->SummonCreature(orbEntry, from, TEMPSUMMON_TIMED_DESPAWN, Milliseconds(BG_SRF_SHOT_LIFETIME));
-    if (!orb)
-    {
-        // No orb, no flight: the shot still lands.
-        source->CastSpell(target, BG_SRF_SPELL_TURRET_SHOT, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(damage));
-        return;
-    }
-    orb->SetDisableGravity(true);
-    orb->SetSpeedRate(MOVE_RUN, speed / baseMoveSpeed[MOVE_RUN]);
-    orb->GetMotionMaster()->MovePoint(1, target->GetPositionX(), target->GetPositionY(), target->GetPositionZ() + SRF_SHOT_AIM_HEIGHT, false);
-
-    Shot shot;
-    shot.Orb = orb->GetGUID();
-    shot.Target = target->GetGUID();
-    shot.Source = source->GetGUID();
-    shot.ImpactEntry = impactEntry;
-    shot.Damage = damage;
-    _shots.push_back(shot);
+    source->CastSpell(target, spellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(damage));
 }
 
 // A caster minion fights at range: it holds at League's 550 units and sends a
@@ -1191,58 +1152,8 @@ void BattlegroundSRF::UpdateCasterAttack(Creature* caster, Minion& minion, Unit*
     float const low = caster->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE);
     float const high = caster->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE);
     bool const order = minion.Team == TEAM_ALLIANCE;
-    FireProjectile(caster, victim, order ? BG_SRF_ENTRY_ORDER_CASTER_BOLT : BG_SRF_ENTRY_CHAOS_CASTER_BOLT, 0,
-        SRF_CASTER_BOLT_HEIGHT, SRF_CASTER_BOLT_SPEED, std::max<int32>(1, int32((low + high) / 2.0f)));
-}
-
-// Shots home on their target and land on arrival: the damage, from the turret,
-// and League's burst where it hits. A target that dies or leaves first is missed.
-void BattlegroundSRF::UpdateShots(uint32 elapsed)
-{
-    Map* map = FindBgMap();
-    if (!map)
-        return;
-
-    for (auto it = _shots.begin(); it != _shots.end();)
-    {
-        Shot& shot = *it;
-        shot.Age += elapsed;
-        Creature* orb = map->GetCreature(shot.Orb);
-        Unit* target = orb ? ObjectAccessor::GetUnit(*orb, shot.Target) : nullptr;
-        if (!orb || !target || !target->IsAlive() || target->GetMap() != map || shot.Age >= BG_SRF_SHOT_LIFETIME)
-        {
-            if (orb)
-                orb->DespawnOrUnsummon();
-            it = _shots.erase(it);
-            continue;
-        }
-
-        Position const aim(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ() + SRF_SHOT_AIM_HEIGHT);
-        if (orb->GetExactDist(aim) > SRF_SHOT_HIT_DISTANCE)
-        {
-            orb->GetMotionMaster()->MovePoint(1, aim, false);
-            ++it;
-            continue;
-        }
-
-        // Landed: the damage comes from whoever fired it, if it is still standing.
-        if (Unit* source = ObjectAccessor::GetUnit(*orb, shot.Source))
-            if (source->IsAlive())
-                source->CastSpell(target, BG_SRF_SPELL_TURRET_SHOT, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(shot.Damage));
-        if (shot.ImpactEntry)
-            orb->SummonCreature(shot.ImpactEntry, aim, TEMPSUMMON_TIMED_DESPAWN, 450ms);
-        orb->DespawnOrUnsummon();
-        it = _shots.erase(it);
-    }
-}
-
-void BattlegroundSRF::DespawnShots()
-{
-    if (Map* map = FindBgMap())
-        for (Shot const& shot : _shots)
-            if (Creature* orb = map->GetCreature(shot.Orb))
-                orb->DespawnOrUnsummon();
-    _shots.clear();
+    FireBolt(caster, victim, order ? BG_SRF_SPELL_ORDER_CASTER_BOLT : BG_SRF_SPELL_CHAOS_CASTER_BOLT,
+        std::max<int32>(1, int32((low + high) / 2.0f)));
 }
 
 // -------------------------------------------------------------------- jungle
@@ -1467,6 +1378,5 @@ void BattlegroundSRF::EndBattleground(uint32 winner)
 {
     _wavesStarted = false;
     DespawnMinions();
-    DespawnShots();
     Battleground::EndBattleground(winner);
 }

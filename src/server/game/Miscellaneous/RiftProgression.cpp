@@ -21,18 +21,19 @@
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "Log.h"
+#include "Miscellaneous/TournamentMode.h"
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
+#include "Util.h"
 #include "WorldSession.h"
 
 #include <algorithm>
 #include <cmath>
 #include <map>
 #include <mutex>
-#include <set>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -44,6 +45,12 @@ namespace
     // gold is one silver, so prices read the same in both games.
     uint32 constexpr START_GOLD = 475;
     uint32 constexpr COPPER_PER_LEAGUE_GOLD = 100;
+
+    // The match starts at level 10, where the first talent point comes, and
+    // climbs to the character's real level.
+    uint8 constexpr START_LEVEL = 10;
+
+    uint32 constexpr ITEM_HEARTHSTONE = 6948;
 
     // League's experience curve (Season 3): from level n to n+1 takes 180 + 100n,
     // and 18 is the cap. The character's real level is reached at League 18.
@@ -58,14 +65,11 @@ namespace
         std::vector<uint32> Ranks;   // the ranks the character knows, lowest first
     };
 
-    struct Talent
+    struct LearnedTalent
     {
-        uint32 Tab = 0;
+        uint32 Id = 0;               // Talent.dbc row
+        uint32 Rank = 0;             // 0-based, as Player::LearnTalent takes it
         uint32 Tier = 0;
-        uint32 Column = 0;
-        uint32 Cost = 0;             // ranks learned = points spent
-        uint32 Spell = 0;            // the learned rank's spell
-        std::vector<uint32> Taught;  // spells that rank teaches (Mortal Strike and the like)
     };
 
     struct State
@@ -75,18 +79,17 @@ namespace
         uint32 RealMoney = 0;
         bool Persistent = true;      // false for a transient copy: nothing is written down
 
+        uint8 StartLevel = START_LEVEL;
         float LeagueXp = 0.0f;
         uint8 LeagueLevel = 1;
-        uint8 MatchLevel = 1;
+        uint8 MatchLevel = START_LEVEL;
 
         std::map<uint32 /*first rank*/, Chain> Chains;
         std::unordered_map<uint32 /*spell*/, uint32 /*first rank*/> SpellToChain;
         std::map<uint32 /*first rank*/, uint8 /*ranks unlocked*/> Unlocked;
         uint32 PendingPicks = 0;
 
-        std::vector<Talent> Talents; // in the order they come back: tier, then tree, then column
-        size_t TalentsRestored = 0;
-        std::unordered_set<uint32> LockedTalentSpells;
+        std::vector<LearnedTalent> RealTalents;   // the active spec's build, put back on the way out
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -94,8 +97,9 @@ namespace
     std::recursive_mutex StateMutex;
     std::unordered_map<ObjectGuid::LowType, State> States;
     // Characters with a row in custom_rift_stash. Read at startup and kept with the
-    // rows, because a character that crashed out of a match loads at level 1 BEFORE
-    // OnLogin runs, and its talents must already be protected while it loads.
+    // rows: a character that crashed out of a match loads at its match level, and
+    // the talents of its OTHER spec - more than that level pays for - must already
+    // be protected while it loads.
     std::unordered_set<ObjectGuid::LowType> Stashed;
     bool StoragePresent = false;
 
@@ -106,8 +110,8 @@ namespace
     }
 
     // A class ability the match governs: one of the character's own class skill
-    // lines, not passive, and trained at a level. Talents (and what they teach)
-    // are governed by the talent rules instead.
+    // lines, not passive, and trained at a level. What talents teach comes and
+    // goes with the talents themselves.
     bool IsGovernedClassSpell(Player const* player, SpellInfo const* spellInfo)
     {
         if (!spellInfo || spellInfo->IsPassive() || spellInfo->SpellLevel == 0 || GetTalentSpellPos(spellInfo->Id))
@@ -128,7 +132,7 @@ namespace
     {
         uint8 const spec = player->GetActiveSpec();
 
-        // ---- talents
+        // ---- the talent build, and the spells it teaches (not the match's to govern)
         std::unordered_set<uint32> taughtByTalents;
         for (TalentEntry const* talent : sTalentStore)
         {
@@ -136,36 +140,21 @@ namespace
             if (!tab || !(tab->ClassMask & player->GetClassMask()))
                 continue;
 
-            int32 learned = -1;
             for (int32 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
-                if (talent->SpellRank[rank] && player->HasTalent(talent->SpellRank[rank], spec))
-                {
-                    learned = rank;
-                    break;
-                }
-            if (learned < 0)
-                continue;
-
-            Talent t;
-            t.Tab = talent->TabID;
-            t.Tier = talent->TierID;
-            t.Column = talent->ColumnIndex;
-            t.Cost = uint32(learned) + 1;
-            t.Spell = talent->SpellRank[learned];
-            if (SpellInfo const* info = sSpellMgr->GetSpellInfo(t.Spell))
-                for (SpellEffectInfo const& effect : info->GetEffects())
-                    if (effect.Effect == SPELL_EFFECT_LEARN_SPELL && effect.TriggerSpell)
-                    {
-                        t.Taught.push_back(effect.TriggerSpell);
-                        taughtByTalents.insert(effect.TriggerSpell);
-                    }
-            state.Talents.push_back(t);
-            state.LockedTalentSpells.insert(t.Spell);
-            state.LockedTalentSpells.insert(t.Taught.begin(), t.Taught.end());
+            {
+                if (!talent->SpellRank[rank] || !player->HasTalent(talent->SpellRank[rank], spec))
+                    continue;
+                state.RealTalents.push_back({ talent->ID, uint32(rank), talent->TierID });
+                if (SpellInfo const* info = sSpellMgr->GetSpellInfo(talent->SpellRank[rank]))
+                    for (SpellEffectInfo const& effect : info->GetEffects())
+                        if (effect.Effect == SPELL_EFFECT_LEARN_SPELL && effect.TriggerSpell)
+                            taughtByTalents.insert(effect.TriggerSpell);
+                break;
+            }
         }
-        std::sort(state.Talents.begin(), state.Talents.end(), [](Talent const& a, Talent const& b)
+        std::sort(state.RealTalents.begin(), state.RealTalents.end(), [](LearnedTalent const& a, LearnedTalent const& b)
         {
-            return std::tie(a.Tier, a.Tab, a.Column) < std::tie(b.Tier, b.Tab, b.Column);
+            return std::tie(a.Tier, a.Id) < std::tie(b.Tier, b.Id);
         });
 
         // ---- class spells, grouped by rank chain
@@ -188,6 +177,46 @@ namespace
             for (uint32 spell : chain.Ranks)
                 state.SpellToChain[spell] = first;
         }
+    }
+
+    std::string TalentsToString(std::vector<LearnedTalent> const& talents)
+    {
+        std::string out;
+        for (LearnedTalent const& t : talents)
+            out += (out.empty() ? "" : ",") + std::to_string(t.Id) + ":" + std::to_string(t.Rank);
+        return out;
+    }
+
+    std::vector<LearnedTalent> TalentsFromString(std::string const& text)
+    {
+        std::vector<LearnedTalent> out;
+        for (std::string_view part : Trinity::Tokenize(text, ',', false))
+        {
+            std::vector<std::string_view> const idRank = Trinity::Tokenize(part, ':', false);
+            if (idRank.size() != 2)
+                continue;
+            Optional<uint32> const id = Trinity::StringTo<uint32>(idRank[0]);
+            Optional<uint32> const rank = Trinity::StringTo<uint32>(idRank[1]);
+            TalentEntry const* talent = id ? sTalentStore.LookupEntry(*id) : nullptr;
+            if (!talent || !rank || *rank >= MAX_TALENT_RANK)
+                continue;
+            out.push_back({ *id, *rank, talent->TierID });
+        }
+        std::sort(out.begin(), out.end(), [](LearnedTalent const& a, LearnedTalent const& b)
+        {
+            return std::tie(a.Tier, a.Id) < std::tie(b.Tier, b.Id);
+        });
+        return out;
+    }
+
+    // The match's talents off, the character's own build back, tier by tier so
+    // every point it costs is free when it is asked for.
+    void RestoreTalents(Player* player, std::vector<LearnedTalent> const& talents)
+    {
+        player->ResetTalents(true);
+        for (LearnedTalent const& t : talents)
+            player->LearnTalent(t.Id, t.Rank);
+        player->SendTalentsInfoData(false);
     }
 
     uint32 TotalSteps(State const& state)
@@ -233,45 +262,6 @@ namespace
         return offers;
     }
 
-    void SetTalentAuras(Player* player, Talent const& talent, bool on)
-    {
-        auto apply = [&](uint32 spell)
-        {
-            SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
-            if (!info || !info->IsPassive())
-                return;
-            if (on)
-            {
-                if (!player->HasAura(spell))
-                    player->CastSpell(player, spell, true);
-            }
-            else
-                player->RemoveAurasDueToSpell(spell);
-        };
-        apply(talent.Spell);
-        for (uint32 spell : talent.Taught)
-            apply(spell);
-    }
-
-    // As many talents as the match level's points pay for come back, cheapest
-    // tier first.
-    void RestoreTalents(Player* player, State& state)
-    {
-        uint32 const budget = player->CalculateTalentsPointsForLevel(state.MatchLevel);
-        uint32 spent = 0;
-        for (size_t i = 0; i < state.TalentsRestored; ++i)
-            spent += state.Talents[i].Cost;
-        while (state.TalentsRestored < state.Talents.size() && spent + state.Talents[state.TalentsRestored].Cost <= budget)
-        {
-            Talent const& talent = state.Talents[state.TalentsRestored++];
-            spent += talent.Cost;
-            state.LockedTalentSpells.erase(talent.Spell);
-            for (uint32 spell : talent.Taught)
-                state.LockedTalentSpells.erase(spell);
-            SetTalentAuras(player, talent, true);
-        }
-    }
-
     void SendLine(Player* player, std::string const& line)
     {
         if (!IsTransient(player))
@@ -291,13 +281,24 @@ namespace
         SendLine(player, "RIFTPICKS:" + offers);
     }
 
+    // League progress 0..1: level 1 is 0, level 18 is 1.
+    float LeagueProgress(State const& state)
+    {
+        return (float(state.LeagueLevel - 1)
+            + (state.LeagueLevel < LEAGUE_MAX_LEVEL ? state.LeagueXp / XpToNext(state.LeagueLevel) : 0.0f)) / float(LEAGUE_MAX_LEVEL - 1);
+    }
+
+    // The match level League progress has reached: the start at League 1, the
+    // real level at League 18.
+    float MatchLevelFor(State const& state)
+    {
+        return float(state.StartLevel) + LeagueProgress(state) * float(state.RealLevel - state.StartLevel);
+    }
+
     // The XP bar shows the way to the next match level.
     void ShowProgress(Player* player, State const& state)
     {
-        float const leagueProgress = float(state.LeagueLevel - 1)
-            + (state.LeagueLevel < LEAGUE_MAX_LEVEL ? state.LeagueXp / XpToNext(state.LeagueLevel) : 0.0f);
-        float const levels = leagueProgress / float(LEAGUE_MAX_LEVEL - 1) * float(std::max<uint8>(state.RealLevel, 2) - 1);
-        float const frac = std::clamp(levels - float(state.MatchLevel - 1), 0.0f, 1.0f);
+        float const frac = std::clamp(MatchLevelFor(state) - float(state.MatchLevel), 0.0f, 1.0f);
         player->SetUInt32Value(PLAYER_XP, uint32(frac * float(player->GetUInt32Value(PLAYER_NEXT_LEVEL_XP))));
     }
 
@@ -308,8 +309,8 @@ namespace
             ++state.MatchLevel;
             state.PendingPicks += PicksForLevel(state, state.MatchLevel);
         }
+        // InitTalentForLevel hands out the new level's talent point.
         player->GiveLevel(state.MatchLevel, true);
-        RestoreTalents(player, state);
         player->SetFullHealth();
         ShowProgress(player, state);
         SendState(player, state);
@@ -361,9 +362,7 @@ void Enter(Player* player)
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
     if (State* existing = Find(player))
     {
-        // Back in the match it left: the engine put the talent auras back at login.
-        for (size_t i = existing->TalentsRestored; i < existing->Talents.size(); ++i)
-            SetTalentAuras(player, existing->Talents[i], false);
+        // Back in the match it left: level, talents and gear are as it left them.
         SendState(player, *existing);
         return;
     }
@@ -378,25 +377,47 @@ void Enter(Player* player)
     // Written down before anything changes: from here on every way out restores.
     if (state.Persistent)
     {
-        CharacterDatabase.DirectPExecute("REPLACE INTO custom_rift_stash (guid, real_level, real_xp, money) VALUES ({}, {}, {}, {})",
-            player->GetGUID().GetCounter(), uint32(state.RealLevel), state.RealXp, state.RealMoney);
+        CharacterDatabase.DirectPExecute("REPLACE INTO custom_rift_stash (guid, real_level, real_xp, money, talents) VALUES ({}, {}, {}, {}, '{}')",
+            player->GetGUID().GetCounter(), uint32(state.RealLevel), state.RealXp, state.RealMoney, TalentsToString(state.RealTalents));
         Stashed.insert(player->GetGUID().GetCounter());
     }
 
+    // The temporal gear - the field set - goes on at the real level, which its
+    // pieces need; worn, they keep working at the match's.
+    Tournament::ApplyRiftLoadout(player);
+    // The recall (scripts/Custom/custom_rift_progression.cpp) is the Hearthstone.
+    if (!player->HasItemCount(ITEM_HEARTHSTONE, 1, true))
+        player->AddItem(ITEM_HEARTHSTONE, 1);
     player->SetMoney(START_GOLD * COPPER_PER_LEAGUE_GOLD);
-    for (Talent const& talent : state.Talents)
-        SetTalentAuras(player, talent, false);
+    player->ResetTalents(true);
 
-    state.MatchLevel = 1;
-    state.PendingPicks = PicksForLevel(state, 1);
-    player->GiveLevel(1, true);
+    // Everything a character of the starting level would know comes with it;
+    // the rest is earned back pick by pick.
+    state.StartLevel = std::min<uint8>(START_LEVEL, state.RealLevel);
+    state.MatchLevel = state.StartLevel;
+    for (auto const& [first, chain] : state.Chains)
+    {
+        uint8 have = 0;
+        while (have < chain.Ranks.size())
+        {
+            SpellInfo const* rank = sSpellMgr->GetSpellInfo(chain.Ranks[have]);
+            if (!rank || rank->SpellLevel > state.StartLevel)
+                break;
+            ++have;
+        }
+        if (have)
+            state.Unlocked[first] = have;
+    }
+    state.PendingPicks = PicksForLevel(state, state.StartLevel);
+    player->GiveLevel(state.StartLevel, true);
+    player->SendTalentsInfoData(false);
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
     ShowProgress(player, state);
     SendState(player, state);
 
-    TC_LOG_DEBUG("bg.battleground", "Rift: {} enters at level 1 (real {}), {} spell steps and {} talents to earn back.",
-        player->GetName(), state.RealLevel, TotalSteps(state), state.Talents.size());
+    TC_LOG_DEBUG("bg.battleground", "Rift: {} enters at level {} (real {}), {} of {} spell steps given, {} talents put aside.",
+        player->GetName(), uint32(state.StartLevel), uint32(state.RealLevel), UnlockedSteps(state), TotalSteps(state), state.RealTalents.size());
 }
 
 void Leave(Player* player)
@@ -415,12 +436,9 @@ void Leave(Player* player)
         Stashed.erase(player->GetGUID().GetCounter());
     }
 
-    // With the state gone the talent guard stands down: at the real level every
-    // talent is paid for again, so InitTalentForLevel has nothing to reset.
     player->GiveLevel(state.RealLevel, true);
     player->SetUInt32Value(PLAYER_XP, state.RealXp);
-    for (Talent const& talent : state.Talents)
-        SetTalentAuras(player, talent, true);
+    RestoreTalents(player, state.RealTalents);
     player->SetMoney(state.RealMoney);
 
     if (state.Persistent)
@@ -441,7 +459,7 @@ void OnLogin(Player* player)
             return;   // BattlegroundSRF::AddPlayer re-applies the rules on the way back in
     }
 
-    QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
+    QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money, talents FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
     {
         std::lock_guard<std::recursive_mutex> lock(StateMutex);
         States.erase(player->GetGUID().GetCounter());
@@ -450,13 +468,16 @@ void OnLogin(Player* player)
     if (!row)
         return;
 
+    // Before the tournament script's login hook hands the gear back: the real
+    // level first, so the character can wear it again.
     Field* fields = row->Fetch();
     uint8 const realLevel = fields[0].GetUInt8();
     player->GiveLevel(realLevel, true);
     player->SetUInt32Value(PLAYER_XP, fields[1].GetUInt32());
     player->SetMoney(fields[2].GetUInt32());
+    RestoreTalents(player, TalentsFromString(fields[3].GetString()));
     CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
-    TC_LOG_INFO("bg.battleground", "Rift: {} logged in outside the match it left; level {}, experience and money restored.", player->GetName(), realLevel);
+    TC_LOG_INFO("bg.battleground", "Rift: {} logged in outside the match it left; level {}, experience, money and talents restored.", player->GetName(), realLevel);
 }
 
 bool SuppressTalentReset(Player const* player)
@@ -476,8 +497,6 @@ SpellInfo const* AdjustCast(Player const* player, SpellInfo const* spellInfo)
     State const* state = Find(player);
     if (!state)
         return spellInfo;
-    if (state->LockedTalentSpells.count(spellInfo->Id))
-        return nullptr;
     auto const chain = state->SpellToChain.find(spellInfo->Id);
     if (chain == state->SpellToChain.end())
         return spellInfo;
@@ -502,8 +521,6 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
     State const* state = Find(player);
     if (!state)
         return false;
-    if (state->LockedTalentSpells.count(spellInfo->Id))
-        return true;
     auto const chain = state->SpellToChain.find(spellInfo->Id);
     if (chain == state->SpellToChain.end())
         return false;
@@ -532,10 +549,7 @@ void AddExperience(Player* player, float leagueXp)
     if (state->LeagueLevel >= LEAGUE_MAX_LEVEL)
         state->LeagueXp = 0.0f;
 
-    float const leagueProgress = float(state->LeagueLevel - 1)
-        + (state->LeagueLevel < LEAGUE_MAX_LEVEL ? state->LeagueXp / XpToNext(state->LeagueLevel) : 0.0f);
-    uint8 const target = std::min<uint8>(state->RealLevel,
-        uint8(1 + std::floor(leagueProgress / float(LEAGUE_MAX_LEVEL - 1) * float(std::max<uint8>(state->RealLevel, 1) - 1) + 1e-4f)));
+    uint8 const target = std::min<uint8>(state->RealLevel, uint8(std::floor(MatchLevelFor(*state) + 1e-4f)));
     if (target > state->MatchLevel)
         SetMatchLevel(player, *state, target);
     else
@@ -556,16 +570,10 @@ uint8 GetLeagueLevel(Player const* player)
     return state ? state->LeagueLevel : 1;
 }
 
-void Maintain(Player* player)
+void Maintain(Player* /*player*/)
 {
-    if (!player)
-        return;
-    std::lock_guard<std::recursive_mutex> lock(StateMutex);
-    State const* state = Find(player);
-    if (!state)
-        return;
-    for (size_t i = state->TalentsRestored; i < state->Talents.size(); ++i)
-        SetTalentAuras(player, state->Talents[i], false);
+    // Talents are the character's own in the match now (spent from its own
+    // points), so nothing the engine re-applies needs taking off again.
 }
 
 void HandlePickRequest(Player* player, std::string_view argument)

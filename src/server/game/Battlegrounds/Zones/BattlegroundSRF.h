@@ -14,9 +14,8 @@
  * turret, inner turret, inhibitor turret, inhibitor, in each lane; both nexus
  * turrets open once any one of the team's inhibitors is down, and the nexus once
  * both nexus turrets are. Turrets fire on the battleground's clock, minions
- * before players, the way League's do: a glowing orb (a creature wearing League's
- * own shot sprites) leaves the turret's crystal, homes on its target and lands
- * with a burst, and only then deals its damage. A fallen inhibitor stands back up
+ * before players, the way League's do, with a stock missile spell (Ice Lance for
+ * Order, Fireball for Chaos) whose damage lands when it arrives. A fallen inhibitor stands back up
  * after five minutes.
  *
  * Minion waves leave both bases every 30 seconds down all three lanes, walking
@@ -68,14 +67,6 @@ enum BG_SRF_CreatureEntries
     BG_SRF_ENTRY_ORDER_CASTER    = 922111,
     BG_SRF_ENTRY_CHAOS_MELEE     = 922112,
     BG_SRF_ENTRY_CHAOS_CASTER    = 922113,
-    // The turret shot's orb and its landing burst: effect-only creatures.
-    BG_SRF_ENTRY_ORDER_SHOT        = 922120,
-    BG_SRF_ENTRY_CHAOS_SHOT        = 922121,
-    BG_SRF_ENTRY_ORDER_SHOT_IMPACT = 922122,
-    BG_SRF_ENTRY_CHAOS_SHOT_IMPACT = 922123,
-    // The caster minions' bolts.
-    BG_SRF_ENTRY_ORDER_CASTER_BOLT = 922124,
-    BG_SRF_ENTRY_CHAOS_CASTER_BOLT = 922125,
     // The jungle: neutral monsters, attackable by both teams.
     BG_SRF_ENTRY_BLUE_SENTINEL     = 922130,
     BG_SRF_ENTRY_RED_BRAMBLEBACK   = 922131,
@@ -93,9 +84,13 @@ enum BG_SRF_CreatureEntries
 
 enum BG_SRF_Spells
 {
-    // "dmg": instant school damage with no visual of its own, cast when a turret
-    // shot lands. The damage is set per shot.
-    BG_SRF_SPELL_TURRET_SHOT = 7482,
+    // Turret shots and caster minion bolts are stock missile spells - plain school
+    // damage, nothing else - so the client draws the flight and the impact and the
+    // damage lands on arrival. The damage is set per cast.
+    BG_SRF_SPELL_ORDER_TURRET_SHOT = 43427, // "Ice Lance", 38 yd/s
+    BG_SRF_SPELL_CHAOS_TURRET_SHOT = 22088, // "Fireball", 36 yd/s
+    BG_SRF_SPELL_ORDER_CASTER_BOLT = 13748, // "Arcane Bolt", 24 yd/s
+    BG_SRF_SPELL_CHAOS_CASTER_BOLT = 9613,  // "Shadow Bolt", 24 yd/s
     // Stand-ins for League's buffs, their values and durations set when cast.
     BG_SRF_SPELL_BLUE_BUFF   = 18194, // "Mana Regeneration": periodic mana
     BG_SRF_SPELL_RED_BUFF    = 22817, // "Fengus' Ferocity": attack power
@@ -157,8 +152,6 @@ enum BG_SRF_Constants
     BG_SRF_MAX_MINIONS_PER_TEAM  = 90,
     BG_SRF_MINION_TICK           = 500,
     BG_SRF_TURRET_TICK           = 1200,
-    BG_SRF_SHOT_TICK             = 100,
-    BG_SRF_SHOT_LIFETIME         = 4 * IN_MILLISECONDS,
     BG_SRF_FOUNTAIN_TICK         = 1 * IN_MILLISECONDS,
     BG_SRF_STRUCTURE_CHECK_TICK  = 500,
     BG_SRF_INHIBITOR_RESPAWN     = 5 * MINUTE * IN_MILLISECONDS,
@@ -235,18 +228,6 @@ private:
         uint8 ConsecutiveHits = 0;
     };
 
-    // A projectile in flight - a turret's shot or a caster minion's bolt: the
-    // orb creature that is the missile, who fired it and at whom.
-    struct Shot
-    {
-        ObjectGuid Orb;
-        ObjectGuid Target;
-        ObjectGuid Source;
-        uint32 ImpactEntry = 0;    // the burst where it lands, or 0
-        int32 Damage = 0;
-        uint32 Age = 0;
-    };
-
     bool SpawnStructure(uint8 slot);
     void UpdateStructures();
     void RefreshVulnerability();
@@ -261,11 +242,8 @@ private:
 
     void UpdateTurrets();
     Unit* PickTurretTarget(Creature* turret, TeamId team) const;
-    void FireProjectile(Unit* source, Unit* target, uint32 orbEntry, uint32 impactEntry,
-        float originHeight, float speed, int32 damage);
+    void FireBolt(Unit* source, Unit* target, uint32 spellId, int32 damage);
     void UpdateCasterAttack(Creature* caster, Minion& minion, Unit* victim);
-    void UpdateShots(uint32 elapsed);
-    void DespawnShots();
 
     void UpdateFountains();
 
@@ -291,7 +269,6 @@ private:
     std::array<TurretState, 2 * BG_SRF_STRUCTURES_PER_TEAM> _turrets;
     std::vector<Minion> _minions;
     std::array<std::array<std::vector<Position>, BG_SRF_LANE_COUNT>, PVP_TEAMS_COUNT> _lanePaths;
-    std::vector<Shot> _shots;
     std::array<CampState, BG_SRF_JUNGLE_CAMPS> _camps;
     std::array<uint8, PVP_TEAMS_COUNT> _dragonsSlain;
     std::array<uint32, PVP_TEAMS_COUNT> _baronTimer;   // ms of Baron's empowerment left
@@ -299,7 +276,6 @@ private:
     uint32 _waveTimer;
     uint32 _minionTimer;
     uint32 _turretTimer;
-    uint32 _shotTimer;
     uint32 _fountainTimer;
     uint32 _structureTimer;
     uint32 _passiveGoldTimer;

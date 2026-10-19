@@ -25,21 +25,25 @@
 class Player;
 class SpellInfo;
 
-// Summoner's Rift progression: every match starts at level 1 and climbs back to
-// the character's real level, the way a League match climbs from 1 to 18.
+// Summoner's Rift progression: every match starts at level 10 - where the first
+// talent point comes - and climbs back to the character's real level, the way a
+// League match climbs from 1 to 18.
 //
-// Nothing about the character is taken away to do it. The level drop is real
-// (Player::GiveLevel, borrowed), but the two things a lower level would destroy
-// are protected instead of lost:
+// The level drop is real (Player::GiveLevel, borrowed). On the way in:
 //
-//  - Talents stay learned. InitTalentForLevel would reset and SAVE them the
-//    moment the level fell below what they cost, so it is told to stand aside
-//    (SuppressTalentReset). Their effects are switched off instead - passive
-//    talent auras removed, talent abilities refused - and come back, tier by
-//    tier, as the match level earns the points they cost.
-//  - Spells stay known. Casting one is refused until it is unlocked (Spell::
-//    CheckCast, AdjustCast); a higher rank than the one unlocked casts the
-//    unlocked rank instead, so the action bar keeps working.
+//  - The active spec's talents are written down and reset; the match's talent
+//    points are the character's to spend in the ordinary talent frame, one per
+//    level. On the way out the match's talents are reset and the real build is
+//    learned again, tier by tier. The OTHER spec is never touched: while a
+//    character is in a match (or has a stash row) InitTalentForLevel neither
+//    resets talents it cannot pay for nor folds the specs together, and the spec
+//    cannot be switched (SuppressTalentReset).
+//  - Spells stay known. Everything a character of the starting level would know
+//    is usable from the start; anything higher is refused until it is unlocked
+//    (Spell::CheckCast, AdjustCast), and a higher rank than the one unlocked
+//    casts the unlocked rank instead, so the action bar keeps working.
+//  - The gear goes aside for the field set (Tournament::ApplyRiftLoadout, the
+//    tournament loadout's stash rows and restore routes).
 //
 // Each match level hands out skill picks: the player chooses which spell to
 // learn or rank up, through the CENTURION_Rift addon (CCGAME "RIFTPICKS" lines
@@ -49,9 +53,9 @@ class SpellInfo;
 // Rift gold is the character's money slot: the real money is put aside, the
 // match is played from a fixed purse, and the real money comes back.
 //
-// What comes back, and when: the real level, XP and money are written to
-// `custom_rift_stash` before anything changes, so leaving by any route -
-// the match ending, the leave button, a disconnect, a crash, a restart -
+// What comes back, and when: the real level, XP, money and talent build are
+// written to `custom_rift_stash` before anything changes, so leaving by any
+// route - the match ending, the leave button, a disconnect, a crash, a restart -
 // ends the same way: Leave(), or OnLogin() at the next login, gives it all back.
 namespace RiftProgression
 {
@@ -62,7 +66,8 @@ namespace RiftProgression
     // True while this character is playing a Rift match under these rules.
     TC_GAME_API bool IsInMatch(Player const* player);
 
-    // BattlegroundSRF::AddPlayer / RemovePlayer.
+    // BattlegroundSRF::AddPlayer; Battleground::RemovePlayerAtLeave, before the
+    // gear comes back (it needs the real level to be worn).
     TC_GAME_API void Enter(Player* player);
     TC_GAME_API void Leave(Player* player);
 
@@ -71,7 +76,8 @@ namespace RiftProgression
     // that logged back into the match it left.
     TC_GAME_API void OnLogin(Player* player);
 
-    // Player::InitTalentForLevel: true while talent points must not be reset.
+    // Player::InitTalentForLevel and ActivateSpec: true while talents must not be
+    // reset, the specs folded together or switched.
     TC_GAME_API bool SuppressTalentReset(Player const* player);
 
     // The cast opcode: the rank this cast should use, the spell itself when it is
@@ -87,9 +93,8 @@ namespace RiftProgression
     // The League level the character has reached this match (1..18).
     TC_GAME_API uint8 GetLeagueLevel(Player const* player);
 
-    // BattlegroundSRF's update, every few seconds per player: anything the
-    // engine re-applied behind the rules' back (a passive talent aura on a form
-    // change or a resurrection) is taken off again.
+    // BattlegroundSRF's update, every few seconds per player (nothing to do at
+    // present: the match's talents are the character's own).
     TC_GAME_API void Maintain(Player* player);
 
     // CCGAMEREQ "RIFTPICK:<spellId>" (the addon's pick) and "RIFTSTATE:" (the
