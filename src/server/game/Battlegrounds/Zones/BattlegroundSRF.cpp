@@ -276,8 +276,10 @@ uint32 constexpr SRF_REPORT_TICK        = 30 * IN_MILLISECONDS;
 float constexpr SRF_FOUNTAIN_HEAL_RANGE = Yards(600.0f);
 // The base: the fountain and the shop beside it.
 float constexpr SRF_BASE_RANGE          = Yards(1000.0f);
-// The shops (orderShop01 / chaosShop01), facing the middle of the map.
-SrfPoint constexpr SRF_SHOP_AT[PVP_TEAMS_COUNT] = { { 206.8f, 115.2f, 1044.5f }, { 13732.8f, 132.1f, 14595.3f } };
+// The shops: League's orderShop01 / chaosShop01 stand outside the walkable area
+// (under the boundary embankment), so each is drawn in toward its fountain to the
+// nearest spot 4 yards clear of the navigation grid's walls. Facing the middle.
+SrfPoint constexpr SRF_SHOP_AT[PVP_TEAMS_COUNT] = { { 322.9f, 171.0f, 682.7f }, { 14151.8f, 179.0f, 14454.3f } };
 float constexpr SRF_SHOP_FACING[PVP_TEAMS_COUNT] = { 5.44f, 2.42f };
 float constexpr SRF_FOUNTAIN_BURN_RANGE = Yards(700.0f);
 // Turret shots as shares of the target's maximum health: minions die to a few
