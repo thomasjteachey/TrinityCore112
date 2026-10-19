@@ -355,9 +355,12 @@ namespace
         return slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND || slot == EQUIPMENT_SLOT_RANGED;
     }
 
-    // The first kit piece for this slot the character can actually put on, or 0.
-    uint32 PickKitPiece(Player* player, uint8 slot)
+    // The first kit piece for this slot the character can actually put on, or 0:
+    // the best for its level, or for `levelCap` when one is given (the Rift
+    // dresses a character for the level its match starts at).
+    uint32 PickKitPiece(Player* player, uint8 slot, uint8 levelCap = 0)
     {
+        uint32 const maxLevel = levelCap ? std::min<uint32>(levelCap, player->GetLevel()) : player->GetLevel();
         for (uint32 invType : InventoryTypesForSlot(slot))
         {
             auto itr = KitPieces.find(invType);
@@ -367,7 +370,7 @@ namespace
             for (uint32 entry : itr->second)
             {
                 ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
-                if (!proto || proto->RequiredLevel > player->GetLevel())
+                if (!proto || proto->RequiredLevel > maxLevel)
                     continue;
 
                 uint16 dest = 0;
@@ -1328,7 +1331,7 @@ void ApplyBattlegroundLoadout(Player* player)
 // template pieces, no weapon of the same shape - the kit, and nothing for a slot
 // it has no piece for. The originals go aside exactly as a tournament match puts
 // them aside, so the way back is the tournament's own.
-void ApplyRiftLoadout(Player* player)
+void ApplyRiftLoadout(Player* player, uint8 kitLevel)
 {
     if (!player || player->IsGameMaster() || HasBattlegroundLoadout(player))
         return;
@@ -1360,7 +1363,7 @@ void ApplyRiftLoadout(Player* player)
     {
         if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD || player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
             continue;
-        uint32 const kit = PickKitPiece(player, slot);
+        uint32 const kit = PickKitPiece(player, slot, kitLevel);
         uint16 dest = 0;
         if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
             continue;

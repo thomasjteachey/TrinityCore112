@@ -88,8 +88,9 @@ namespace RiftProgression
 
     // Match experience, in League's own units (a melee minion is ~59).
     TC_GAME_API void AddExperience(Player* player, float leagueXp);
-    // Rift gold, in League gold (1 League gold = 1 silver).
-    TC_GAME_API void AddGold(Player* player, uint32 leagueGold);
+    // Rift gold, in League gold (1 League gold = 1 silver). With popup, the
+    // CENTURION_Rift addon floats "+N gold" over the character (RIFTGOLD line).
+    TC_GAME_API void AddGold(Player* player, uint32 leagueGold, bool popup = false);
     // The League level the character has reached this match (1..18).
     TC_GAME_API uint8 GetLeagueLevel(Player const* player);
 

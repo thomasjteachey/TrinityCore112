@@ -642,7 +642,7 @@ void BattlegroundSRF::OnStructureDestroyed(uint8 slot)
             break;
     }
     for (Player* player : TeamPlayers(destroyer))
-        RiftProgression::AddGold(player, SRF_GOLD_STRUCTURE);
+        RiftProgression::AddGold(player, SRF_GOLD_STRUCTURE, true);
 
     RefreshVulnerability();
 }
@@ -1057,7 +1057,7 @@ void BattlegroundSRF::AwardGold(TeamId team, WorldObject const* where, uint32 le
         return;
     uint32 const share = std::max<uint32>(1, leagueGold / uint32(near.size()));
     for (Player* player : near)
-        RiftProgression::AddGold(player, share);
+        RiftProgression::AddGold(player, share, true);
 }
 
 void BattlegroundSRF::OnMinionDied(Minion const& minion, Creature const* corpse)
@@ -1091,7 +1091,7 @@ void BattlegroundSRF::HandleKillUnit(Creature* creature, Player* killer)
         return;
     }
     if (GetCustomRules().RiftLastHitGold)
-        RiftProgression::AddGold(killer, it->Caster ? SRF_GOLD_CASTER_MINION : SRF_GOLD_MELEE_MINION);
+        RiftProgression::AddGold(killer, it->Caster ? SRF_GOLD_CASTER_MINION : SRF_GOLD_MELEE_MINION, true);
 }
 
 void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
@@ -1102,7 +1102,7 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
     TeamId const killerTeam = GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID()));
     if (killerTeam == GetTeamIndexByTeamId(GetPlayerTeam(victim->GetGUID())))
         return;
-    RiftProgression::AddGold(killer, SRF_GOLD_KILL);
+    RiftProgression::AddGold(killer, SRF_GOLD_KILL, true);
     AwardExperience(killerTeam, victim, SRF_XP_KILL_BASE + SRF_XP_KILL_PER_LEVEL * float(RiftProgression::GetLeagueLevel(victim)));
 }
 
@@ -1428,7 +1428,7 @@ bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
 
     SrfMonster const& m = SRF_MONSTERS[index];
     TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID()));
-    RiftProgression::AddGold(killer, m.gold);
+    RiftProgression::AddGold(killer, m.gold, true);
     AwardExperience(team, creature, m.xp);
 
     switch (SRF_CAMPS[m.camp].kind)
@@ -1450,7 +1450,7 @@ bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
             _baronTimer[team] = SRF_BARON_BUFF_DURATION;
             for (Player* player : TeamPlayers(team))
             {
-                RiftProgression::AddGold(player, SRF_GOLD_BARON_TEAM);
+                RiftProgression::AddGold(player, SRF_GOLD_BARON_TEAM, true);
                 // League's Hand of Baron: the living only, and lost on death.
                 if (player->IsAlive())
                     ApplyBuff(player, BG_SRF_SPELL_BARON_BUFF, 0, 0, SRF_BARON_STATS_PCT, SRF_BARON_BUFF_DURATION);

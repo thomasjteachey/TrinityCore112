@@ -590,9 +590,9 @@ void Enter(Player* player)
         Stashed.insert(player->GetGUID().GetCounter());
     }
 
-    // The temporal gear - the field set - goes on at the real level, which its
-    // pieces need; worn, they keep working at the match's.
-    Tournament::ApplyRiftLoadout(player);
+    // The temporal gear - the field set issued for the level the match starts at
+    // - goes on while the character still has its real level to equip it with.
+    Tournament::ApplyRiftLoadout(player, std::min<uint8>(START_LEVEL, state.RealLevel));
     // The recall (scripts/Custom/custom_rift_progression.cpp) is the Hearthstone.
     if (!player->HasItemCount(ITEM_HEARTHSTONE, 1, true))
         player->AddItem(ITEM_HEARTHSTONE, 1);
@@ -762,11 +762,13 @@ void AddExperience(Player* player, float leagueXp)
         ShowProgress(player, *state);
 }
 
-void AddGold(Player* player, uint32 leagueGold)
+void AddGold(Player* player, uint32 leagueGold, bool popup)
 {
     if (!player || !leagueGold || !IsInMatch(player))
         return;
     player->ModifyMoney(int32(leagueGold * COPPER_PER_LEAGUE_GOLD), false);
+    if (popup)
+        SendLine(player, "RIFTGOLD:" + std::to_string(leagueGold));
 }
 
 uint8 GetLeagueLevel(Player const* player)
