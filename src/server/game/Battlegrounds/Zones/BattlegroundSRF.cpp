@@ -2128,11 +2128,102 @@ void BattlegroundSRF::UpdateJungle(uint32 elapsed)
             cs.Timer = SRF_CAMPS[camp].respawn;
             continue;
         }
+        if (SRF_CAMPS[camp].kind != SRF_CAMP_BARON)
+            UpdateLeash(camp, elapsed);
         if (victim && SRF_CAMPS[camp].kind != SRF_CAMP_SCUTTLE)
             for (Creature* creature : alive)
                 if (!creature->IsInCombat() && creature->IsValidAttackTarget(victim))
                     creature->AI()->AttackStart(victim);
     }
+}
+
+// League's leash (wiki "Monster"): a camp has patience, shared by its monsters.
+// It drains while any of them is outside its leash or cannot find its target -
+// faster the further out, and faster still while nobody is hitting it - and a
+// hit inside the leash gives some back and holds the drain for 1.5 seconds. Out
+// of patience, the camp resets: home, healed, deaf to attackers until there
+// (EnterEvadeMode). Back home, patience refills over a couple of seconds.
+// Baron is stationary and has no leash.
+float constexpr SRF_LEASH_RANGE         = Yards(800.0f);    // from each monster's own spawn
+float constexpr SRF_PATIENCE_DRAIN      = 20.0f;            // a second, just outside the leash
+float constexpr SRF_PATIENCE_PER_YARD   = 4.0f;             // more a second per yard further out
+float constexpr SRF_PATIENCE_UNHIT      = 1.5f;             // x drain while nobody hits it
+float constexpr SRF_PATIENCE_HIT_REFILL = 25.0f;
+uint32 constexpr SRF_PATIENCE_HIT_PAUSE = 1500;
+float constexpr SRF_PATIENCE_RECOVER    = 50.0f;            // a second, out of combat
+
+void BattlegroundSRF::UpdateLeash(uint8 camp, uint32 elapsed)
+{
+    Map* map = FindBgMap();
+    if (!map)
+        return;
+    CampState& cs = _camps[camp];
+    bool fighting = false;
+    bool hitInside = false;
+    bool hit = false;
+    float worstOut = 0.0f;     // yards beyond the leash; > 0 drains
+    std::vector<Creature*> engaged;
+    for (uint8 i = 0; i < BG_SRF_JUNGLE_MONSTERS; ++i)
+    {
+        SrfMonster const& m = SRF_MONSTERS[i];
+        if (m.camp != camp)
+            continue;
+        Creature* creature = map->GetCreature(BgCreatures[BG_SRF_CREATURE_JUNGLE_FIRST + i]);
+        if (!creature || !creature->IsAlive())
+            continue;
+        uint32& last = cs.LastHealth[creature->GetGUID()];
+        bool const wasHit = last && creature->GetHealth() < last;
+        last = creature->GetHealth();
+        if (!creature->IsInCombat() || creature->IsInEvadeMode())
+            continue;
+        fighting = true;
+        engaged.push_back(creature);
+        Position const home = ToWorld(m.x, m.y, m.z, m.o);
+        float out = creature->GetExactDist2d(&home) - SRF_LEASH_RANGE;
+        Unit* victim = creature->GetVictim();
+        // a target it cannot find (gone, hidden in the brush, out of reach of the leash) counts as outside
+        if (!victim || !victim->IsAlive() || !creature->CanSeeOrDetect(victim)
+            || victim->GetExactDist2d(&home) > SRF_LEASH_RANGE + 3.0f)
+            out = std::max(out, 0.5f);
+        worstOut = std::max(worstOut, out);
+        if (wasHit)
+        {
+            hit = true;
+            if (out <= 0.0f)
+                hitInside = true;
+        }
+    }
+
+    float const seconds = float(elapsed) / 1000.0f;
+    if (!fighting)
+    {
+        cs.Patience = std::min(100.0f, cs.Patience + SRF_PATIENCE_RECOVER * seconds);
+        cs.PauseMs = 0;
+        return;
+    }
+    if (hitInside)
+    {
+        cs.Patience = std::min(100.0f, cs.Patience + SRF_PATIENCE_HIT_REFILL);
+        cs.PauseMs = SRF_PATIENCE_HIT_PAUSE;
+    }
+    if (cs.PauseMs)
+        cs.PauseMs = cs.PauseMs > elapsed ? cs.PauseMs - elapsed : 0;
+    else if (worstOut > 0.0f)
+    {
+        float rate = SRF_PATIENCE_DRAIN + SRF_PATIENCE_PER_YARD * worstOut;
+        if (!hit)
+            rate *= SRF_PATIENCE_UNHIT;
+        cs.Patience -= rate * seconds;
+    }
+    if (cs.Patience > 0.0f)
+        return;
+
+    // Out of patience: the whole camp goes home.
+    cs.Patience = 100.0f;
+    cs.PauseMs = 0;
+    for (Creature* creature : engaged)
+        if (CreatureAI* ai = creature->AI())
+            ai->EnterEvadeMode(CreatureAI::EVADE_REASON_BOUNDARY);
 }
 
 // The killer takes the gold (League's last hit) and its side the experience; the

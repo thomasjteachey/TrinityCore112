@@ -259,7 +259,12 @@ private:
     {
         bool Up = false;
         uint32 Timer = 0;          // ms until it spawns, while it is not up
+        // League's leash: the camp's patience (0..100), shared by all its monsters
+        float Patience = 100.0f;
+        uint32 PauseMs = 0;        // a hit inside the leash stops the drain this long
+        std::unordered_map<ObjectGuid, uint32> LastHealth;   // to tell a hit from the last tick
     };
+    void UpdateLeash(uint8 camp, uint32 elapsed);
 
     struct TurretState
     {
