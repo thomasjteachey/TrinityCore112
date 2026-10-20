@@ -120,6 +120,11 @@ namespace RiftProgression
     // addon asking for the current state, e.g. after /reload).
     TC_GAME_API void HandlePickRequest(Player* player, std::string_view argument);
     TC_GAME_API void HandleStateRequest(Player* player, std::string_view argument);
+    // Tells CENTURION_Rift whether the character is in its fountain ("RIFTBASE:1"
+    // / "RIFTBASE:0"): the pick panel only shows there, and walking in opens the
+    // talent frame when there are points to spend. BattlegroundSRF sends it on
+    // every change.
+    TC_GAME_API void SendBase(Player* player, bool atBase);
 }
 
 #endif

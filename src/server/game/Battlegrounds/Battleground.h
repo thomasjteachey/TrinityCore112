@@ -141,6 +141,18 @@ struct BattlegroundDropExit
     Position Landing;
 };
 
+// A battleground that plays each bot itself, order by order - a MOBA's laning,
+// where the bot's place and its target come from the match (its lane, its wave,
+// the turrets) rather than from objectives. Asked every bot tick
+// (Battleground::GetBotOrders); a bot with orders does nothing else.
+struct BattlegroundBotOrders
+{
+    Position Post;              // where to be: walk there, hold there
+    ObjectGuid Target;          // what to fight at the post, empty for nothing
+    bool Retreat = false;       // going home: do not stop to fight
+    uint32 RecallSpell = 0;     // cast this on itself now (safe to channel), 0 for none
+};
+
 // Where a team is put when the gates open, for a start nothing walkable joins
 // to the fight: The Twisting Nether's teams wait on two balconies of the ship,
 // across the void from the arena platform. Whoever is still within Radius of
@@ -1018,6 +1030,9 @@ class TC_GAME_API Battleground
         // holds it. Navmesh does not contain gameobjects, so a route the
         // pathfinder draws through one has to be refused by whoever follows it.
         virtual void GetStandingGates(GuidVector& /*gates*/) const { }
+        // Orders for a bot of this battleground (BattlegroundBotOrders); false when
+        // the battleground leaves its bots to the generic strategy.
+        virtual bool GetBotOrders(Player* /*bot*/, BattlegroundBotOrders& /*orders*/) { return false; }
         virtual uint32 GetBossObjectiveCount() const { return 0; }
         virtual bool GetBossObjectiveInfo(ObjectGuid /*playerGuid*/, uint32 /*index*/, BattlegroundBossObjective& /*boss*/) const { return false; }
         virtual void GetTeleporters(ObjectGuid /*playerGuid*/, std::vector<BattlegroundTeleporter>& /*teleporters*/) const { }

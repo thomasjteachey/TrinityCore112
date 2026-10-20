@@ -95,10 +95,12 @@ enum BG_SRF_Spells
     // Turret shots and caster minion bolts are stock missile spells - plain school
     // damage, nothing else - so the client draws the flight and the impact and the
     // damage lands on arrival. The damage is set per cast.
-    BG_SRF_SPELL_ORDER_TURRET_SHOT = 43427, // "Ice Lance", 38 yd/s
-    BG_SRF_SPELL_CHAOS_TURRET_SHOT = 22088, // "Fireball", 36 yd/s
-    BG_SRF_SPELL_ORDER_CASTER_BOLT = 13748, // "Arcane Bolt", 24 yd/s
-    BG_SRF_SPELL_CHAOS_CASTER_BOLT = 9613,  // "Shadow Bolt", 24 yd/s
+    // Centurion custom shots (import/rift/scripts/rift_shot_spells.py): both sides
+    // on exact parity - Arcane, unmissable, no resistance - only the missile differs.
+    BG_SRF_SPELL_ORDER_TURRET_SHOT = 94143, // "Turret Shot", Ice Lance's missile, 38 yd/s
+    BG_SRF_SPELL_CHAOS_TURRET_SHOT = 94144, // "Turret Shot", Fireball's missile, 36 yd/s
+    BG_SRF_SPELL_ORDER_CASTER_BOLT = 94145, // "Minion Bolt", Arcane Bolt's missile, 24 yd/s
+    BG_SRF_SPELL_CHAOS_CASTER_BOLT = 94146, // "Minion Bolt", Shadow Bolt's missile, 24 yd/s
     // Stand-ins for League's buffs, their values and durations set when cast.
     BG_SRF_SPELL_BLUE_BUFF   = 18194, // "Mana Regeneration": periodic mana
     BG_SRF_SPELL_RED_BUFF    = 22817, // "Fengus' Ferocity": attack power
@@ -207,6 +209,16 @@ public:
     // spends skill picks and talent points (RiftProgression).
     bool IsAtBase(Player const* player) const;
 
+    // League's bots, for the playerbot battleground strategy: where a bot should
+    // be and what it should hit, by League's laning rules - its own lane (or the
+    // jungle), just behind its own minion wave, never under a standing enemy
+    // turret unless allied minions are taking that turret's fire, back to the
+    // fountain to heal and shop when low or rich.
+    bool GetBotOrders(Player* bot, BattlegroundBotOrders& out) override;
+    // False when attacking `target` would take `bot` under a standing enemy turret
+    // that is free to shoot it - League's "no tower diving".
+    bool BotMayAttack(Player* bot, Unit* target) const;
+
     // League's brush: a champion in a brush patch is unseen by every enemy - player,
     // minion, turret - outside that patch, until it attacks.
     bool HidesFrom(Player const* target, WorldObject const* seer) const override;
@@ -236,6 +248,8 @@ private:
         bool Paid = false;         // its gold went to a last hit already
         Position LastPos;          // where it stood at the last tick that moved it
         uint32 StillMs = 0;        // how long it has stood there without fighting
+        Position Pos;              // where it stood at the last tick: its death is paid out there
+        ObjectGuid Killer;         // the champion that last-hit it, if one did
         ObjectGuid Target;         // the target the battleground last sent it after
         ObjectGuid Ignore;         // a target it could not get to, left alone for a while
         uint32 IgnoreMs = 0;
@@ -301,6 +315,12 @@ private:
     std::vector<Player*> TeamPlayers(TeamId team) const;
     std::vector<Player*> TeamPlayersNear(TeamId team, WorldObject const* where, float range) const;
     void AwardExperience(TeamId team, WorldObject const* where, float leagueXp);
+    // League's experience rules (wiki "Experience (champion)"): a minion's to every
+    // enemy champion within 1500 units of where it died - whoever killed it, and
+    // the killer always - one champion taking all of it, two or more splitting
+    // 130% of it; a champion kill's to the killer and the allies within 1600.
+    void AwardMinionExperience(TeamId team, Position const& where, float leagueXp, ObjectGuid killer);
+    void AwardKillExperience(TeamId team, Player* victim, Player* killer);
     void AwardGold(TeamId team, WorldObject const* where, uint32 leagueGold);
     void OnMinionDied(Minion const& minion, Creature const* corpse);
     uint8 AverageMatchLevel() const;
@@ -327,8 +347,29 @@ private:
         uint8 Patch = 0;           // the brush patch it stands in, 0 = none
         uint32 RevealMs = 0;       // attacked from the brush: seen until this runs out
         bool Hidden = false;
+        int8 AtBase = -1;          // in its fountain at the last tick (-1: not known yet)
     };
     std::unordered_map<ObjectGuid, BrushState> _brush;
+
+    struct BotState
+    {
+        uint8 Lane = BG_SRF_LANE_NONE;
+        bool Assigned = false;
+        bool Retreating = false;
+        uint8 Camp = 0;            // the jungler's next camp
+        BattlegroundBotOrders Orders;   // the last orders, reused for SRF_BOT_ORDERS_MS
+        bool HasOrders = false;
+        uint32 OrdersAt = 0;            // GameTime ms they were worked out
+    };
+    // Per team: the standing enemy turrets free to shoot one of its champions (no
+    // minion of the team inside their reach), refreshed with the brush tick.
+    std::array<std::vector<Position>, PVP_TEAMS_COUNT> _freeTurrets;
+    void RefreshFreeTurrets();
+    bool ComputeBotOrders(Player* bot, BotState& st, BattlegroundBotOrders& out);
+    std::unordered_map<ObjectGuid, BotState> _bots;
+    BotState& BotOf(Player* bot);
+    bool UnderFreeEnemyTurret(TeamId team, Position const& pos, float margin) const;
+    uint32 LaneIndexNear(TeamId team, uint8 lane, Position const& pos);
     uint32 _brushTimer = 0;
     void UpdateBrush(uint32 elapsed);
     uint32 _unstuckTargets;        // since the last report: unreachable targets given up

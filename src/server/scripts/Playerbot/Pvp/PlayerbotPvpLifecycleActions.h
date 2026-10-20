@@ -60,6 +60,9 @@ public:
     // bot sitting in a vehicle seat runs nothing else.
     static bool ObjectiveDutyPrimitive(Player* player);
 
+    // A battleground that plays its bots itself (Battleground::GetBotOrders).
+    static bool FollowBattlegroundOrdersPrimitive(Player* player);
+
     // Warsong Gulch / Twin Peaks team play (CtfCoordinator orders).
     static bool FlagHandoffPrimitive(Player* player);
     static bool EscortFlagRunnerPrimitive(Player* player);

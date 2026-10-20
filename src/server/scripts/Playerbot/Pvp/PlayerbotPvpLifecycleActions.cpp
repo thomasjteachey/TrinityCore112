@@ -6117,6 +6117,8 @@ namespace playerbot
             return FlagRunnerStagePrimitive(player);
         if (IsTacticalAction(context.actionName, "bg objective duty"))
             return ObjectiveDutyPrimitive(player);
+        if (IsTacticalAction(context.actionName, "bg follow orders"))
+            return FollowBattlegroundOrdersPrimitive(player);
 
         return false;
     }
@@ -6930,6 +6932,53 @@ namespace playerbot
             default:
                 return false;
         }
+    }
+
+    // The battleground's orders, carried out: channel the recall it says is safe,
+    // walk home without stopping when it says go home, fight what it names, or
+    // hold the post it gives. A victim the orders no longer name - one that ran
+    // under its turret, or anything at all on the way home - is let go of, so
+    // neither the swing nor the class layer's spells (which follow the
+    // selection) keep the bot on it.
+    bool BattlegroundTacticalActions::FollowBattlegroundOrdersPrimitive(Player* player)
+    {
+        if (!player || !player->IsAlive() || !player->InBattleground())
+            return false;
+        Battleground* battleground = player->GetBattleground();
+        if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+            return false;
+        BattlegroundBotOrders orders;
+        if (!battleground->GetBotOrders(player, orders))
+            return false;
+
+        Unit* target = !orders.Retreat && !orders.Target.IsEmpty() ? ObjectAccessor::GetUnit(*player, orders.Target) : nullptr;
+        if (Unit* victim = player->GetVictim(); victim && victim != target)
+            player->AttackStop();
+        if (!target && !player->GetTarget().IsEmpty())
+            player->SetSelection(ObjectGuid::Empty);
+
+        // A cast in progress (the recall above all) is left to finish.
+        if (player->HasUnitState(UNIT_STATE_CASTING))
+            return true;
+
+        if (orders.RecallSpell)
+        {
+            player->StopMoving();
+            if (MotionMaster* motionMaster = player->GetMotionMaster())
+                motionMaster->Clear();
+            if (player->CastSpell(player, orders.RecallSpell, false) == SPELL_CAST_OK)
+                return true;
+        }
+
+        if (orders.Retreat)
+            return MoveToBattlegroundObjective(player, battleground, orders.Post) || player->isMoving();
+
+        if (target && playerbot::EngageSelectedEnemyPlayer(player, target, "battleground-orders"))
+            return true;
+
+        if (!player->IsWithinDist2d(&orders.Post, 2.5f))
+            return MoveToBattlegroundObjective(player, battleground, orders.Post) || player->isMoving();
+        return true;
     }
 
     bool BattlegroundTacticalActions::PursueEnemyPrimitive(Player* player)

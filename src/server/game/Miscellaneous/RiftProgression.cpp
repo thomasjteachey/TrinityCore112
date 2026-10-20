@@ -23,6 +23,7 @@
 #include "WorldPacket.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "Item.h"
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "Miscellaneous/TournamentMode.h"
@@ -549,9 +550,15 @@ namespace
             ++state.MatchLevel;
             state.PendingPicks += PICKS_PER_LEVEL;
         }
-        // InitTalentForLevel hands out the new level's talent point.
+        // InitTalentForLevel hands out the new level's talent point. A level heals
+        // nothing in the Rift (owner, 2026-10-20): health and mana stay what they
+        // were, only the maximums grow.
+        uint32 const health = player->GetHealth();
+        uint32 const mana = player->GetPower(POWER_MANA);
         player->GiveLevel(state.MatchLevel, true);
-        player->SetFullHealth();
+        player->SetHealth(std::min(std::max<uint32>(health, 1), player->GetMaxHealth()));
+        if (player->GetMaxPower(POWER_MANA))
+            player->SetPower(POWER_MANA, std::min<uint32>(mana, player->GetMaxPower(POWER_MANA)));
         ShowProgress(player, state);
         SendState(player, state);
         if (state.PendingPicks && !Offers(state).empty())
@@ -914,10 +921,259 @@ void OnLevelChanged(Player* player)
         ChatHandler(player->GetSession()).PSendSysMessage("You have %u skill pick(s) to spend: type /rift.", state->PendingPicks);
 }
 
-void Maintain(Player* /*player*/)
+// ------------------------------------------------------------------ bots
+//
+// A bot (a battleground fill clone: a transient session) cannot send the
+// addon's pick request or click a talent or a vendor, so League's bots are
+// played here instead, from Maintain, by the same rules a player plays by:
+// points and gold are spent at the fountain only (CanSpendPoints / IsAtBase).
+namespace
+{
+    // What a bot builds toward, by what it does (League's bot item lists, in the
+    // shop's own items - rift_shop.py's entries, SHOP_ITEM_FIRST + index).
+    enum class BotRole : uint8 { Melee, Ranged, Caster, Healer, Tank };
+
+    uint32 constexpr Shop(uint32 index) { return SHOP_ITEM_FIRST + index; }
+    // finished items, bought in this order
+    std::vector<uint32> const BOT_BUILDS[] =
+    {
+        /* Melee  */ { Shop(35), Shop(23), Shop(36), Shop(31), Shop(34), Shop(32) },  // Trinity Force, Berserker's, Infinity Edge, Last Whisper, Guardian Angel, Phantom Dancer
+        /* Ranged */ { Shop(36), Shop(23), Shop(32), Shop(31), Shop(34), Shop(35) },  // Infinity Edge, Berserker's, Phantom Dancer, Last Whisper, Guardian Angel, Trinity Force
+        /* Caster */ { Shop(25), Shop(33), Shop(24), Shop(26), Shop(37), Shop(29) },  // Doran's Ring, Rod of Ages, Sorcerer's, Rabadon's, Zhonya's, Banshee's
+        /* Healer */ { Shop(25), Shop(24), Shop(33), Shop(29), Shop(37), Shop(34) },  // Doran's Ring, Sorcerer's, Rod of Ages, Banshee's, Zhonya's, Guardian Angel
+        /* Tank   */ { Shop(23), Shop(30), Shop(28), Shop(27), Shop(29), Shop(34) },  // Berserker's, Sunfire, Warmog's, Thornmail, Banshee's, Guardian Angel
+    };
+
+    // The tree the bot's real talents went into most: 0, 1 or 2.
+    int32 MainTree(State const& state)
+    {
+        uint32 points[3] = { 0, 0, 0 };
+        for (LearnedTalent const& t : state.RealTalents)
+            if (TalentEntry const* talent = sTalentStore.LookupEntry(t.Id))
+                if (TalentTabEntry const* tab = sTalentTabStore.LookupEntry(talent->TabID))
+                    if (tab->OrderIndex < 3)
+                        points[tab->OrderIndex] += t.Rank + 1;
+        if (!points[0] && !points[1] && !points[2])
+            return -1;
+        return points[0] >= points[1] && points[0] >= points[2] ? 0 : points[1] >= points[2] ? 1 : 2;
+    }
+
+    BotRole RoleOf(Player const* player, State const& state)
+    {
+        int32 const tree = MainTree(state);
+        switch (player->GetClass())
+        {
+            case CLASS_WARRIOR:      return tree == 2 ? BotRole::Tank : BotRole::Melee;
+            case CLASS_PALADIN:      return tree == 0 ? BotRole::Healer : tree == 1 ? BotRole::Tank : BotRole::Melee;
+            case CLASS_HUNTER:       return BotRole::Ranged;
+            case CLASS_ROGUE:        return BotRole::Melee;
+            case CLASS_PRIEST:       return tree == 2 ? BotRole::Caster : BotRole::Healer;
+            case CLASS_DEATH_KNIGHT: return tree == 0 ? BotRole::Tank : BotRole::Melee;
+            case CLASS_SHAMAN:       return tree == 0 ? BotRole::Caster : tree == 1 ? BotRole::Melee : BotRole::Healer;
+            case CLASS_DRUID:        return tree == 0 ? BotRole::Caster : tree == 1 ? BotRole::Melee : BotRole::Healer;
+            default:                 return BotRole::Caster;    // mage, warlock
+        }
+    }
+
+    // League's bots level their abilities as they come: a new one first (the
+    // lowest-level one on offer), then the newest rank of what they have.
+    void BotSpendPicks(Player* player, State& state)
+    {
+        while (state.PendingPicks)
+        {
+            std::vector<uint32> const offers = Offers(state);
+            uint32 pick = 0;
+            uint32 pickLevel = 0;
+            bool pickNew = false;
+            for (uint32 spell : offers)
+            {
+                SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
+                if (!info)
+                    continue;
+                uint32 const first = state.SpellToChain.at(spell);
+                auto const unlocked = state.Unlocked.find(first);
+                bool const isNew = unlocked == state.Unlocked.end() || !unlocked->second;
+                bool better = !pick;
+                if (!better && isNew != pickNew)
+                    better = isNew;
+                else if (!better)
+                    better = isNew ? info->SpellLevel < pickLevel : info->SpellLevel > pickLevel;
+                if (better)
+                {
+                    pick = spell;
+                    pickLevel = info->SpellLevel;
+                    pickNew = isNew;
+                }
+            }
+            if (!pick)
+                break;
+            ++state.Unlocked[state.SpellToChain.at(pick)];
+            --state.PendingPicks;
+        }
+    }
+
+    // The bot's own build, tier by tier and rank by rank, as far as its points go.
+    void BotSpendTalents(Player* player, State const& state)
+    {
+        if (!player->GetFreeTalentPoints() || state.RealTalents.empty())
+            return;
+        std::vector<LearnedTalent> build = state.RealTalents;
+        std::stable_sort(build.begin(), build.end(), [](LearnedTalent const& a, LearnedTalent const& b) { return a.Tier < b.Tier; });
+        uint32 const before = player->GetFreeTalentPoints();
+        for (LearnedTalent const& t : build)
+            for (uint32 rank = 0; rank <= t.Rank && player->GetFreeTalentPoints(); ++rank)
+                player->LearnTalent(t.Id, rank);
+        if (player->GetFreeTalentPoints() != before)
+            player->SendTalentsInfoData(false);
+    }
+
+    // The equipment slot a shop item goes into, preferring an empty one of a pair.
+    uint8 BotSlotFor(Player* player, ItemTemplate const* proto)
+    {
+        auto pick = [player](uint8 a, uint8 b)
+        {
+            if (!player->GetItemByPos(INVENTORY_SLOT_BAG_0, a))
+                return a;
+            if (!player->GetItemByPos(INVENTORY_SLOT_BAG_0, b))
+                return b;
+            // both taken: the one holding the cheaper shop item, or a kit piece
+            Item* ia = player->GetItemByPos(INVENTORY_SLOT_BAG_0, a);
+            Item* ib = player->GetItemByPos(INVENTORY_SLOT_BAG_0, b);
+            auto worth = [](Item* item)
+            {
+                uint32 const entry = item->GetEntry();
+                return entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST ? item->GetTemplate()->BuyPrice : 0;
+            };
+            return worth(ia) <= worth(ib) ? a : b;
+        };
+        switch (proto->InventoryType)
+        {
+            case INVTYPE_HEAD:      return EQUIPMENT_SLOT_HEAD;
+            case INVTYPE_NECK:      return EQUIPMENT_SLOT_NECK;
+            case INVTYPE_SHOULDERS: return EQUIPMENT_SLOT_SHOULDERS;
+            case INVTYPE_CHEST:
+            case INVTYPE_ROBE:      return EQUIPMENT_SLOT_CHEST;
+            case INVTYPE_WAIST:     return EQUIPMENT_SLOT_WAIST;
+            case INVTYPE_LEGS:      return EQUIPMENT_SLOT_LEGS;
+            case INVTYPE_FEET:      return EQUIPMENT_SLOT_FEET;
+            case INVTYPE_WRISTS:    return EQUIPMENT_SLOT_WRISTS;
+            case INVTYPE_HANDS:     return EQUIPMENT_SLOT_HANDS;
+            case INVTYPE_CLOAK:     return EQUIPMENT_SLOT_BACK;
+            case INVTYPE_FINGER:    return pick(EQUIPMENT_SLOT_FINGER1, EQUIPMENT_SLOT_FINGER2);
+            case INVTYPE_TRINKET:   return pick(EQUIPMENT_SLOT_TRINKET1, EQUIPMENT_SLOT_TRINKET2);
+            default:                return NULL_SLOT;
+        }
+    }
+
+    // Buys one shop item the way the vendor would (League's price, components
+    // into it) and wears it. Whatever it displaces - a field kit piece, or a
+    // shop item it outgrew - goes, a shop item sold back at League's 70%.
+    bool BotBuy(Player* player, uint32 entry)
+    {
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+        if (!proto || proto->BuyPrice <= 0)
+            return false;
+        std::vector<uint32> consumed;
+        uint32 const price = ShopPrice(player, entry, uint32(proto->BuyPrice), consumed);
+        if (!player->HasEnoughMoney(price))
+            return false;
+        player->ModifyMoney(-int64(price));
+        TakeComponents(player, consumed);
+
+        uint8 const slot = BotSlotFor(player, proto);
+        if (slot != NULL_SLOT)
+            if (Item* old = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            {
+                uint32 const oldEntry = old->GetEntry();
+                if (oldEntry >= SHOP_ITEM_FIRST && oldEntry <= SHOP_ITEM_LAST)
+                    player->ModifyMoney(int64(old->GetTemplate()->SellPrice));
+                player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+            }
+        uint16 dest = 0;
+        if (slot != NULL_SLOT && player->CanEquipNewItem(slot, dest, entry, false) == EQUIP_ERR_OK)
+            player->EquipNewItem(dest, entry, true);
+        else
+        {
+            ItemPosCountVec store;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, store, entry, 1) == EQUIP_ERR_OK)
+                player->StoreNewItem(store, entry, true);
+        }
+        return true;
+    }
+
+    // League's bots shop at the fountain: the next finished item of their build,
+    // or - while saving up for it - the dearest piece of it they can afford now.
+    void BotShop(Player* player, State const& state)
+    {
+        for (uint32 target : BOT_BUILDS[uint8(RoleOf(player, state))])
+        {
+            if (player->GetItemCount(target, false))
+                continue;
+            std::vector<uint32> consumed;
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(target);
+            if (!proto)
+                continue;
+            if (player->HasEnoughMoney(ShopPrice(player, target, uint32(proto->BuyPrice), consumed)))
+            {
+                BotBuy(player, target);
+                return;
+            }
+            // the components still to buy, the whole tree down
+            std::vector<uint32> todo;
+            std::vector<uint32> open = { target };
+            std::unordered_map<uint32, uint32> held;
+            while (!open.empty())
+            {
+                uint32 const item = open.back();
+                open.pop_back();
+                auto const recipe = Recipes.find(item);
+                if (recipe == Recipes.end())
+                    continue;
+                for (uint32 part : recipe->second)
+                {
+                    uint32& used = held[part];
+                    if (player->GetItemCount(part, false) > used)
+                    {
+                        ++used;
+                        continue;
+                    }
+                    todo.push_back(part);
+                    open.push_back(part);
+                }
+            }
+            uint32 best = 0;
+            int32 bestPrice = -1;
+            for (uint32 part : todo)
+            {
+                ItemTemplate const* pp = sObjectMgr->GetItemTemplate(part);
+                std::vector<uint32> c;
+                if (pp && pp->BuyPrice > bestPrice && player->HasEnoughMoney(ShopPrice(player, part, uint32(pp->BuyPrice), c)))
+                {
+                    best = part;
+                    bestPrice = pp->BuyPrice;
+                }
+            }
+            if (best)
+                BotBuy(player, best);
+            return;     // saving for this one: nothing past it
+        }
+    }
+}
+
+void Maintain(Player* player)
 {
     // Talents are the character's own in the match now (spent from its own
-    // points), so nothing the engine re-applies needs taking off again.
+    // points), so nothing the engine re-applies needs taking off again. A bot's
+    // points and gold are spent for it, at the fountain.
+    if (!player || !IsTransient(player) || !player->IsAlive() || !CanSpendPoints(player, false))
+        return;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State* state = Find(player);
+    if (!state)
+        return;
+    BotSpendPicks(player, *state);
+    BotSpendTalents(player, *state);
+    BotShop(player, *state);
 }
 
 void HandlePickRequest(Player* player, std::string_view argument)
@@ -949,6 +1205,15 @@ void HandleStateRequest(Player* player, std::string_view /*argument*/)
         return;
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
     if (State const* state = Find(player))
+    {
         SendState(player, *state);
+        SendBase(player, CanSpendPoints(player, false));
+    }
+}
+
+void SendBase(Player* player, bool atBase)
+{
+    if (player && IsInMatch(player))
+        SendLine(player, atBase ? "RIFTBASE:1" : "RIFTBASE:0");
 }
 }

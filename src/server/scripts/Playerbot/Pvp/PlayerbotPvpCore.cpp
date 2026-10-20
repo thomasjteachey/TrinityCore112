@@ -8524,6 +8524,22 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         bool const enemyFlagCarrierActive = values.enemyFlagCarrierActive;
         bool const teamFlagCarrierNear = values.teamFlagCarrierNear;
 
+        // A battleground that plays its bots itself (Battleground::GetBotOrders -
+        // Summoner's Rift's laning) outranks every generic rule: its orders are
+        // the whole of what the bot does.
+        if (bgActive)
+            if (Battleground* battleground = player->GetBattleground())
+            {
+                BattlegroundBotOrders orders;
+                if (battleground->GetBotOrders(const_cast<Player*>(player), orders))
+                {
+                    decision.triggerName = "bg orders";
+                    decision.actionName = "bg follow orders";
+                    decision.priority = 102.0f;
+                    return decision;
+                }
+            }
+
         // Warsong Gulch and Twin Peaks, played as a team (CtfCoordinator). Only
         // the designated runner heads for the enemy flag from afar; a bot takes
         // a flag it is standing near, returns ours when it is one of the closest,

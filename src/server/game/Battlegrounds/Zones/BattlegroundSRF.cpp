@@ -3,6 +3,7 @@
 
 #include "BattlegroundMgr.h"
 #include "Creature.h"
+#include "GameTime.h"
 #include "CreatureAI.h"
 #include "DBCStores.h"
 #include "Log.h"
@@ -267,7 +268,11 @@ SrfPoint constexpr SRF_BARRACKS[PVP_TEAMS_COUNT][BG_SRF_LANE_COUNT] =
 SrfPoint constexpr SRF_FOUNTAIN_AT[PVP_TEAMS_COUNT] = { { 394.0f, 171.0f, 461.0f }, { 14340.0f, 179.0f, 14391.0f } };
 float constexpr SRF_FOUNTAIN_FACING[PVP_TEAMS_COUNT] = { 5.4978f, 2.3562f };
 
-float constexpr SRF_TURRET_RANGE        = Yards(750.0f);
+// A turret reaches 50 yards - past every class's own range (League's 750 units
+// would be 22.5 here, inside a caster's 30 or a hunter's 35, so a ranged champion
+// could siege it untouched; owner, 2026-10-20: "at least 50 yards"). Both shot
+// spells carry it: Ice Lance 43427 is unlimited, Fireball 22088 100 yards.
+float constexpr SRF_TURRET_RANGE        = 50.0f;
 float constexpr SRF_MINION_AGGRO_RANGE  = Yards(400.0f);
 // With no enemy unit near, a minion takes on an enemy structure in a turret's
 // range of it: a wave walking down a lane stops at the first turret standing.
@@ -350,7 +355,7 @@ float constexpr SRF_TURRET_WARMUP_STEP  = 0.50f;
 uint8 constexpr SRF_TURRET_WARMUP_MAX   = 3;
 uint32 constexpr SRF_TURRET_WARMUP_RESET = 5 * IN_MILLISECONDS;
 // A champion damaging an allied champion within 1400 of a turret pulls its fire.
-float constexpr SRF_TURRET_CALL_RANGE   = Yards(1400.0f);
+float constexpr SRF_TURRET_CALL_RANGE   = std::max(Yards(1400.0f), SRF_TURRET_RANGE);
 // Minions: League acquires within 500; an allied champion under attack calls
 // for help from up to 1000 away.
 float constexpr SRF_MINION_ACQUIRE_RANGE = Yards(500.0f);
@@ -358,20 +363,29 @@ float constexpr SRF_MINION_CALL_RANGE    = Yards(1000.0f);
 // Caster minions: League's 550 range, a bolt every 1.6 s.
 float constexpr SRF_CASTER_RANGE        = Yards(550.0f);
 uint32 constexpr SRF_CASTER_ATTACK_TIME = 1500;    // League's 0.667 attacks a second
-// League's rewards (Season 3), in League gold and experience. Experience goes
-// to the enemy champions within 1600 units of a minion that dies, shared
-// between them.
+// League's rewards, in League gold and experience (wiki "Experience (champion)"
+// and "Minion"): a minion's experience goes to the enemy champions within 1500
+// units of where it died, the killer always among them; one takes it all, two or
+// more split 130% of it. A champion kill's goes to the killer and the allies
+// within 1600: 42 to 990 alone, 27.97 to 891 all told when shared, by the victim's
+// level, 20% more or less for each full level of difference past the first (never
+// under 40%). Jungle camps pay their killer only; the Dragon pays the slaying
+// team's living champions near it, Baron the whole team.
 float constexpr SRF_XP_RANGE            = Yards(1600.0f);
+float constexpr SRF_XP_MINION_RANGE     = Yards(1500.0f);
+float constexpr SRF_XP_SHARED_TOTAL     = 1.30f;
 float constexpr SRF_XP_MELEE_MINION     = 58.88f;
 float constexpr SRF_XP_CASTER_MINION    = 29.44f;
+float constexpr SRF_XP_KILL_SOLO_MIN    = 42.0f;
+float constexpr SRF_XP_KILL_SOLO_MAX    = 990.0f;
+float constexpr SRF_XP_KILL_SHARED_MIN  = 27.97f;
+float constexpr SRF_XP_KILL_SHARED_MAX  = 891.0f;
 uint32 constexpr SRF_GOLD_MELEE_MINION  = 20;
 uint32 constexpr SRF_GOLD_CASTER_MINION = 15;
 uint32 constexpr SRF_GOLD_KILL          = 300;
 uint32 constexpr SRF_GOLD_STRUCTURE     = 150;     // to every player of the side that destroys it
 uint32 constexpr SRF_GOLD_PASSIVE       = 10;      // every SRF_PASSIVE_GOLD_TICK: League's ~1.9 a second
 uint32 constexpr SRF_PASSIVE_GOLD_TICK  = 5 * IN_MILLISECONDS;
-float constexpr SRF_XP_KILL_BASE        = 140.0f;
-float constexpr SRF_XP_KILL_PER_LEVEL   = 20.0f;   // per League level of the victim
 // Units follow the players' level: a level-60 minion would miss nobody and be
 // missed by everybody a level-1 match starts with. Minions also grow a little
 // with every wave, League's scaling over the course of a match.
@@ -502,6 +516,7 @@ void BattlegroundSRF::AddPlayer(Player* player)
 void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
 {
     _brush.erase(guid);
+    _bots.erase(guid);
     // Gone without a Player (logged out) is OnLogin's to restore.
     if (player)
     {
@@ -705,6 +720,7 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
     {
         UpdateBrush(_brushTimer);
         ReleaseIdleCombat();
+        RefreshFreeTurrets();
         _brushTimer = 0;
     }
 }
@@ -735,6 +751,13 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
             st.Patch = patch;
             st.Hidden = hidden;
             player->UpdateObjectVisibility();
+        }
+        // In the fountain or not: CENTURION_Rift shows the pick panel only there.
+        int8 const atBase = IsAtBase(player) ? 1 : 0;
+        if (atBase != st.AtBase)
+        {
+            st.AtBase = atBase;
+            RiftProgression::SendBase(player, atBase != 0);
         }
         // Checked every tick, not only on a change: death or a zone-in can strip it.
         if (hidden != player->HasAura(SRF_SPELL_BRUSH))
@@ -1075,6 +1098,259 @@ void BattlegroundSRF::ReleaseIdleCombat()
     }
 }
 
+// ------------------------------------------------------------------ bots
+//
+// League's bots: one to each lane, the bottom lane taking a second (carry and
+// support) and a fourth or later bot jungling; a bot holds just behind its
+// frontmost allied minion, last-hits the enemy wave, fights an enemy champion
+// that comes into its lane, and keeps out of a standing enemy turret's reach
+// unless allied minions are under it taking the shots. Low on health (30%) it
+// goes home and stays until healed (90%); rich enough for its next item it goes
+// home to shop (RiftProgression::Maintain spends for it there).
+
+float constexpr SRF_BOT_RETREAT_PCT   = 30.0f;
+float constexpr SRF_BOT_RETURN_PCT    = 90.0f;
+float constexpr SRF_BOT_ENGAGE_RANGE  = 14.0f;    // yards round its post it fights in
+float constexpr SRF_BOT_BEHIND_WAVE   = 5.0f;     // yards it keeps behind its own wave
+uint32 constexpr SRF_BOT_SHOP_GOLD    = 1300;     // League gold that sends it home to shop
+uint32 constexpr SRF_SPELL_RECALL     = 94120;    // League's recall (RiftProgression teaches it)
+
+BattlegroundSRF::BotState& BattlegroundSRF::BotOf(Player* bot)
+{
+    BotState& st = _bots[bot->GetGUID()];
+    if (st.Assigned)
+        return st;
+    // League's laning: top, mid and bottom first, bottom twice, then the jungle.
+    TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(bot->GetGUID()));
+    uint8 counts[BG_SRF_LANE_COUNT + 1] = {};
+    for (auto const& [guid, other] : _bots)
+        if (other.Assigned && guid != bot->GetGUID())
+            if (GetTeamIndexByTeamId(GetPlayerTeam(guid)) == team)
+                ++counts[other.Lane];
+    uint8 const order[] = { BG_SRF_LANE_MID, BG_SRF_LANE_TOP, BG_SRF_LANE_BOT, BG_SRF_LANE_NONE, BG_SRF_LANE_BOT };
+    uint8 const quota[BG_SRF_LANE_COUNT + 1] = { 1, 1, 2, 1 };    // top, mid, bot, jungle
+    st.Lane = BG_SRF_LANE_MID;
+    for (uint8 lane : order)
+        if (counts[lane] < quota[lane])
+        {
+            st.Lane = lane;
+            break;
+        }
+    st.Assigned = true;
+    return st;
+}
+
+// A standing enemy turret whose reach `pos` is in (plus `margin`) and that is
+// free to shoot a champion: no allied minion of `team` inside its reach.
+void BattlegroundSRF::RefreshFreeTurrets()
+{
+    Map* map = FindBgMap();
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+    {
+        std::vector<Position>& out = _freeTurrets[team];
+        out.clear();
+        if (!map)
+            continue;
+        TeamId const enemy = OtherTeam(team);
+        for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
+        {
+            uint8 const slot = SlotOf(enemy, i);
+            if (_structures[slot].Destroyed || StructureAt(slot).kind != BG_SRF_KIND_TURRET)
+                continue;
+            Creature* turret = map->GetCreature(BgCreatures[slot]);
+            if (!turret || !turret->IsAlive())
+                continue;
+            bool tanked = false;
+            for (Minion const& m : _minions)
+                if (m.Team == team && turret->GetExactDist2d(&m.Pos) <= SRF_TURRET_RANGE)
+                {
+                    tanked = true;
+                    break;
+                }
+            if (!tanked)
+                out.push_back(turret->GetPosition());
+        }
+    }
+}
+
+bool BattlegroundSRF::UnderFreeEnemyTurret(TeamId team, Position const& pos, float margin) const
+{
+    for (Position const& turret : _freeTurrets[team])
+        if (turret.GetExactDist2d(&pos) <= SRF_TURRET_RANGE + margin)
+            return true;
+    return false;
+}
+
+uint32 BattlegroundSRF::LaneIndexNear(TeamId team, uint8 lane, Position const& pos)
+{
+    std::vector<Position> const& path = LanePath(team, lane);
+    uint32 best = 0;
+    float bestDist = std::numeric_limits<float>::max();
+    for (uint32 i = 0; i < path.size(); ++i)
+    {
+        float const d = path[i].GetExactDist2d(&pos);
+        if (d < bestDist)
+        {
+            bestDist = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+bool BattlegroundSRF::BotMayAttack(Player* bot, Unit* target) const
+{
+    if (!bot || !target)
+        return false;
+    TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(bot->GetGUID()));
+    // a turret itself may be hit while minions tank it - that is UnderFreeEnemyTurret's own test
+    return !UnderFreeEnemyTurret(team, target->GetPosition(), bot->GetCombatReach());
+}
+
+// Asked twice a bot tick (the decision and the action); worked out at most
+// every SRF_BOT_ORDERS_MS.
+uint32 constexpr SRF_BOT_ORDERS_MS = 250;
+
+bool BattlegroundSRF::GetBotOrders(Player* bot, BattlegroundBotOrders& out)
+{
+    if (!bot || !bot->IsAlive() || GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+    BotState& st = BotOf(bot);
+    uint32 const now = GameTime::GetGameTimeMS();
+    if (st.HasOrders && now - st.OrdersAt < SRF_BOT_ORDERS_MS)
+    {
+        out = st.Orders;
+        return true;
+    }
+    st.HasOrders = ComputeBotOrders(bot, st, st.Orders);
+    st.OrdersAt = now;
+    out = st.Orders;
+    return st.HasOrders;
+}
+
+bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBotOrders& out)
+{
+    Map* map = FindBgMap();
+    if (!map)
+        return false;
+    TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(bot->GetGUID()));
+    out = BattlegroundBotOrders();
+
+    // Home: to heal, or to spend.
+    float const pct = bot->GetHealthPct();
+    if (pct < SRF_BOT_RETREAT_PCT)
+        st.Retreating = true;
+    else if (st.Retreating && pct >= SRF_BOT_RETURN_PCT && !(IsAtBase(bot) && bot->GetMoney() >= SRF_BOT_SHOP_GOLD * GOLD))
+        st.Retreating = false;
+    if (!st.Retreating && bot->GetMoney() >= SRF_BOT_SHOP_GOLD * GOLD && !bot->IsInCombat() && !IsAtBase(bot))
+        st.Retreating = true;
+    if (st.Retreating)
+    {
+        out.Retreat = true;
+        out.Post = FountainPos(team);
+        // Recall when nobody hostile is close and nothing is hitting it.
+        bool threatened = bot->IsInCombat();
+        if (!threatened)
+            for (Player* enemy : TeamPlayers(OtherTeam(team)))
+                if (enemy->IsAlive() && enemy->GetExactDist2d(bot) < 30.0f)
+                {
+                    threatened = true;
+                    break;
+                }
+        out.RecallSpell = !threatened && !IsAtBase(bot) && !bot->HasUnitState(UNIT_STATE_CASTING) ? SRF_SPELL_RECALL : 0;
+        return true;
+    }
+
+    // The jungler: the next camp that is up, its own side first.
+    if (st.Lane == BG_SRF_LANE_NONE)
+    {
+        for (uint8 tries = 0; tries < BG_SRF_JUNGLE_CAMPS; ++tries)
+        {
+            uint8 const camp = (st.Camp + tries) % BG_SRF_JUNGLE_CAMPS;
+            if (!_camps[camp].Up || SRF_CAMPS[camp].kind == SRF_CAMP_BARON)
+                continue;
+            Creature* best = nullptr;
+            for (uint8 i = 0; i < BG_SRF_JUNGLE_MONSTERS; ++i)
+                if (SRF_MONSTERS[i].camp == camp)
+                    if (Creature* monster = map->GetCreature(BgCreatures[BG_SRF_CREATURE_JUNGLE_FIRST + i]))
+                        if (monster->IsAlive() && (!best || monster->GetExactDist2d(bot) < best->GetExactDist2d(bot)))
+                            best = monster;
+            if (!best)
+                continue;
+            st.Camp = camp;
+            out.Post = best->GetPosition();
+            out.Target = best->GetGUID();
+            return true;
+        }
+        // nothing up: help the middle lane
+        st.Lane = BG_SRF_LANE_MID;
+    }
+
+    // Laning: just behind the frontmost allied minion of its lane, or at its
+    // outermost standing turret while there is none.
+    std::vector<Position> const& path = LanePath(team, st.Lane);
+    if (path.empty())
+        return false;
+    int32 front = -1;
+    for (Minion const& m : _minions)
+        if (m.Team == team && m.Lane == st.Lane)
+            front = std::max<int32>(front, int32(m.PathIndex));
+    if (front < 0)
+    {
+        front = 0;
+        for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
+        {
+            uint8 const slot = SlotOf(team, i);
+            if (!_structures[slot].Destroyed && StructureAt(slot).kind == BG_SRF_KIND_TURRET && StructureAt(slot).lane == st.Lane)
+                front = std::max<int32>(front, int32(LaneIndexNear(team, st.Lane, StructurePos(slot))));
+        }
+    }
+    front = std::min<int32>(front, int32(path.size()) - 1);
+    // back along the path until SRF_BOT_BEHIND_WAVE behind it, and out of free turret reach
+    int32 post = front;
+    float walked = 0.0f;
+    while (post > 0 && walked < SRF_BOT_BEHIND_WAVE)
+    {
+        walked += path[post].GetExactDist2d(&path[post - 1]);
+        --post;
+    }
+    while (post > 0 && UnderFreeEnemyTurret(team, path[post], 3.0f))
+        --post;
+    out.Post = path[post];
+
+    // What to hit near the post: an enemy minion low enough to last-hit, then any
+    // enemy minion, then an enemy champion in reach, then a turret the minions tank.
+    Unit* best = nullptr;
+    int32 bestScore = 0;
+    auto consider = [&](Unit* unit, int32 score)
+    {
+        if (!unit || !unit->IsAlive() || !bot->IsValidAttackTarget(unit))
+            return;
+        if (unit->GetExactDist2d(&out.Post) > SRF_BOT_ENGAGE_RANGE || !BotMayAttack(bot, unit))
+            return;
+        if (score > bestScore || (score == bestScore && best && unit->GetExactDist2d(bot) < best->GetExactDist2d(bot)))
+        {
+            best = unit;
+            bestScore = score;
+        }
+    };
+    for (Minion const& m : _minions)
+        if (m.Team != team)
+            if (Creature* minion = map->GetCreature(m.Guid))
+                consider(minion, minion->GetHealthPct() < 35.0f ? 40 : 20);
+    for (Player* enemy : TeamPlayers(OtherTeam(team)))
+        consider(enemy, enemy->GetHealthPct() < 40.0f ? 50 : 30);
+    for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
+    {
+        uint8 const slot = SlotOf(OtherTeam(team), i);
+        if (_structures[slot].Vulnerable && !_structures[slot].Destroyed)
+            consider(map->GetCreature(BgCreatures[slot]), 10);
+    }
+    if (best)
+        out.Target = best->GetGUID();
+    return true;
+}
+
 // League's minion target priority, 1 highest:
 //   1 an enemy champion attacking an allied champion (the ally within 1000)
 //   2 an enemy minion attacking an allied champion
@@ -1176,6 +1452,7 @@ void BattlegroundSRF::UpdateMinions()
 
         Minion& m = *it;
         ++it;
+        m.Pos = creature->GetPosition();
 
         // The denying rule: a minion close to death is fair game for its own side.
         if (!m.Denied && GetCustomRules().RiftDenying && creature->GetHealthPct() < SRF_DENY_HEALTH_PCT)
@@ -1398,15 +1675,63 @@ void BattlegroundSRF::AwardGold(TeamId team, WorldObject const* where, uint32 le
 
 void BattlegroundSRF::OnMinionDied(Minion const& minion, Creature const* corpse)
 {
-    if (!corpse || GetStatus() != STATUS_IN_PROGRESS)
+    if (GetStatus() != STATUS_IN_PROGRESS)
         return;
     TeamId const enemy = OtherTeam(minion.Team);
     // A denied minion is worth nothing to anybody.
     if (minion.Denied && minion.Paid)
         return;
-    AwardExperience(enemy, corpse, minion.Caster ? SRF_XP_CASTER_MINION : SRF_XP_MELEE_MINION);
-    if (!GetCustomRules().RiftLastHitGold && !minion.Paid)
+    // Where it stood at the last tick: a minion's corpse can be gone before the
+    // tick that notices it died, and the experience was lost with it.
+    Position const where = corpse ? corpse->GetPosition() : minion.Pos;
+    AwardMinionExperience(enemy, where, minion.Caster ? SRF_XP_CASTER_MINION : SRF_XP_MELEE_MINION, minion.Killer);
+    if (!GetCustomRules().RiftLastHitGold && !minion.Paid && corpse)
         AwardGold(enemy, corpse, minion.Caster ? SRF_GOLD_CASTER_MINION : SRF_GOLD_MELEE_MINION);
+}
+
+void BattlegroundSRF::AwardMinionExperience(TeamId team, Position const& where, float leagueXp, ObjectGuid killer)
+{
+    if (GetCustomRules().RiftSharedExperience)
+    {
+        for (Player* player : TeamPlayers(team))
+            RiftProgression::AddExperience(player, leagueXp);
+        return;
+    }
+    std::vector<Player*> share;
+    for (Player* player : TeamPlayers(team))
+        if (player->GetGUID() == killer || (player->IsAlive() && player->GetExactDist2d(where) <= SRF_XP_MINION_RANGE))
+            share.push_back(player);
+    if (share.empty())
+        return;
+    float const each = share.size() == 1 ? leagueXp : leagueXp * SRF_XP_SHARED_TOTAL / float(share.size());
+    for (Player* player : share)
+        RiftProgression::AddExperience(player, each);
+}
+
+void BattlegroundSRF::AwardKillExperience(TeamId team, Player* victim, Player* killer)
+{
+    std::vector<Player*> share;
+    for (Player* player : TeamPlayers(team))
+        if (player == killer || (player->IsAlive() && player->GetExactDist2d(victim) <= SRF_XP_RANGE))
+            share.push_back(player);
+    if (share.empty())
+        return;
+    uint8 const victimLevel = RiftProgression::GetLeagueLevel(victim);
+    float const t = float(std::clamp<uint8>(victimLevel, 1, 18) - 1) / 17.0f;
+    float const each = share.size() == 1
+        ? SRF_XP_KILL_SOLO_MIN + (SRF_XP_KILL_SOLO_MAX - SRF_XP_KILL_SOLO_MIN) * t
+        : (SRF_XP_KILL_SHARED_MIN + (SRF_XP_KILL_SHARED_MAX - SRF_XP_KILL_SHARED_MIN) * t) / float(share.size());
+    for (Player* player : share)
+    {
+        // 20% less (higher) or more (lower) per full level of difference past the first
+        int32 const diff = int32(RiftProgression::GetLeagueLevel(player)) - int32(victimLevel);
+        float mult = 1.0f;
+        if (diff >= 2)
+            mult = std::max(0.4f, 1.0f - 0.2f * float(diff - 1));
+        else if (diff <= -2)
+            mult = 1.0f + 0.2f * float(-diff - 1);
+        RiftProgression::AddExperience(player, each * mult);
+    }
 }
 
 void BattlegroundSRF::HandleKillUnit(Creature* creature, Player* killer)
@@ -1421,6 +1746,7 @@ void BattlegroundSRF::HandleKillUnit(Creature* creature, Player* killer)
     // Marked paid either way: the last hit's gold is the killer's, or - on its
     // own side - a deny, worth nothing at all.
     it->Paid = true;
+    it->Killer = killer->GetGUID();
     if (GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID())) == it->Team)
     {
         it->Denied = true;
@@ -1439,7 +1765,7 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
     if (killerTeam == GetTeamIndexByTeamId(GetPlayerTeam(victim->GetGUID())))
         return;
     RiftProgression::AddGold(killer, SRF_GOLD_KILL, true);
-    AwardExperience(killerTeam, victim, SRF_XP_KILL_BASE + SRF_XP_KILL_PER_LEVEL * float(RiftProgression::GetLeagueLevel(victim)));
+    AwardKillExperience(killerTeam, victim, killer);
 }
 
 uint8 BattlegroundSRF::AverageMatchLevel() const
@@ -1822,7 +2148,19 @@ bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
     SrfMonster const& m = SRF_MONSTERS[index];
     TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID()));
     RiftProgression::AddGold(killer, m.gold, true);
-    AwardExperience(team, creature, m.xp);
+    switch (SRF_CAMPS[m.camp].kind)
+    {
+        case SRF_CAMP_BARON:
+            for (Player* player : TeamPlayers(team))
+                RiftProgression::AddExperience(player, m.xp);
+            break;
+        case SRF_CAMP_DRAGON:
+            AwardExperience(team, creature, m.xp);
+            break;
+        default:
+            RiftProgression::AddExperience(killer, m.xp);
+            break;
+    }
 
     switch (SRF_CAMPS[m.camp].kind)
     {
