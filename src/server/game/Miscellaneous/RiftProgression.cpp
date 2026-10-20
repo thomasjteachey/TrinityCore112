@@ -457,15 +457,10 @@ namespace
         return unlocked == state.Unlocked.end() || !unlocked->second;
     }
 
-    // Macros come off too: the server cannot read them (they live client side),
-    // and a #showtooltip macro draws the spell it casts - a level-60 hunter's
-    // Aspect of the Hawk macro stood on the bar of a level-10 match, refused on
-    // every click. RestoreButtons puts them back with the rest.
     void HideLockedButtons(Player* player, State const& state)
     {
         for (SavedButton const& b : state.RealButtons)
-            if ((b.Type == ACTION_BUTTON_SPELL && HiddenInMatch(player, state, b.Action))
-                || b.Type == ACTION_BUTTON_MACRO || b.Type == ACTION_BUTTON_CMACRO)
+            if (b.Type == ACTION_BUTTON_SPELL && HiddenInMatch(player, state, b.Action))
                 player->removeActionButton(b.Button);
         player->SendActionButtons(1);
     }
