@@ -951,8 +951,11 @@ void BattlegroundSRF::SpawnWave()
 
     if (spawned)
     {
+        // League announces the first wave only ("Minions have spawned!"), not
+        // every one - every 30 seconds in the chat was noise.
+        if (!_wavesSpawned)
+            PSendMessageToAll(BG_SRF_STRING_MINIONS_SPAWNED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
         ++_wavesSpawned;
-        PSendMessageToAll(BG_SRF_STRING_MINIONS_SPAWNED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
     }
 }
 
@@ -1250,10 +1253,21 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
         out.Retreat = true;
         out.Post = FountainPos(team);
         // Recall when nobody hostile is close and nothing is hitting it.
+        // Recall when nothing hostile is close: no enemy champion within 30
+        // yards and no enemy minion within 20 - a bot used to stand channelling
+        // right beside a minion fight, which reads as standing idle. Until then
+        // it walks home.
         bool threatened = bot->IsInCombat();
         if (!threatened)
             for (Player* enemy : TeamPlayers(OtherTeam(team)))
                 if (enemy->IsAlive() && enemy->GetExactDist2d(bot) < 30.0f)
+                {
+                    threatened = true;
+                    break;
+                }
+        if (!threatened)
+            for (Minion const& m : _minions)
+                if (m.Team != team && bot->GetExactDist2d(&m.Pos) < 20.0f)
                 {
                     threatened = true;
                     break;
