@@ -1623,10 +1623,21 @@ void BattlegroundSRF::FireBolt(Unit* source, Unit* target, uint32 spellId, int32
 // with the turret's faction and level, unattackable and unselectable.
 Creature* BattlegroundSRF::TurretEye(uint8 slot, Creature* turret)
 {
+    // Four levels over its turret, kept there as the match levels: a spell from a
+    // lower-level caster misses and is partly resisted the further the victim is
+    // above it (Unit::MagicSpellHitResult, level resistance), so an eye stuck at
+    // the level it was summoned at lost most of its shots on the minions and
+    // champions that had levelled past it. Four over makes the hit chance 100%
+    // and leaves no level resistance - League's turrets never miss.
+    uint8 const eyeLevel = uint8(std::min<uint32>(turret->GetLevel() + 4, STRONG_MAX_LEVEL));
     TurretState& ts = _turrets[slot];
     if (Creature* eye = !ts.Eye.IsEmpty() ? turret->GetMap()->GetCreature(ts.Eye) : nullptr)
         if (eye->IsAlive())
+        {
+            if (eye->GetLevel() != eyeLevel)
+                eye->SetLevel(eyeLevel);
             return eye;
+        }
 
     Position const top(turret->GetPositionX(), turret->GetPositionY(),
         turret->GetPositionZ() + turret->GetCollisionHeight() + 1.0f, turret->GetOrientation());
@@ -1638,7 +1649,7 @@ Creature* BattlegroundSRF::TurretEye(uint8 slot, Creature* turret)
     eye->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
     eye->SetDisableGravity(true);
     eye->SetReactState(REACT_PASSIVE);
-    eye->SetLevel(turret->GetLevel());
+    eye->SetLevel(eyeLevel);
     ts.Eye = eye->GetGUID();
     return eye;
 }
