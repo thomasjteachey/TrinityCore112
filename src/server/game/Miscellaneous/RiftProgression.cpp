@@ -653,6 +653,13 @@ bool IsInMatch(Player const* player)
     return player && Find(player);
 }
 
+// The bots' side (further down, before Maintain).
+namespace
+{
+    void BotSpendPicks(Player* player, State& state);
+    void BotSyncSpellbook(Player* player, State const& state);
+}
+
 void Enter(Player* player)
 {
     if (!player || !StoragePresent)
@@ -697,6 +704,11 @@ void Enter(Player* player)
         state.Unlocked[first] = uint8(state.Chains.at(first).Ranks.size());
     state.PendingPicks = PICKS_PER_LEVEL;
     player->GiveLevel(state.StartLevel, true);
+    if (!state.Persistent)
+    {
+        BotSpendPicks(player, state);
+        BotSyncSpellbook(player, state);
+    }
     player->SendTalentsInfoData(false);
     HideLockedButtons(player, state);
     if (!player->HasSpell(SPELL_RIFT_RECALL))
@@ -994,14 +1006,44 @@ namespace
 
     // League's bots level their abilities as they come: a new one first (the
     // lowest-level one on offer), then the newest rank of what they have.
-    void BotSpendPicks(Player* player, State& state)
+    // What a pick is worth to a bot: something that hurts first (its spell layer
+    // fights with those), then something that heals, then the rest. A buff
+    // first left a level-10 mage with Frost Armor and nothing to cast at minions.
+    int32 PickWorth(SpellInfo const* info)
+    {
+        for (SpellEffectInfo const& effect : info->GetEffects())
+        {
+            switch (effect.Effect)
+            {
+                case SPELL_EFFECT_SCHOOL_DAMAGE:
+                case SPELL_EFFECT_WEAPON_DAMAGE:
+                case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+                case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+                case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+                case SPELL_EFFECT_HEALTH_LEECH:
+                    return 3;
+                default:
+                    break;
+            }
+            if (effect.IsAura(SPELL_AURA_PERIODIC_DAMAGE) || effect.IsAura(SPELL_AURA_PERIODIC_LEECH)
+                || effect.IsAura(SPELL_AURA_PERIODIC_DAMAGE_PERCENT))
+                return 3;
+        }
+        for (SpellEffectInfo const& effect : info->GetEffects())
+            if (effect.Effect == SPELL_EFFECT_HEAL || effect.IsAura(SPELL_AURA_PERIODIC_HEAL))
+                return 2;
+        return 1;
+    }
+
+    // League's bots level their abilities as they come: a new one first (the most
+    // useful, lowest level first), then the newest rank of the most useful.
+    void BotSpendPicks(Player* /*player*/, State& state)
     {
         while (state.PendingPicks)
         {
             std::vector<uint32> const offers = Offers(state);
             uint32 pick = 0;
-            uint32 pickLevel = 0;
-            bool pickNew = false;
+            std::tuple<bool, int32, int32> best;     // new, worth, level (as a preference)
             for (uint32 spell : offers)
             {
                 SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
@@ -1010,22 +1052,41 @@ namespace
                 uint32 const first = state.SpellToChain.at(spell);
                 auto const unlocked = state.Unlocked.find(first);
                 bool const isNew = unlocked == state.Unlocked.end() || !unlocked->second;
-                bool better = !pick;
-                if (!better && isNew != pickNew)
-                    better = isNew;
-                else if (!better)
-                    better = isNew ? info->SpellLevel < pickLevel : info->SpellLevel > pickLevel;
-                if (better)
+                int32 const level = isNew ? -int32(info->SpellLevel) : int32(info->SpellLevel);
+                std::tuple<bool, int32, int32> const key(isNew, PickWorth(info), level);
+                if (!pick || key > best)
                 {
                     pick = spell;
-                    pickLevel = info->SpellLevel;
-                    pickNew = isNew;
+                    best = key;
                 }
             }
             if (!pick)
                 break;
             ++state.Unlocked[state.SpellToChain.at(pick)];
             --state.PendingPicks;
+        }
+    }
+
+    // A bot's spellbook holds what it has unlocked and nothing else: its spell
+    // layer picks from the spells it knows, and one it knows but may not cast
+    // (Spell::CheckCast, IsSpellLocked) is a cast that fails every time - the
+    // bot stood in lane doing nothing. A copy writes nothing down, so this is
+    // only ever done to bots.
+    void BotSyncSpellbook(Player* player, State const& state)
+    {
+        for (auto const& [first, chain] : state.Chains)
+        {
+            auto const itr = state.Unlocked.find(first);
+            uint8 const unlocked = itr != state.Unlocked.end() ? itr->second : 0;
+            for (uint32 k = 0; k < chain.Ranks.size(); ++k)
+            {
+                uint32 const spell = chain.Ranks[k];
+                bool const want = k < unlocked && !state.Removed.count(spell);
+                if (want && !player->HasSpell(spell))
+                    player->LearnSpell(spell, false);
+                else if (!want && player->HasSpell(spell))
+                    player->RemoveSpell(spell, false, false);
+            }
         }
     }
 
@@ -1194,6 +1255,7 @@ void Maintain(Player* player)
     if (!state)
         return;
     BotSpendPicks(player, *state);
+    BotSyncSpellbook(player, *state);
     BotSpendTalents(player, *state);
     BotShop(player, *state);
 }
