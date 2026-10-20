@@ -282,11 +282,9 @@ uint32 constexpr SRF_BRUSH_REVEAL       = 1500;
 // Centurion spell 94142 "Brush": the buff a hidden champion wears, so they can see it.
 uint32 constexpr SRF_SPELL_BRUSH        = 94142;
 
-// The brush patch at a world position, 0 for none.
-uint8 BrushPatchAt(Position const& pos)
+// The brush patch in League's grid cell holding (lx, lz), 0 for none.
+uint8 BrushCellAt(float lx, float lz)
 {
-    float const lx = SRF_LEAGUE_CENTRE - pos.GetPositionY() / SRF_YARDS_PER_UNIT;
-    float const lz = SRF_LEAGUE_CENTRE + pos.GetPositionX() / SRF_YARDS_PER_UNIT;
     int32 const ix = int32(std::floor((lx - SRF_BRUSH_MIN_X) / SRF_BRUSH_CELL));
     int32 const iz = int32(std::floor((lz - SRF_BRUSH_MIN_Z) / SRF_BRUSH_CELL));
     if (ix < 0 || iz < 0 || ix >= int32(SRF_BRUSH_WIDTH) || iz >= int32(SRF_BRUSH_DEPTH))
@@ -295,6 +293,24 @@ uint8 BrushPatchAt(Position const& pos)
     auto const itr = std::lower_bound(std::begin(SRF_BRUSH), std::end(SRF_BRUSH), key,
         [](SrfBrushCell const& cell, uint32 k) { return cell.key < k; });
     return itr != std::end(SRF_BRUSH) && itr->key == key ? itr->patch : 0;
+}
+
+// The brush patch a champion standing at a world position is in, 0 for none.
+// The body, not the point: the centre and four points half a yard out, so a
+// champion at a bush's edge - visibly in the leaves - counts as in it. League's
+// cells are a yard and a half wide and its bush art spills past their edges;
+// one point read "just outside" for someone standing in the brush (2026-10-19,
+// 3 cm short of a cell).
+float constexpr SRF_BRUSH_BODY = 0.5f / SRF_YARDS_PER_UNIT;
+uint8 BrushPatchAt(Position const& pos)
+{
+    float const lx = SRF_LEAGUE_CENTRE - pos.GetPositionY() / SRF_YARDS_PER_UNIT;
+    float const lz = SRF_LEAGUE_CENTRE + pos.GetPositionX() / SRF_YARDS_PER_UNIT;
+    float const offsets[5][2] = { { 0, 0 }, { SRF_BRUSH_BODY, 0 }, { -SRF_BRUSH_BODY, 0 }, { 0, SRF_BRUSH_BODY }, { 0, -SRF_BRUSH_BODY } };
+    for (auto const& o : offsets)
+        if (uint8 const patch = BrushCellAt(lx + o[0], lz + o[1]))
+            return patch;
+    return 0;
 }
 
 // A Rift creature's side, from its faction (a deniable minion's, from its entry).
