@@ -1365,6 +1365,32 @@ void ApplyRiftLoadout(Player* player, uint8 kitLevel)
         ++putAway;
     }
 
+    // And whatever is still worn: BuildLoadout leaves tournament gear and
+    // whitelisted items where they are (a tournament match fights in them), but
+    // the Rift's field kit replaces everything - a tournament character, every
+    // PvP bot among them, otherwise kept its level-60 set on at level 10.
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
+            continue;
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+        if (transient)
+            player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+        else
+        {
+            LoadoutEntry worn;
+            worn.Original = item;
+            worn.Bag = INVENTORY_SLOT_BAG_0;
+            worn.Slot = slot;
+            worn.Count = item->GetCount();
+            worn.Worn = true;
+            StashOriginal(player, worn, trans);
+        }
+        ++putAway;
+    }
+
     uint32 issued = 0;
     for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
     {

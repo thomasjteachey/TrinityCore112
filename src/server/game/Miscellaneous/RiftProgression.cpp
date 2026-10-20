@@ -64,15 +64,15 @@ namespace
     uint32 constexpr SPELL_RIFT_RECALL = 94120;
     // Valor's Reward, a League item passive (scripts/Custom/custom_rift_items.cpp).
     uint32 constexpr SPELL_VALORS_REWARD = 94141;
-    // League has no ammunition: stock 46699 "Requires No Ammo" (Thori'dal's
-    // passive) lets a bow, gun or crossbow fire with an empty ammo slot, and the
-    // Rift is a free-reagent context (Tournament::IsFreeReagentContext), so
-    // nothing is used up either.
+    // Stock 46699 "Requires No Ammo" (Thori'dal's passive). The match no longer
+    // hands it out - it also stops ammunition being equipped; Spell::TakeAmmo
+    // just uses none up in the Rift - but a character that left a match with
+    // the match's copy loses it here.
     uint32 constexpr SPELL_NO_AMMO = 46699;
 
     void TakeNoAmmo(Player* player)
     {
-        // only the match's own copy: Thori'dal's (an item aura) stays
+        // only a copy the match put on: Thori'dal's (an item aura) stays
         player->RemoveAppliedAuras(SPELL_NO_AMMO, [](AuraApplication const* aurApp)
         {
             return aurApp->GetBase()->GetCastItemGUID().IsEmpty();
@@ -702,8 +702,6 @@ void Enter(Player* player)
     if (!player->HasSpell(SPELL_RIFT_RECALL))
         player->LearnSpell(SPELL_RIFT_RECALL, false);
     PlaceUnlockedSpell(player, state, 0, SPELL_RIFT_RECALL);
-    if (!player->HasAura(SPELL_NO_AMMO))
-        player->AddAura(SPELL_NO_AMMO, player);
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
     ShowProgress(player, state);
@@ -1186,9 +1184,9 @@ void Maintain(Player* player)
     // points and gold are spent for it, at the fountain.
     if (!player || !player->IsAlive())
         return;
-    // Death takes the no-ammo aura with it; it comes back here.
-    if (IsInMatch(player) && !player->HasAura(SPELL_NO_AMMO))
-        player->AddAura(SPELL_NO_AMMO, player);
+    // anyone still wearing the no-ammo aura an earlier build handed out
+    if (player->HasAura(SPELL_NO_AMMO))
+        TakeNoAmmo(player);
     if (!IsTransient(player) || !CanSpendPoints(player, false))
         return;
     std::lock_guard<std::recursive_mutex> lock(StateMutex);

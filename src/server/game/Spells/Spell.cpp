@@ -5460,6 +5460,11 @@ void Spell::TakeAmmo()
     if (Tournament::IsFreeReagentContext(player))
         return;
 
+    // Summoner's Rift: ammunition is still needed, and equipped, as anywhere -
+    // a shot just uses none of it up.
+    if (RiftProgression::IsInMatch(player))
+        return;
+
     // only ranged
     if (m_attackType != RANGED_ATTACK)
         return;

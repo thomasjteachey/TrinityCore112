@@ -1110,7 +1110,8 @@ void BattlegroundSRF::ReleaseIdleCombat()
 
 float constexpr SRF_BOT_RETREAT_PCT   = 30.0f;
 float constexpr SRF_BOT_RETURN_PCT    = 90.0f;
-float constexpr SRF_BOT_ENGAGE_RANGE  = 14.0f;    // yards round its post it fights in
+float constexpr SRF_BOT_ENGAGE_RANGE  = 22.0f;    // yards round its post (or itself) it fights in
+float constexpr SRF_BOT_CLASH_RANGE   = 30.0f;    // an enemy minion this close to an allied one is a fight
 float constexpr SRF_BOT_BEHIND_WAVE   = 5.0f;     // yards it keeps behind its own wave
 uint32 constexpr SRF_BOT_SHOP_GOLD    = 1300;     // League gold that sends it home to shop
 uint32 constexpr SRF_SPELL_RECALL     = 94120;    // League's recall (RiftProgression teaches it)
@@ -1291,10 +1292,28 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
     std::vector<Position> const& path = LanePath(team, st.Lane);
     if (path.empty())
         return false;
+    // The front is where the waves meet: the allied minion of this lane closest
+    // to an enemy minion (within SRF_BOT_CLASH_RANGE). Only with no fight in the
+    // lane is it the minion furthest down the path - one that wandered ahead
+    // used to drag the post away from the fight and leave the bot idle.
     int32 front = -1;
+    float clash = SRF_BOT_CLASH_RANGE;
+    Position const* clashAt = nullptr;
     for (Minion const& m : _minions)
-        if (m.Team == team && m.Lane == st.Lane)
-            front = std::max<int32>(front, int32(m.PathIndex));
+    {
+        if (m.Team != team || m.Lane != st.Lane)
+            continue;
+        front = std::max<int32>(front, int32(m.PathIndex));
+        for (Minion const& e : _minions)
+            if (e.Team != team)
+                if (float const d = m.Pos.GetExactDist2d(&e.Pos); d < clash)
+                {
+                    clash = d;
+                    clashAt = &m.Pos;
+                }
+    }
+    if (clashAt)
+        front = int32(LaneIndexNear(team, st.Lane, *clashAt));
     if (front < 0)
     {
         front = 0;
@@ -1326,7 +1345,9 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
     {
         if (!unit || !unit->IsAlive() || !bot->IsValidAttackTarget(unit))
             return;
-        if (unit->GetExactDist2d(&out.Post) > SRF_BOT_ENGAGE_RANGE || !BotMayAttack(bot, unit))
+        // in reach of the post, or of the bot itself
+        if ((unit->GetExactDist2d(&out.Post) > SRF_BOT_ENGAGE_RANGE && unit->GetExactDist2d(bot) > SRF_BOT_ENGAGE_RANGE)
+            || !BotMayAttack(bot, unit))
             return;
         if (score > bestScore || (score == bestScore && best && unit->GetExactDist2d(bot) < best->GetExactDist2d(bot)))
         {
