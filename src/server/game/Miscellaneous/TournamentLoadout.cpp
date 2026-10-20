@@ -1258,6 +1258,13 @@ void ApplyBattlegroundLoadout(Player* player)
     if (!battleground || !battleground->IsTournamentPool())
         return;
 
+    // Summoner's Rift dresses everyone in its own level-10 field kit
+    // (ApplyRiftLoadout, from RiftProgression::Enter). Dressing a tournament
+    // character - every PvP bot - in level-60 tournament gear first registered
+    // a loadout, and the Rift's kit then stood down: bots fought in full 60s.
+    if (battleground->GetTypeID(true) == BATTLEGROUND_SRF)
+        return;
+
     if (player->IsGameMaster() || HasBattlegroundLoadout(player))
         return;
 

@@ -2010,6 +2010,21 @@ void BattlegroundSRF::Report(uint32 diff)
     TC_LOG_INFO("bg.battleground", "Summoner's Rift {}: {} players, {} minions, {} waves, bolts {} cast / {} refused (last refusal {}), camps up {}/{}, unstuck {} from a target / {} onto the lane.",
         GetInstanceID(), GetPlayersSize(), _minions.size(), _wavesSpawned, _boltsCast, _boltsRefused, _lastRefusal,
         campsUp, uint32(BG_SRF_JUNGLE_CAMPS), _unstuckTargets, _unstuckPlaced);
+    // Each bot's orders, so a bot standing idle can be read off the log.
+    for (auto& [guid, st] : _bots)
+    {
+        Player* bot = ObjectAccessor::FindPlayer(guid);
+        if (!bot || bot->GetMapId() != GetMapId())
+            continue;
+        Unit* ordered = !st.Orders.Target.IsEmpty() ? ObjectAccessor::GetUnit(*bot, st.Orders.Target) : nullptr;
+        Unit* victim = bot->GetVictim();
+        TC_LOG_INFO("bg.battleground", "Summoner's Rift {} bot {} (class {}): lane {}, {}{}, {:.0f} yd from post, ordered {}, victim {}, hp {:.0f}%, casting {}.",
+            GetInstanceID(), bot->GetName(), uint32(bot->GetClass()), uint32(st.Lane),
+            st.HasOrders ? "orders" : "NO ORDERS", st.Orders.Retreat ? " (retreating)" : "",
+            bot->GetExactDist2d(&st.Orders.Post), ordered ? ordered->GetName() : std::string("nothing"),
+            victim ? victim->GetName() : std::string("nothing"), bot->GetHealthPct(),
+            bot->HasUnitState(UNIT_STATE_CASTING) ? "yes" : "no");
+    }
     _boltsCast = 0;
     _boltsRefused = 0;
     _unstuckTargets = 0;

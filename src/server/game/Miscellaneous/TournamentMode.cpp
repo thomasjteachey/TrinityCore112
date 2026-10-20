@@ -1762,7 +1762,16 @@ bool RefuseTalentSpendInMatch(Player* player)
 
 bool IsFreeReagentContext(Player const* player)
 {
-    if (!Config.WaiveReagents || !player)
+    if (!player)
+        return false;
+
+    // Summoner's Rift: League has no ammunition and no reagents - whatever the
+    // tournament's own waiver is set to.
+    if (Battleground const* bg = player->GetBattleground())
+        if (bg->GetTypeID(true) == BATTLEGROUND_SRF && player->GetMapId() == bg->GetMapId())
+            return true;
+
+    if (!Config.WaiveReagents)
         return false;
 
     // The tournament's matches only. A world-queue battleground or arena is

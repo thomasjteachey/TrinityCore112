@@ -28,6 +28,7 @@
 #include "ObjectMgr.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "Player.h"
+#include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "StringConvert.h"
@@ -63,6 +64,20 @@ namespace
     uint32 constexpr SPELL_RIFT_RECALL = 94120;
     // Valor's Reward, a League item passive (scripts/Custom/custom_rift_items.cpp).
     uint32 constexpr SPELL_VALORS_REWARD = 94141;
+    // League has no ammunition: stock 46699 "Requires No Ammo" (Thori'dal's
+    // passive) lets a bow, gun or crossbow fire with an empty ammo slot, and the
+    // Rift is a free-reagent context (Tournament::IsFreeReagentContext), so
+    // nothing is used up either.
+    uint32 constexpr SPELL_NO_AMMO = 46699;
+
+    void TakeNoAmmo(Player* player)
+    {
+        // only the match's own copy: Thori'dal's (an item aura) stays
+        player->RemoveAppliedAuras(SPELL_NO_AMMO, [](AuraApplication const* aurApp)
+        {
+            return aurApp->GetBase()->GetCastItemGUID().IsEmpty();
+        });
+    }
 
     // The fountain shops' League items (import/rift/scripts/rift_shop.py): bought
     // for the match, gone with it.
@@ -687,6 +702,8 @@ void Enter(Player* player)
     if (!player->HasSpell(SPELL_RIFT_RECALL))
         player->LearnSpell(SPELL_RIFT_RECALL, false);
     PlaceUnlockedSpell(player, state, 0, SPELL_RIFT_RECALL);
+    if (!player->HasAura(SPELL_NO_AMMO))
+        player->AddAura(SPELL_NO_AMMO, player);
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
     ShowProgress(player, state);
@@ -714,6 +731,7 @@ void Leave(Player* player)
 
     TakeShopItems(player);
     TakeRecall(player);
+    TakeNoAmmo(player);
     player->GiveLevel(state.RealLevel, true);
     player->SetUInt32Value(PLAYER_XP, state.RealXp);
     RestoreTalents(player, state.RealTalents);
@@ -774,6 +792,7 @@ void OnLogin(Player* player)
     uint8 const realLevel = fields[0].GetUInt8();
     TakeShopItems(player);
     TakeRecall(player);
+    TakeNoAmmo(player);
     player->GiveLevel(realLevel, true);
     player->SetUInt32Value(PLAYER_XP, fields[1].GetUInt32());
     player->SetMoney(fields[2].GetUInt32());
@@ -1165,7 +1184,12 @@ void Maintain(Player* player)
     // Talents are the character's own in the match now (spent from its own
     // points), so nothing the engine re-applies needs taking off again. A bot's
     // points and gold are spent for it, at the fountain.
-    if (!player || !IsTransient(player) || !player->IsAlive() || !CanSpendPoints(player, false))
+    if (!player || !player->IsAlive())
+        return;
+    // Death takes the no-ammo aura with it; it comes back here.
+    if (IsInMatch(player) && !player->HasAura(SPELL_NO_AMMO))
+        player->AddAura(SPELL_NO_AMMO, player);
+    if (!IsTransient(player) || !CanSpendPoints(player, false))
         return;
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
     State* state = Find(player);
