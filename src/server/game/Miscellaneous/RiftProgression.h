@@ -86,6 +86,11 @@ namespace RiftProgression
     TC_GAME_API SpellInfo const* AdjustCast(Player const* player, SpellInfo const* spellInfo);
     // Spell::CheckCast: true when this spell is not unlocked in the match yet.
     TC_GAME_API bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo);
+    // Player::CanEquipItem: in a match a character wears the field kit and what
+    // the shop sells, nothing it brought (its own gear is stashed at the door, but
+    // a piece left in its bags would otherwise go straight back on). True outside
+    // a match, and for the shirt and tabard.
+    TC_GAME_API bool MayEquip(Player const* player, uint32 entry, uint8 slot);
 
     // Match experience, in League's own units (a melee minion is ~59).
     TC_GAME_API void AddExperience(Player* player, float leagueXp);

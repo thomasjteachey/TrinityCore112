@@ -1240,6 +1240,14 @@ bool IsLoadoutSwapInProgress(Player const* player)
     return player && SwapInProgress == player;
 }
 
+bool IsFieldKitPiece(uint32 entry)
+{
+    for (auto const& [invType, entries] : KitPieces)
+        if (std::find(entries.begin(), entries.end(), entry) != entries.end())
+            return true;
+    return false;
+}
+
 bool HasBattlegroundLoadout(Player const* player)
 {
     if (!player)

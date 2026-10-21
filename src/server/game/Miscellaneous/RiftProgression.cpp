@@ -872,6 +872,15 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
     return pos == ranks.end() || size_t(pos - ranks.begin()) >= have;
 }
 
+bool MayEquip(Player const* player, uint32 entry, uint8 slot)
+{
+    if (slot >= EQUIPMENT_SLOT_END || slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
+        return true;
+    if ((entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST) || Tournament::IsFieldKitPiece(entry))
+        return true;
+    return !IsInMatch(player);
+}
+
 void AddExperience(Player* player, float leagueXp)
 {
     if (!player || leagueXp <= 0.0f)

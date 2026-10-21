@@ -13551,6 +13551,9 @@ InventoryResult Player::CanEquipItem(uint8 slot, uint16& dest, Item* pItem, bool
                 if (Battleground* battleground = GetBattleground())
                     if (!IsBattlegroundEquipChangeAllowed(this, eslot))
                         return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+
+                if (!Tournament::IsLoadoutSwapInProgress(this) && !RiftProgression::MayEquip(this, pProto->ItemId, eslot))
+                    return EQUIP_ERR_CANT_DO_RIGHT_NOW;
             }
 
             res = CanUseItem(pItem, not_loading);
