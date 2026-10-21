@@ -321,6 +321,31 @@ local function GoldPopup(amount)
 	-- no sound of its own: the client already chimes when money comes in
 end
 
+-- The match trims the spellbook to the ranks it has unlocked spell by spell
+-- (the client keeps whatever spell list it was once sent), and every one of
+-- those prints "You have unlearned ..." - a level-60 character walks in to a
+-- wall of them, and out again to "You have learned ...". Hidden in the Rift.
+local spellbookSpam = {};
+for _, fmt in ipairs({ ERR_LEARN_SPELL_S, ERR_LEARN_ABILITY_S, ERR_LEARN_PASSIVE_S, ERR_SPELL_UNLEARNED_S }) do
+	if ( fmt ) then
+		local pattern = string.gsub(fmt, "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1");
+		pattern = string.gsub(pattern, "%%%%s", ".+");
+		table.insert(spellbookSpam, "^" .. pattern .. "$");
+	end
+end
+local RIFT_ZONE = "Summoner's Rift";
+ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", function(self, event, message, ...)
+	if ( GetRealZoneText() ~= RIFT_ZONE or type(message) ~= "string" ) then
+		return false;
+	end
+	for _, pattern in ipairs(spellbookSpam) do
+		if ( string.find(message, pattern) ) then
+			return true;
+		end
+	end
+	return false;
+end);
+
 local function Split(text, sep)
 	local out = {};
 	for part in string.gmatch(text, "([^" .. sep .. "]+)") do

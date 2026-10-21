@@ -175,6 +175,12 @@ namespace
 
         std::vector<LearnedTalent> RealTalents;   // the active spec's build, put back on the way out
         std::vector<SavedButton> RealButtons;     // the action bars it walked in with
+
+        // What the client's spellbook was told against what it would hold
+        // normally (every active spell): active spells taken out of it, and
+        // inactive ones (a lower rank) put into it. SyncClientSpellbook.
+        std::unordered_set<uint32> ClientHidden;
+        std::unordered_set<uint32> ClientExtra;
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -470,6 +476,85 @@ namespace
         player->SendActionButtons(1);
     }
 
+    // In a match the spellbook lists the best unlocked rank of each ability and
+    // nothing off the whitelist; anything else as usual.
+    bool MatchShows(State const& state, uint32 spell, bool active)
+    {
+        if (state.Removed.count(spell))
+            return false;
+        auto const chain = state.SpellToChain.find(spell);
+        if (chain == state.SpellToChain.end())
+            return active;
+        auto const unlocked = state.Unlocked.find(chain->second);
+        uint8 const have = unlocked != state.Unlocked.end() ? unlocked->second : 0;
+        return have && state.Chains.at(chain->second).Ranks[have - 1] == spell;
+    }
+
+    void SendSpellbookChange(Player* player, uint32 spell, bool add)
+    {
+        if (add)
+        {
+            WorldPacket data(SMSG_LEARNED_SPELL, 6);
+            data << uint32(spell);
+            data << uint16(0);
+            player->SendDirectMessage(&data);
+        }
+        else
+        {
+            WorldPacket data(SMSG_REMOVED_SPELL, 4);
+            data << uint32(spell);
+            player->SendDirectMessage(&data);
+        }
+    }
+
+    // The client keeps every spell it was ever sent: a fresh SMSG_INITIAL_SPELLS
+    // mid-session only adds (a resent filtered list left a hunter's whole
+    // spellbook in place). So the difference is sent spell by spell, the way a
+    // talent reset does it; CENTURION_Rift hides the "You have (un)learned"
+    // lines that come with it. Spells stay known server side - nothing is
+    // written down. A bot has no client: BotSyncSpellbook.
+    void SyncClientSpellbook(Player* player, State& state)
+    {
+        if (!state.Persistent || !player->GetSession())
+            return;
+        for (auto const& [spell, known] : player->GetSpellMap())
+        {
+            if (known.state == PLAYERSPELL_REMOVED || known.disabled)
+                continue;
+            bool const want = MatchShows(state, spell, known.active);
+            bool const has = known.active ? !state.ClientHidden.count(spell) : state.ClientExtra.count(spell) != 0;
+            if (want == has)
+                continue;
+            SendSpellbookChange(player, spell, want);
+            if (known.active)
+            {
+                if (want)
+                    state.ClientHidden.erase(spell);
+                else
+                    state.ClientHidden.insert(spell);
+            }
+            else if (want)
+                state.ClientExtra.insert(spell);
+            else
+                state.ClientExtra.erase(spell);
+        }
+    }
+
+    // The way out: the client is told the spellbook it normally holds.
+    void ResetClientSpellbook(Player* player, State& state)
+    {
+        if (player->GetSession())
+        {
+            for (uint32 spell : state.ClientHidden)
+                if (player->HasSpell(spell))
+                    SendSpellbookChange(player, spell, true);
+            for (uint32 spell : state.ClientExtra)
+                SendSpellbookChange(player, spell, false);
+        }
+        state.ClientHidden.clear();
+        state.ClientExtra.clear();
+    }
+
     // A button holding a higher rank than the one unlocked would cast the lower
     // one anyway (AdjustCast), but shows the rank the spellbook no longer lists:
     // it is pointed at the unlocked rank. RestoreButtons puts the real one back.
@@ -700,7 +785,21 @@ void Enter(Player* player)
     if (State* existing = Find(player))
     {
         // Back in the match it left: level, talents and gear are as it left them.
-        player->SendInitialSpells();
+        // A relog's spell list was already the match's (SendInitialSpells asks
+        // ShowsInSpellbook), so that is what the client holds now.
+        existing->ClientHidden.clear();
+        existing->ClientExtra.clear();
+        for (auto const& [spell, known] : player->GetSpellMap())
+        {
+            if (known.state == PLAYERSPELL_REMOVED || known.disabled)
+                continue;
+            bool const shows = MatchShows(*existing, spell, known.active);
+            if (known.active && !shows)
+                existing->ClientHidden.insert(spell);
+            else if (!known.active && shows)
+                existing->ClientExtra.insert(spell);
+        }
+        SyncClientSpellbook(player, *existing);
         SendState(player, *existing);
         return;
     }
@@ -747,8 +846,7 @@ void Enter(Player* player)
     if (!player->HasSpell(SPELL_RIFT_RECALL))
         player->LearnSpell(SPELL_RIFT_RECALL, false);
     PlaceUnlockedSpell(player, state, 0, SPELL_RIFT_RECALL);
-    if (state.Persistent)
-        player->SendInitialSpells();
+    SyncClientSpellbook(player, state);
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
     ShowProgress(player, state);
@@ -782,7 +880,7 @@ void Leave(Player* player)
     RestoreTalents(player, state.RealTalents);
     RestoreButtons(player, state.RealButtons);
     player->SetMoney(state.RealMoney);
-    player->SendInitialSpells();     // the whole spellbook again (the state is gone)
+    ResetClientSpellbook(player, state);
 
     if (state.Persistent)
         CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
@@ -907,16 +1005,7 @@ bool ShowsInSpellbook(Player const* player, uint32 spell, bool active)
 {
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
     State const* state = Find(player);
-    if (!state)
-        return active;
-    if (state->Removed.count(spell))
-        return false;
-    auto const chain = state->SpellToChain.find(spell);
-    if (chain == state->SpellToChain.end())
-        return active;
-    auto const unlocked = state->Unlocked.find(chain->second);
-    uint8 const have = unlocked != state->Unlocked.end() ? unlocked->second : 0;
-    return have && state->Chains.at(chain->second).Ranks[have - 1] == spell;
+    return state ? MatchShows(*state, spell, active) : active;
 }
 
 bool MayEquip(Player const* player, uint32 entry, uint8 slot)
@@ -1339,7 +1428,7 @@ void HandlePickRequest(Player* player, std::string_view argument)
             if (++state->Unlocked[first] == 1)
                 PlaceUnlockedSpell(player, *state, first, *spellId);
             RetargetButtons(player, *state);
-            player->SendInitialSpells();
+            SyncClientSpellbook(player, *state);
             --state->PendingPicks;
         }
     }
