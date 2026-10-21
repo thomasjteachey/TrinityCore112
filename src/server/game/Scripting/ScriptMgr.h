@@ -402,6 +402,7 @@ class TC_GAME_API UnitScript : public ScriptObject
 
         // Called when Spell Damage is being Dealt
         virtual void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage);
+        virtual void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo);
 };
 
 class TC_GAME_API CreatureScript : public ScriptObject
@@ -1181,6 +1182,7 @@ class TC_GAME_API ScriptMgr
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo);
         void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
         void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage);
+        void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo);
 
     public: /* AllCreatureScript */
 

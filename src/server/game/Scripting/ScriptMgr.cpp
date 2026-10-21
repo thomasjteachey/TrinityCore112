@@ -2252,6 +2252,11 @@ void ScriptMgr::ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& dama
     FOREACH_SCRIPT(UnitScript)->ModifySpellDamageTaken(target, attacker, damage);
 }
 
+void ScriptMgr::ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo)
+{
+    FOREACH_SCRIPT(UnitScript)->ModifySpellDamageTaken(target, attacker, damage, spellInfo);
+}
+
 void ScriptMgr::OnBeforeCreatureSelectLevel(Creature* creature, uint8& level)
 {
     FOREACH_SCRIPT(AllCreatureScript)->OnBeforeCreatureSelectLevel(creature, level);
@@ -2536,6 +2541,11 @@ void UnitScript::ModifyMeleeDamage(Unit* /*target*/, Unit* /*attacker*/, uint32&
 
 void UnitScript::ModifySpellDamageTaken(Unit* /*target*/, Unit* /*attacker*/, int32& /*damage*/)
 {
+}
+
+void UnitScript::ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* /*spellInfo*/)
+{
+    ModifySpellDamageTaken(target, attacker, damage);
 }
 
 CreatureScript::CreatureScript(char const* name)

@@ -1432,6 +1432,11 @@ bool HasRoomFor(Player const* player, uint32 entry, std::vector<uint32> const& c
         for (uint32 e = SHOP_ITEM_FIRST; e <= SHOP_ITEM_LAST; ++e)
             if (IsTrinketItem(e))
                 trinkets += player->GetItemCount(e, false);
+        // One built from the trinket held takes its place: the swift steed was
+        // refused to a champion holding the steed it is built from.
+        for (uint32 component : consumed)
+            if (IsTrinketItem(component) && trinkets)
+                --trinkets;
         return trinkets == 0;
     }
     return HeldItemSlots(player, consumed) < ITEM_SLOTS;

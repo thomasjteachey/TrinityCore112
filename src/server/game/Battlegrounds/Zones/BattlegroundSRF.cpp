@@ -358,6 +358,8 @@ float constexpr SRF_TURRET_CASTER_SHARE = 0.70f;
 // On champions: a base share, and League's Warming Up - +50% per champion hit in
 // a row, up to +150%, gone 5 s after the last champion hit.
 float constexpr SRF_TURRET_PLAYER_SHARE = 0.20f;
+// Every turret shot at a quarter less than the shares above (owner, 2026-10-21).
+float constexpr SRF_TURRET_DAMAGE_SCALE = 0.75f;
 float constexpr SRF_TURRET_WARMUP_STEP  = 0.50f;
 uint8 constexpr SRF_TURRET_WARMUP_MAX   = 3;
 uint32 constexpr SRF_TURRET_WARMUP_RESET = 5 * IN_MILLISECONDS;
@@ -1876,7 +1878,8 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
     // No champion to credit - a turret, a minion, a monster: League's "Executed".
     if (!killer || killer == victim || GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID())) == victimTeam)
     {
-        Announce(Trinity::StringFormat("RIFTANN:EXECUTED::{}:{}:0::{}", victim->GetName(), uint32(OtherTeam(victimTeam)), uint32(victim->GetClass())));
+        Announce(Trinity::StringFormat("RIFTANN:EXECUTED::{}:{}:0::{}:0:{}", GetPlayerDisplayName(victim), uint32(OtherTeam(victimTeam)),
+            uint32(victim->GetClass()), victim->GetGUID().GetCounter()));
         CheckAce(victimTeam);
         return;
     }
@@ -1924,8 +1927,12 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
         kind = "SPREE";
         arg = ks.Streak;
     }
-    Announce(Trinity::StringFormat("RIFTANN:{}:{}:{}:{}:{}:{}:{}", kind, killer->GetName(), victim->GetName(), uint32(killerTeam), arg,
-        uint32(killer->GetClass()), uint32(victim->GetClass())));
+    // Names as players see them - "<name> <surname>", a bot by its display name,
+    // not its internal one - and the two guids, which is how CENTURION_Rift
+    // knows the line is about its own player (a name compared as text missed it).
+    Announce(Trinity::StringFormat("RIFTANN:{}:{}:{}:{}:{}:{}:{}:{}:{}", kind, GetPlayerDisplayName(killer), GetPlayerDisplayName(victim),
+        uint32(killerTeam), arg, uint32(killer->GetClass()), uint32(victim->GetClass()), killer->GetGUID().GetCounter(),
+        victim->GetGUID().GetCounter()));
     CheckAce(victimTeam);
 }
 
@@ -1978,7 +1985,7 @@ void BattlegroundSRF::SendScores()
             for (uint32 entry : RiftProgression::HeldShopItems(player))
                 items += (items.empty() ? "" : ",") + std::to_string(entry);
             lines.push_back(Trinity::StringFormat("RIFTSCORE:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}", player->GetGUID().GetCounter(),
-                player->GetName(), uint32(team), uint32(player->GetClass()), uint32(RiftProgression::GetLeagueLevel(player)),
+                GetPlayerDisplayName(player), uint32(team), uint32(player->GetClass()), uint32(RiftProgression::GetLeagueLevel(player)),
                 st.Kills, st.Deaths, st.Assists, st.Minions, items));
         }
     for (std::string const& line : lines)
@@ -2162,7 +2169,7 @@ void BattlegroundSRF::UpdateTurrets()
                 }
         Creature* eye = TurretEye(slot, turret);
         FireBolt(eye ? static_cast<Unit*>(eye) : turret, target, team == TEAM_ALLIANCE ? BG_SRF_SPELL_ORDER_TURRET_SHOT : BG_SRF_SPELL_CHAOS_TURRET_SHOT,
-            std::max<int32>(1, int32(target->GetMaxHealth() * share)));
+            std::max<int32>(1, int32(target->GetMaxHealth() * share * SRF_TURRET_DAMAGE_SCALE)));
     }
 }
 

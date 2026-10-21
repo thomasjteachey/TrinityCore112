@@ -22,6 +22,7 @@
 //   94121 / 94122  Spellblade (Sheen / Trinity Force): an ability charges the next
 //                  basic attack (94123) with 1x / 2x the weapon's average damage
 //   94124  Thornmail: basic attackers take 30% of what they dealt, as magic
+//   (a basic attack is a melee swing or a ranged one: Auto Shot, Shoot, Throw)
 //   94126  Immolate (Sunfire Cape): 10 + 2/level magic a second, 10 yards round
 //   94127  Warmog's Heart: 1% of maximum health every 5 sec
 //   94128  Eternity (Rod of Ages): a stack of 94129 a minute, up to 10
@@ -78,13 +79,37 @@ namespace
         source->DealSpellDamage(&log, false);
     }
 
-    float WeaponAverage(Unit* unit)
+    float WeaponAverage(Unit* unit, WeaponAttackType attackType)
     {
-        return (unit->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE) + unit->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE)) / 2.0f;
+        return (unit->GetWeaponDamageRange(attackType, MINDAMAGE) + unit->GetWeaponDamageRange(attackType, MAXDAMAGE)) / 2.0f;
+    }
+
+    // A basic attack made at range: the repeating shot (Auto Shot, a wand's
+    // Shoot), or a warrior's or rogue's Shoot and Throw - single shots since 3.0
+    // (Throw is even filed as a rogue spell): free, through the ranged slot, the
+    // weapon's damage and nothing else. No hunter shot is all three.
+    bool IsRangedBasicAttack(SpellInfo const* info)
+    {
+        if (info->IsAutoRepeatRangedSpell())
+            return true;
+        if (!info->HasAttribute(SPELL_ATTR0_REQ_AMMO) || info->ManaCost || info->ManaCostPercentage)
+            return false;
+        bool weapon = false;
+        for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+        {
+            uint32 const effect = info->GetEffect(SpellEffIndex(i)).Effect;
+            if (effect == SPELL_EFFECT_WEAPON_DAMAGE || effect == SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL)
+                weapon = true;
+            else if (effect)
+                return false;
+        }
+        return weapon;
     }
 }
 
-// Spellblade's charge, and its spending; Thornmail's reflection.
+// Spellblade's charge, and its spending; Thornmail's reflection - on every basic
+// attack, as League counts them: a melee swing, or a ranged one (Auto Shot, a
+// wand's Shoot, Throw), which is a spell and comes the spell-damage way.
 class custom_rift_items_unit : public UnitScript
 {
 public:
@@ -92,13 +117,28 @@ public:
 
     void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
     {
+        BasicAttack(target, attacker, damage, BASE_ATTACK);
+    }
+
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo) override
+    {
+        if (!spellInfo || damage <= 0 || !IsRangedBasicAttack(spellInfo))
+            return;
+        uint32 dealt = uint32(damage);
+        BasicAttack(target, attacker, dealt, RANGED_ATTACK);
+        damage = int32(dealt);
+    }
+
+private:
+    static void BasicAttack(Unit* target, Unit* attacker, uint32& damage, WeaponAttackType attackType)
+    {
         if (!attacker || !target || attacker == target)
             return;
 
         if (attacker->HasAura(SPELL_SPELLBLADE_CHARGED))
         {
             float const times = attacker->HasAura(SPELL_SPELLBLADE_TRINITY) ? 2.0f : 1.0f;
-            damage += uint32(WeaponAverage(attacker) * times);
+            damage += uint32(WeaponAverage(attacker, attackType) * times);
             attacker->RemoveAurasDueToSpell(SPELL_SPELLBLADE_CHARGED);
             attacker->GetSpellHistory()->AddCooldown(SPELL_SPELLBLADE_CHARGED, 0, SPELLBLADE_COOLDOWN);
         }
@@ -124,11 +164,11 @@ public:
     custom_rift_items_player() : PlayerScript("custom_rift_items_player") { }
 
     // An ability - a class spell the player cast, not an item, a passive or a
-    // repeating shot - charges Spellblade.
+    // ranged basic attack - charges Spellblade.
     void OnSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
     {
         SpellInfo const* info = spell->GetSpellInfo();
-        if (!info || spell->IsTriggered() || info->IsPassive() || info->IsAutoRepeatRangedSpell()
+        if (!info || spell->IsTriggered() || info->IsPassive() || IsRangedBasicAttack(info)
             || info->SpellFamilyName == SPELLFAMILY_GENERIC
             || (info->Id >= RIFT_ITEM_SPELL_FIRST && info->Id <= RIFT_ITEM_SPELL_LAST))
             return;
