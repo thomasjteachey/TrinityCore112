@@ -478,9 +478,10 @@ end);
 -- a match runs and stripped to nothing - border, name, level, glow, icons faded
 -- out - with the same minimal bar drawn in their place.
 do
-	local BAR_WIDTH, BAR_HEIGHT = 46, 4;
+	-- Half the size they were (owner, 2026-10-21).
+	local BAR_WIDTH, BAR_HEIGHT = 23, 3;
 	-- The DLL path's bar in yards at the unit, and the size it keeps to on screen.
-	local BAR_YARDS_WIDE, BAR_YARDS_HIGH, BAR_MIN_WIDTH, BAR_MAX_WIDTH = 2.6, 0.22, 14, 90;
+	local BAR_YARDS_WIDE, BAR_YARDS_HIGH, BAR_MIN_WIDTH, BAR_MAX_WIDTH = 1.3, 0.11, 7, 45;
 	-- Champions' bars are this much bigger. Opacity: a unit's bar at half, a
 	-- champion's at three quarters, the target's solid.
 	local PLAYER_BAR_SCALE, BAR_ALPHA, PLAYER_BAR_ALPHA = 1.6, 0.5, 0.75;
@@ -558,7 +559,7 @@ do
 				local yard = (scale or 0) * height;
 				if ( yard > 0 ) then
 					e.w = math.min(math.max(yard * BAR_YARDS_WIDE, BAR_MIN_WIDTH), BAR_MAX_WIDTH) * big;
-					e.h = math.min(math.max(yard * BAR_YARDS_HIGH, 2), 6) * big;
+					e.h = math.min(math.max(yard * BAR_YARDS_HIGH, 2), 3) * big;
 				else
 					e.w, e.h = BAR_WIDTH * big, BAR_HEIGHT * big;
 				end

@@ -2,7 +2,8 @@
 -- the announcer's voice.
 --
 -- The server (BattlegroundSRF) sends one line per event to every champion:
---   CCGAME  RIFTANN:<kind>:<killer>:<victim>:<killer's team>:<arg>:<killer class>:<victim class>
+--   CCGAME  RIFTANN:<kind>:<killer>:<victim>:<killer's team>:<arg>:<killer class>:<victim class>:<killer id>:<victim id>
+-- (names as players see them, a bot's by its display name; ids are guid counters)
 -- kinds: KILL FIRSTBLOOD DOUBLE TRIPLE QUADRA PENTA SPREE (arg = streak) SHUTDOWN
 -- (arg = gold) EXECUTED ACE TURRET INHIB INHIBRESPAWN DRAGON BARON MINIONS WELCOME
 -- END. Teams are 0 = Order (Alliance), 1 = Chaos (Horde) - the match's teams, not
@@ -26,6 +27,13 @@ local MULTI = { DOUBLE = "DOUBLE KILL", TRIPLE = "TRIPLE KILL", QUADRA = "QUADRA
 -- own row of the scoreboard (RIFTSCORE, every 2 seconds of a match from the prep
 -- phase on). The faction only stands in until the first row has come.
 local myTeam;
+-- The player's guid counter, as the server sends guids: names are no way to
+-- tell (the client knows "<name> <surname>", and a bot copy can wear the name
+-- of the character it copies).
+local function MyId()
+	local guid = UnitGUID("player");
+	return guid and tonumber(string.sub(guid, -8), 16);
+end
 local function MyTeam()
 	if ( myTeam ) then
 		return myTeam;
@@ -187,16 +195,18 @@ local function Coloured(name, team)
 end
 
 -- One event, worded from the player's side; nil when there is nothing to show.
-local function Word(kind, killer, victim, team, arg, kclass, vclass)
-	local me = UnitName("player");
+local function Word(kind, killer, victim, team, arg, kclass, vclass, killerId, victimId)
+	local me, myId = UnitName("player"), MyId();
+	local mineKill = (killerId and killerId == myId) or killer == me;
+	local mineDeath = (victimId and victimId == myId) or victim == me;
 	local mine = team == MyTeam();
 	local other = team == 0 and 1 or 0;
 	local names = (killer ~= "" and victim ~= "") and (Coloured(killer, team) .. "  has slain  " .. Coloured(victim, other)) or nil;
 	local a = { colour = Colour(team), sub = names, leftClass = kclass, rightClass = vclass };
 	if ( kind == "KILL" ) then
-		if ( killer == me ) then
+		if ( mineKill ) then
 			a.title, a.vo = "YOU HAVE SLAIN AN ENEMY", "you_slain_enemy";
-		elseif ( victim == me ) then
+		elseif ( mineDeath ) then
 			a.title, a.vo, a.colour = "YOU HAVE BEEN SLAIN", "you_slain", ENEMY;
 		elseif ( mine ) then
 			a.title, a.vo = "AN ENEMY HAS BEEN SLAIN", "enemy_slain";
@@ -264,9 +274,9 @@ events:SetScript("OnEvent", function(self, event, prefix, message)
 	if ( prefix ~= ANSWER_PREFIX or type(message) ~= "string" ) then
 		return;
 	end
-	local name, team = string.match(message, "^RIFTSCORE:%d+:([^:]*):(%d+):");
-	if ( name ) then
-		if ( name == UnitName("player") ) then
+	local id, name, team = string.match(message, "^RIFTSCORE:(%d+):([^:]*):(%d+):");
+	if ( id ) then
+		if ( tonumber(id) == MyId() or name == UnitName("player") ) then
 			myTeam = tonumber(team);
 		end
 		return;
@@ -282,7 +292,7 @@ events:SetScript("OnEvent", function(self, event, prefix, message)
 	for field in string.gmatch(rest .. ":", "([^:]*):") do
 		table.insert(f, field);
 	end
-	local a = Word(kind, f[1] or "", f[2] or "", tonumber(f[3]) or 0, f[4], f[5], f[6]);
+	local a = Word(kind, f[1] or "", f[2] or "", tonumber(f[3]) or 0, f[4], f[5], f[6], tonumber(f[7] or ""), tonumber(f[8] or ""));
 	if ( a ) then
 		Push(a);
 	end

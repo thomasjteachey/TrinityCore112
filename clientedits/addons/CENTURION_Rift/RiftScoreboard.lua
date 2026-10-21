@@ -136,6 +136,8 @@ local function Paint()
 		math.floor(c1[1] * 255), math.floor(c1[2] * 255), math.floor(c1[3] * 255), kills[1]));
 	columns:SetText("");
 	local me = UnitName("player");
+	local myGuid = UnitGUID("player");
+	local myId = myGuid and tostring(tonumber(string.sub(myGuid, -8), 16));
 	local y = -48;
 	local n = 0;
 	for t = 0, 1 do
@@ -146,7 +148,7 @@ local function Paint()
 			l:ClearAllPoints();
 			l:SetPoint("TOPLEFT", board, "TOPLEFT", 12, y);
 			l:SetPoint("TOPRIGHT", board, "TOPRIGHT", -12, y);
-			l.bg:SetVertexColor(c[1], c[2], c[3], r.name == me and 0.30 or 0.12);
+			l.bg:SetVertexColor(c[1], c[2], c[3], (r.id == myId or r.name == me) and 0.30 or 0.12);
 			local token = CLASSES[r.class];
 			local coords = token and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[token];
 			if ( coords ) then
@@ -299,7 +301,7 @@ owner:SetScript("OnEvent", function(self, event, prefix, message)
 		for item in string.gmatch(items, "(%d+)") do
 			table.insert(list, tonumber(item));
 		end
-		rows[id] = { name = name, team = tonumber(team), class = tonumber(class), level = tonumber(level), k = tonumber(k),
+		rows[id] = { id = id, name = name, team = tonumber(team), class = tonumber(class), level = tonumber(level), k = tonumber(k),
 			d = tonumber(d), a = tonumber(a), cs = tonumber(cs), items = list, seen = GetTime() };
 		return;
 	end
