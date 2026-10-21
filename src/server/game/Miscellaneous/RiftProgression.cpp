@@ -459,12 +459,73 @@ namespace
         return offers;
     }
 
+    // A match is self contained: a champion fights with the class's spells, the
+    // race's racials and what the shop sells. A spell the character brought from
+    // outside - food and drink (the tournament's too), the hearthstone,
+    // professions, mounts, companions - is refused and kept off the spellbook
+    // and the bars. The class's own are told apart by skill line: class, weapon
+    // and generic lines stay, a racial line stays, secondary and primary
+    // profession lines do not, and a spell on no line stays only if it belongs
+    // to a class family (a talent's) or is a racial that has no line.
+    uint32 constexpr RIFT_OWN_FIRST = 94120;
+    uint32 constexpr RIFT_OWN_LAST = 94299;
+    uint32 constexpr SPELL_MATCH_STEED = 94150;
+    uint32 constexpr SPELL_MATCH_SWIFT_STEED = 94151;
+    uint32 constexpr SPELL_MATCH_PLAINSRUNNING = 89153;
+
+    bool BroughtIn(uint32 spell)
+    {
+        if (spell >= RIFT_OWN_FIRST && spell <= RIFT_OWN_LAST)
+            return false;
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
+        if (!info)
+            return false;
+        // Ridden on the shop's steeds (and Plainsrunning, at the steed's
+        // speed), not on the mounts a character brought: buying one is the point.
+        if (info->HasAura(SPELL_AURA_MOUNTED))
+            return spell != SPELL_MATCH_STEED && spell != SPELL_MATCH_SWIFT_STEED && spell != SPELL_MATCH_PLAINSRUNNING;
+        if (info->IsPassive() || spell == SPELL_MATCH_PLAINSRUNNING)
+            return false;
+        bool onLine = false;
+        auto const bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spell);
+        for (auto itr = bounds.first; itr != bounds.second; ++itr)
+        {
+            SkillLineEntry const* line = sSkillLineStore.LookupEntry(itr->second->SkillLine);
+            if (!line)
+                continue;
+            onLine = true;
+            if (line->ID == SKILL_MOUNTS || line->ID == SKILL_COMPANIONS)
+                return true;
+            if (line->CategoryID == SKILL_CATEGORY_PROFESSION)
+                continue;
+            // Racials share the secondary category with Cooking and First Aid.
+            if (line->CategoryID == SKILL_CATEGORY_SECONDARY)
+            {
+                char const* name = line->DisplayName[0];
+                if (name && std::string_view(name).find("Racial") != std::string_view::npos)
+                    return false;
+                continue;
+            }
+            return false;
+        }
+        if (onLine)
+            return true;
+        uint32 constexpr SPELL_SHADOWMELD = 58984;
+        uint32 constexpr SPELL_EVERY_MAN_FOR_HIMSELF = 59752;
+        if (spell == SPELL_SHADOWMELD || spell == SPELL_EVERY_MAN_FOR_HIMSELF)
+            return false;
+        // The hidden Opening spells a locked object is clicked with.
+        if (info->HasEffect(SPELL_EFFECT_OPEN_LOCK))
+            return false;
+        return info->SpellFamilyName == SPELLFAMILY_GENERIC && !GetTalentSpellPos(spell);
+    }
+
     // A spell button the match takes off the bars: a class spell none of whose
-    // ranks is unlocked yet, or a spell the character no longer knows (taught
-    // by a talent the match reset).
+    // ranks is unlocked yet, a spell the character no longer knows (taught by a
+    // talent the match reset), or one brought in from outside.
     bool HiddenInMatch(Player const* player, State const& state, uint32 spell)
     {
-        if (!player->HasSpell(spell) || state.Removed.count(spell))
+        if (!player->HasSpell(spell) || state.Removed.count(spell) || BroughtIn(spell))
             return true;
         auto const chain = state.SpellToChain.find(spell);
         if (chain == state.SpellToChain.end())
@@ -473,16 +534,24 @@ namespace
         return unlocked == state.Unlocked.end() || !unlocked->second;
     }
 
-    // Macros come off too: the server cannot read them (they live client side),
-    // and a #showtooltip macro draws the spell it casts - a level-60 hunter's
-    // Aspect of the Hawk macro stood on the bar of a level-10 match, refused on
-    // every click. RestoreButtons puts them back with the rest.
+    // Every bar is cleared of what the match refuses: spells as above, any item
+    // but the shop's, and every macro and equipment set. The server cannot read
+    // a macro (it lives client side), and a #showtooltip macro draws the spell
+    // it casts - a level-60 hunter's Aspect of the Hawk macro stood on the bar
+    // of a level-10 match, refused on every click. RestoreButtons puts them all
+    // back.
     void HideLockedButtons(Player* player, State const& state)
     {
         for (SavedButton const& b : state.RealButtons)
-            if ((b.Type == ACTION_BUTTON_SPELL && HiddenInMatch(player, state, b.Action))
-                || b.Type == ACTION_BUTTON_MACRO || b.Type == ACTION_BUTTON_CMACRO)
+        {
+            bool keep = false;
+            if (b.Type == ACTION_BUTTON_SPELL)
+                keep = !HiddenInMatch(player, state, b.Action);
+            else if (b.Type == ACTION_BUTTON_ITEM)
+                keep = b.Action >= SHOP_ITEM_FIRST && b.Action <= SHOP_ITEM_LAST;
+            if (!keep)
                 player->removeActionButton(b.Button);
+        }
         player->SendActionButtons(1);
     }
 
@@ -490,7 +559,7 @@ namespace
     // nothing off the whitelist; anything else as usual.
     bool MatchShows(State const& state, uint32 spell, bool active)
     {
-        if (state.Removed.count(spell))
+        if (state.Removed.count(spell) || BroughtIn(spell))
             return false;
         auto const chain = state.SpellToChain.find(spell);
         if (chain == state.SpellToChain.end())
@@ -1209,10 +1278,12 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
         return false;
     if (state->Removed.count(spellInfo->Id))
         return true;
-    // A match is ridden on the shop's steeds (and Plainsrunning, at the steed's
-    // speed), not on the mounts a character brought: buying one is the point.
-    if (spellInfo->HasAura(SPELL_AURA_MOUNTED))
-        return spellInfo->Id != SPELL_STEED && spellInfo->Id != SPELL_SWIFT_STEED && spellInfo->Id != SPELL_PLAINSRUNNING;
+    // What the character brought in (BroughtIn). A mount is refused however it
+    // is cast; the rest only from the spellbook - an item's spell is the item's
+    // to allow (IsItemLocked), and a shop potion casts a stock spell.
+    if (spellInfo->HasAura(SPELL_AURA_MOUNTED) || player->HasSpell(spellInfo->Id))
+        if (BroughtIn(spellInfo->Id))
+            return true;
     auto const chain = state->SpellToChain.find(spellInfo->Id);
     if (chain == state->SpellToChain.end())
         return false;
@@ -1307,6 +1378,15 @@ bool MayEquip(Player const* player, uint32 entry, uint8 slot)
     if ((entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST) || IsFieldKitDuplicateEntry(entry))
         return true;
     return !IsInMatch(player);
+}
+
+// Self contained: in a match only the shop's items can be used - a
+// character's own food, potions, hearthstone and trinkets stay shut.
+bool IsItemLocked(Player const* player, uint32 entry)
+{
+    if (entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST)
+        return false;
+    return IsInMatch(player);
 }
 
 void AddExperience(Player* player, float leagueXp)

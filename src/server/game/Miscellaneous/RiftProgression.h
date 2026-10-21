@@ -100,6 +100,8 @@ namespace RiftProgression
     // a piece left in its bags would otherwise go straight back on). True outside
     // a match, and for the shirt and tabard.
     TC_GAME_API bool MayEquip(Player const* player, uint32 entry, uint8 slot);
+    // In a match only shop items can be used.
+    TC_GAME_API bool IsItemLocked(Player const* player, uint32 entry);
 
     // League's inventory: shop items are not worn but held (six item slots and a
     // trinket slot, drawn by CENTURION_Rift); what the held ones give is put on
