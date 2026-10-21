@@ -383,10 +383,13 @@ private:
     std::unordered_map<ObjectGuid, ChampionStats> _stats;
     bool _firstBlood = false;
     uint32 _scoreTimer = 0;
+    uint32 _mapTimer = 0;
     void Announce(std::string const& line);
     void AnnounceEvent(char const* kind, TeamId team, uint32 arg = 0);
     void CheckAce(TeamId deadTeam);
     void SendScores();
+    void SendMap();
+    bool SeenBy(TeamId team, Player* enemy);
     // League's gold for a champion kill, before first blood's extra: the
     // victim's bounty for its streak, less for a champion that keeps dying.
     uint32 KillBounty(uint32 victimStreak, uint32 victimDeathStreak) const;

@@ -294,6 +294,12 @@ uint32 constexpr SRF_SPELL_BRUSH        = 94142;
 uint32 constexpr SRF_SPELL_FOCUS        = 94153;
 uint32 constexpr SRF_ITEM_SYNC_MS       = 500;
 uint32 constexpr SRF_SCORE_TICK         = 2000;    // the scoreboard feed (RIFTSCORE)
+uint32 constexpr SRF_MAP_TICK           = 1000;    // the map feed (RIFTSTR, RIFTSEEN)
+// League's vision, for the map: how far a champion, a minion and a standing
+// turret see (1350 / 1200 / 1350 League units, about 27 / 24 / 27 yd, a little more).
+float constexpr SRF_VISION_CHAMPION    = 30.0f;
+float constexpr SRF_VISION_MINION      = 25.0f;
+float constexpr SRF_VISION_TURRET      = 30.0f;
 uint32 constexpr SRF_MULTIKILL_MS       = 10000;   // League: each kill of a multikill within 10 s of the last...
 uint32 constexpr SRF_PENTAKILL_MS       = 30000;   // ...and the pentakill within 30 s of the quadra
 
@@ -584,6 +590,7 @@ void BattlegroundSRF::Reset()
     _stats.clear();
     _firstBlood = false;
     _scoreTimer = 0;
+    _mapTimer = 0;
 }
 
 bool BattlegroundSRF::SetupBattleground()
@@ -689,6 +696,13 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
         return;
 
     UpdateRespawns();
+
+    _mapTimer += diff;
+    if (_mapTimer >= SRF_MAP_TICK)
+    {
+        _mapTimer = 0;
+        SendMap();
+    }
 
     _structureTimer += diff;
     if (_structureTimer >= BG_SRF_STRUCTURE_CHECK_TICK)
@@ -2066,6 +2080,72 @@ void BattlegroundSRF::SendScores()
         }
     for (std::string const& line : lines)
         Announce(line);
+}
+
+// The world map and the battlefield map (CENTURION_Rift's RiftMap.lua), once a
+// second: every structure with its health - RIFTSTR:<slot>,<kind>,<x>,<y>,<health
+// %>;... in chunks under the 255-character addon line - and the enemy champions
+// the player's team can see, RIFTSEEN:<guid>,<class>,<x>,<y>;...
+void BattlegroundSRF::SendMap()
+{
+    std::vector<std::string> structures;
+    std::string chunk;
+    uint32 inChunk = 0;
+    for (uint8 slot = 0; slot < _structures.size(); ++slot)
+    {
+        uint32 health = 0;
+        if (!_structures[slot].Destroyed)
+            if (Creature* creature = GetBGCreature(slot, false))
+                if (creature->IsAlive())
+                    health = std::max<uint32>(1, uint32(creature->GetHealthPct() + 0.5f));
+        Position const pos = StructurePos(slot);
+        chunk += Trinity::StringFormat("{}{},{},{},{},{}", inChunk ? ";" : "", uint32(slot), uint32(StructureAt(slot).kind),
+            int32(std::lround(pos.GetPositionX())), int32(std::lround(pos.GetPositionY())), health);
+        if (++inChunk == 8)
+        {
+            structures.push_back("RIFTSTR:" + chunk);
+            chunk.clear();
+            inChunk = 0;
+        }
+    }
+    if (inChunk)
+        structures.push_back("RIFTSTR:" + chunk);
+
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+    {
+        std::string seen;
+        for (Player* enemy : TeamPlayers(OtherTeam(team)))
+            if (enemy->IsAlive() && SeenBy(team, enemy))
+                seen += Trinity::StringFormat("{}{},{},{},{}", seen.empty() ? "" : ";", enemy->GetGUID().GetCounter(),
+                    uint32(enemy->GetClass()), int32(std::lround(enemy->GetPositionX())), int32(std::lround(enemy->GetPositionY())));
+        for (Player* player : TeamPlayers(team))
+        {
+            for (std::string const& line : structures)
+                RiftProgression::Tell(player, line);
+            RiftProgression::Tell(player, "RIFTSEEN:" + seen);
+        }
+    }
+}
+
+// League's vision: an enemy champion near an allied champion, minion or
+// standing turret, and not hidden from it in brush (HidesFrom).
+bool BattlegroundSRF::SeenBy(TeamId team, Player* enemy)
+{
+    for (Player* ally : TeamPlayers(team))
+        if (ally->IsAlive() && ally->GetExactDist2d(enemy) <= SRF_VISION_CHAMPION && !HidesFrom(enemy, ally))
+            return true;
+    Map* map = enemy->GetMap();
+    for (Minion const& m : _minions)
+        if (m.Team == team)
+            if (Creature* minion = map->GetCreature(m.Guid))
+                if (minion->IsAlive() && minion->GetExactDist2d(enemy) <= SRF_VISION_MINION && !HidesFrom(enemy, minion))
+                    return true;
+    for (uint8 slot = 0; slot < _structures.size(); ++slot)
+        if (SlotTeam(slot) == team && !_structures[slot].Destroyed && StructureAt(slot).kind == BG_SRF_KIND_TURRET)
+            if (Creature* turret = GetBGCreature(slot, false))
+                if (turret->IsAlive() && turret->GetExactDist2d(enemy) <= SRF_VISION_TURRET && !HidesFrom(enemy, turret))
+                    return true;
+    return false;
 }
 
 uint8 BattlegroundSRF::AverageMatchLevel() const
