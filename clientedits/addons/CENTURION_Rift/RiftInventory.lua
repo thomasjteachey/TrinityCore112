@@ -120,6 +120,9 @@ local STATS = {
 	{ "Critical Strike", function()
 		return string.format("%.1f%%", math.max(GetCritChance() or 0, GetSpellCritChance(2) or 0, GetRangedCritChance() or 0));
 	end },
+	-- From the server (RIFTSPEED, a share of the normal run): the addon API only
+	-- has the speed of the moment, nothing at a standstill.
+	{ "Move Speed", function() return CENTURION_RiftMoveSpeed and (CENTURION_RiftMoveSpeed .. "%") or "-"; end },
 	{ "Health", function() return UnitHealthMax("player"); end },
 	{ "Mana", function() return UnitPowerMax("player", 0); end },
 };
@@ -253,6 +256,16 @@ local function Refresh()
 end
 
 inv:SetScript("OnShow", Refresh);
+
+local speedWatch = CreateFrame("Frame");
+speedWatch:RegisterEvent("CHAT_MSG_ADDON");
+speedWatch:SetScript("OnEvent", function(self, event, prefix, message)
+	local speed = prefix == "CCGAME" and type(message) == "string" and string.match(message, "^RIFTSPEED:(%d+)$");
+	if ( speed ) then
+		CENTURION_RiftMoveSpeed = tonumber(speed);
+		Refresh();
+	end
+end);
 
 -- ------------------------------------------------------------------ the takeover
 

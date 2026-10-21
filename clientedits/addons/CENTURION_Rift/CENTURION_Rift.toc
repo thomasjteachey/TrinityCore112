@@ -16,3 +16,4 @@ RiftAnnouncerVO.lua
 RiftAnnouncer.lua
 RiftScoreboard.lua
 RiftPerf.lua
+RiftDeathTimer.lua
