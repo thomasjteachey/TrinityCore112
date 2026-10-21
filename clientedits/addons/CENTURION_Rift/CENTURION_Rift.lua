@@ -499,7 +499,12 @@ do
 	local SetActive;
 
 	if ( CenturionUnitBarsScan and CenturionUnitBar ) then
-		local BAR_GAP = 1;
+		-- Every bar owns a click band at least CLICK_BAND pixels tall, the bar in
+		-- its middle, and bands never overlap: the stacking keeps them apart and
+		-- each bar's hit rectangle is exactly its band. Three bars on one spot
+		-- used to share their click areas (the bar's own reached 6 px past it,
+		-- the bars 1 px apart) and the middle one could hardly be clicked.
+		local CLICK_BAND, CLICK_PAD_X = 12, 3;
 		local pool, shown = {}, 0;
 		local entries, order = {}, {};
 		local driver = CreateFrame("Frame", nil, WorldFrame);
@@ -511,10 +516,10 @@ do
 			shown = first - 1;
 		end
 
-		-- Two bars' rectangles (x = centre, y = top) touch, with a pixel to spare.
+		-- Two bars' click bands (x = centre, y = the bar's top, pad above and below) touch.
 		local function Overlaps(a, b)
-			return math.abs(a.x - b.x) * 2 < a.w + b.w + BAR_GAP
-				and a.y - a.h < b.y + BAR_GAP and a.y > b.y - b.h - BAR_GAP;
+			return math.abs(a.x - b.x) * 2 < a.w + b.w + 2 * CLICK_PAD_X
+				and a.y + a.pad > b.y - b.h - b.pad and a.y - a.h - a.pad < b.y + b.pad;
 		end
 
 		local target, mouseover;
@@ -545,6 +550,7 @@ do
 					e.w, e.h = BAR_WIDTH * big, BAR_HEIGHT * big;
 				end
 				e.x, e.y = fx * width, fy * height - 1;
+				e.pad = math.max((CLICK_BAND - e.h) / 2, 1);
 				e.health, e.reaction, e.guid, e.player = health, reaction, guid, isPlayer == 1;
 				order[i] = e;
 			end
@@ -563,7 +569,7 @@ do
 					for j = 1, k - 1 do
 						local other = order[j];
 						if ( Overlaps(e, other) ) then
-							e.y = other.y + e.h + BAR_GAP;
+							e.y = other.y + other.pad + e.h + e.pad;
 							moved = true;
 						end
 					end
@@ -584,7 +590,6 @@ do
 					-- pixels high; its click area reaches a little past it.
 					if ( CenturionTargetGUID ) then
 						bar:EnableMouse(true);
-						bar:SetHitRectInsets(-4, -4, -6, -6);
 						bar:SetScript("OnMouseUp", function(self, button)
 							if ( self.guid and button == "LeftButton" ) then
 								CenturionTargetGUID(self.guid);
@@ -596,6 +601,9 @@ do
 					pool[k] = bar;
 				end
 				bar.guid = e.guid;
+				if ( CenturionTargetGUID ) then
+					bar:SetHitRectInsets(-CLICK_PAD_X, -CLICK_PAD_X, -e.pad, -e.pad);
+				end
 				bar:SetWidth(e.w);
 				bar:SetHeight(e.h);
 				bar:ClearAllPoints();
@@ -609,7 +617,7 @@ do
 					bar:SetFrameLevel(driver:GetFrameLevel() + 20);
 				elseif ( e.guid == mouseover or bar.hover ) then
 					bar.bg:SetTexture(0.65, 0.65, 0.65, 0.9);
-					bar:SetFrameLevel(driver:GetFrameLevel() + 10);
+					bar:SetFrameLevel(driver:GetFrameLevel() + 1);
 				else
 					bar.bg:SetTexture(0, 0, 0, 0.75);
 					bar:SetFrameLevel(driver:GetFrameLevel() + 1);
