@@ -15,9 +15,9 @@ local COPPER = 10000;
 local ITEMS = CENTURION_RIFT_ITEMS or {};
 local EDGE = { 0.78, 0.66, 0.43 };
 local NAVY = { 0.02, 0.06, 0.10 };
-local W, H = 800, 520;
+local W, H = 900, 560;
 local CAT_W, DETAIL_W = 120, 270;
-local CELL, CELL_GAP = 40, 12;
+local CELL, CELL_GAP = 36, 12;
 
 local CATEGORIES = {
 	{ key = nil, label = "All items" },
@@ -348,8 +348,15 @@ Refresh = function()
 		return;
 	end
 	wipe(merchantIndex);
+	-- By link, else by name - and an item the client has not cached yet has
+	-- neither: the shopkeepers sell the shop in entry order (rift_shop.py writes
+	-- npc_vendor that way), so slot i is entry SHOP_FIRST + i - 1. New items were
+	-- left off the grid until they happened to be cached.
 	for i = 1, GetMerchantNumItems() do
 		local id = tonumber(string.match(GetMerchantItemLink(i) or "", "item:(%d+)")) or idByName[GetMerchantItemInfo(i) or ""];
+		if ( not id and ITEMS[SHOP_FIRST + i - 1] ) then
+			id = SHOP_FIRST + i - 1;
+		end
 		if ( id ) then
 			merchantIndex[id] = i;
 		end
@@ -392,7 +399,7 @@ Refresh = function()
 				local col = (k - 1) % PER_ROW;
 				local row = math.floor((k - 1) / PER_ROW);
 				b:ClearAllPoints();
-				b:SetPoint("TOPLEFT", shop, "TOPLEFT", GRID_X + col * (CELL + CELL_GAP), y - row * (CELL + 18));
+				b:SetPoint("TOPLEFT", shop, "TOPLEFT", GRID_X + col * (CELL + CELL_GAP), y - row * (CELL + 16));
 				Fill(b, id, held);
 				if ( id == selected ) then
 					b.edge:SetTexture(1, 0.9, 0.6, 1);
@@ -400,7 +407,7 @@ Refresh = function()
 					b.edge:SetTexture(EDGE[1], EDGE[2], EDGE[3], 0.55);
 				end
 			end
-			y = y - (math.floor((#ids - 1) / PER_ROW) + 1) * (CELL + 18) - 8;
+			y = y - (math.floor((#ids - 1) / PER_ROW) + 1) * (CELL + 16) - 8;
 		else
 			label:Hide();
 		end

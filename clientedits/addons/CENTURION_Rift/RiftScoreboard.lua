@@ -53,10 +53,6 @@ leave:SetText("Leave Battleground");
 leave:SetScript("OnClick", function() LeaveBattlefield(); end);
 leave:Hide();
 
-local empty = board:CreateFontString(nil, "OVERLAY", "GameFontDisable");
-empty:SetPoint("TOP", board, "TOP", 0, -56);
-empty:SetText("Waiting for the scores - they come every two seconds once the match has its champions.");
-
 local columns = board:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall");
 columns:SetPoint("TOPLEFT", board, "TOPLEFT", 0, -42);
 
@@ -186,10 +182,7 @@ local function Paint()
 		lines[i]:Hide();
 	end
 	if ( n == 0 ) then
-		empty:Show();
 		y = y - 30;
-	else
-		empty:Hide();
 	end
 	local over = GetBattlefieldWinner and GetBattlefieldWinner();
 	if ( over ) then
