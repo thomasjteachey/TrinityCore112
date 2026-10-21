@@ -470,6 +470,32 @@ namespace
         player->SendActionButtons(1);
     }
 
+    // A button holding a higher rank than the one unlocked would cast the lower
+    // one anyway (AdjustCast), but shows the rank the spellbook no longer lists:
+    // it is pointed at the unlocked rank. RestoreButtons puts the real one back.
+    void RetargetButtons(Player* player, State const& state)
+    {
+        bool changed = false;
+        for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+        {
+            ActionButton const* ab = player->GetActionButton(button);
+            if (!ab || ab->GetType() != ACTION_BUTTON_SPELL)
+                continue;
+            auto const chain = state.SpellToChain.find(ab->GetAction());
+            if (chain == state.SpellToChain.end())
+                continue;
+            auto const unlocked = state.Unlocked.find(chain->second);
+            uint8 const have = unlocked != state.Unlocked.end() ? unlocked->second : 0;
+            if (!have)
+                continue;
+            uint32 const want = state.Chains.at(chain->second).Ranks[have - 1];
+            if (want != ab->GetAction() && player->HasSpell(want) && player->addActionButton(button, want, ACTION_BUTTON_SPELL))
+                changed = true;
+        }
+        if (changed)
+            player->SendActionButtons(1);
+    }
+
     void TakeRecall(Player* player)
     {
         bool removed = false;
@@ -674,6 +700,7 @@ void Enter(Player* player)
     if (State* existing = Find(player))
     {
         // Back in the match it left: level, talents and gear are as it left them.
+        player->SendInitialSpells();
         SendState(player, *existing);
         return;
     }
@@ -716,9 +743,12 @@ void Enter(Player* player)
     }
     player->SendTalentsInfoData(false);
     HideLockedButtons(player, state);
+    RetargetButtons(player, state);
     if (!player->HasSpell(SPELL_RIFT_RECALL))
         player->LearnSpell(SPELL_RIFT_RECALL, false);
     PlaceUnlockedSpell(player, state, 0, SPELL_RIFT_RECALL);
+    if (state.Persistent)
+        player->SendInitialSpells();
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
     ShowProgress(player, state);
@@ -752,6 +782,7 @@ void Leave(Player* player)
     RestoreTalents(player, state.RealTalents);
     RestoreButtons(player, state.RealButtons);
     player->SetMoney(state.RealMoney);
+    player->SendInitialSpells();     // the whole spellbook again (the state is gone)
 
     if (state.Persistent)
         CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
@@ -870,6 +901,22 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
     std::vector<uint32> const& ranks = state->Chains.at(chain->second).Ranks;
     auto const pos = std::find(ranks.begin(), ranks.end(), spellInfo->Id);
     return pos == ranks.end() || size_t(pos - ranks.begin()) >= have;
+}
+
+bool ShowsInSpellbook(Player const* player, uint32 spell, bool active)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = Find(player);
+    if (!state)
+        return active;
+    if (state->Removed.count(spell))
+        return false;
+    auto const chain = state->SpellToChain.find(spell);
+    if (chain == state->SpellToChain.end())
+        return active;
+    auto const unlocked = state->Unlocked.find(chain->second);
+    uint8 const have = unlocked != state->Unlocked.end() ? unlocked->second : 0;
+    return have && state->Chains.at(chain->second).Ranks[have - 1] == spell;
 }
 
 bool MayEquip(Player const* player, uint32 entry, uint8 slot)
@@ -1291,6 +1338,8 @@ void HandlePickRequest(Player* player, std::string_view argument)
             uint32 const first = state->SpellToChain.at(*spellId);
             if (++state->Unlocked[first] == 1)
                 PlaceUnlockedSpell(player, *state, first, *spellId);
+            RetargetButtons(player, *state);
+            player->SendInitialSpells();
             --state->PendingPicks;
         }
     }

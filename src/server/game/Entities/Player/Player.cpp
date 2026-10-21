@@ -3845,12 +3845,18 @@ void Player::SendInitialSpells()
     size_t countPos = data.wpos();
     data << uint16(spellCount);                             // spell count placeholder
 
+    // A Summoner's Rift match lists the ranks it has unlocked, not the ones known.
+    bool const rift = RiftProgression::IsInMatch(this);
+
     for (PlayerSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
     {
         if (itr->second.state == PLAYERSPELL_REMOVED)
             continue;
 
-        if (!itr->second.active || itr->second.disabled)
+        if (itr->second.disabled)
+            continue;
+
+        if (rift ? !RiftProgression::ShowsInSpellbook(this, itr->first, itr->second.active) : !itr->second.active)
             continue;
 
         data << uint32(itr->first);

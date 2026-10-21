@@ -86,6 +86,11 @@ namespace RiftProgression
     TC_GAME_API SpellInfo const* AdjustCast(Player const* player, SpellInfo const* spellInfo);
     // Spell::CheckCast: true when this spell is not unlocked in the match yet.
     TC_GAME_API bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo);
+    // Player::SendInitialSpells: whether the client's spellbook lists this spell.
+    // In a match only the best unlocked rank of each ability is shown (spells stay
+    // known server side, so nothing is written down or relearned); outside one,
+    // `active` as always. Enter, a pick and Leave resend the list.
+    TC_GAME_API bool ShowsInSpellbook(Player const* player, uint32 spell, bool active);
     // Player::CanEquipItem: in a match a character wears the field kit and what
     // the shop sells, nothing it brought (its own gear is stashed at the door, but
     // a piece left in its bags would otherwise go straight back on). True outside
