@@ -339,7 +339,10 @@ namespace
             case EQUIPMENT_SLOT_HANDS:     return { INVTYPE_HANDS };
             case EQUIPMENT_SLOT_BACK:      return { INVTYPE_CLOAK };
             case EQUIPMENT_SLOT_MAINHAND:  return { INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND, INVTYPE_2HWEAPON };
-            case EQUIPMENT_SLOT_OFFHAND:   return { INVTYPE_WEAPON, INVTYPE_WEAPONOFFHAND, INVTYPE_SHIELD, INVTYPE_HOLDABLE };
+            // No held-in-off-hand: the pool's are vanity (Red Rose, sparklers,
+            // Stitches' Femur) with no stats, handed to every caster and to
+            // anyone whose weapons were refused. A caster holds nothing.
+            case EQUIPMENT_SLOT_OFFHAND:   return { INVTYPE_WEAPON, INVTYPE_WEAPONOFFHAND, INVTYPE_SHIELD };
             case EQUIPMENT_SLOT_RANGED:    return { INVTYPE_RANGED, INVTYPE_RANGEDRIGHT, INVTYPE_THROWN, INVTYPE_RELIC };
             default:                       return { };   // neck, rings, trinkets: the kit has none
         }
@@ -357,8 +360,9 @@ namespace
 
     // The first kit piece for this slot the character can actually put on, or 0:
     // the best for its level, or for `levelCap` when one is given (the Rift
-    // dresses a character for the level its match starts at).
-    uint32 PickKitPiece(Player* player, uint8 slot, uint8 levelCap = 0)
+    // dresses a character for the level its match starts at). `swap`: the slot
+    // may be occupied - the piece would replace what is there.
+    uint32 PickKitPiece(Player* player, uint8 slot, uint8 levelCap = 0, bool swap = false)
     {
         uint32 const maxLevel = levelCap ? std::min<uint32>(levelCap, player->GetLevel()) : player->GetLevel();
         for (uint32 invType : InventoryTypesForSlot(slot))
@@ -383,7 +387,7 @@ namespace
                     continue;
 
                 uint16 dest = 0;
-                if (player->CanEquipNewItem(slot, dest, entry, false) == EQUIP_ERR_OK)
+                if (player->CanEquipNewItem(slot, dest, entry, swap) == EQUIP_ERR_OK)
                 {
                     best = entry;
                     bestProto = proto;
@@ -1457,7 +1461,16 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel)
         if (worn && !IsFieldKitDuplicateEntry(worn->GetEntry()))
             continue;   // not the kit's
 
+        // The new piece is chosen while the old one is still on, and the old one
+        // comes off only for a different piece: this used to take it off first,
+        // and a slot that then took nothing (a hunter's bow, refused mid-fight)
+        // was left empty.
         uint32 const oldEntry = worn ? worn->GetEntry() : 0;
+        uint32 kit = PickKitPiece(player, slot, kitLevel, worn != nullptr);
+        if (kit == oldEntry)
+            continue;
+        if (!kit && !(worn && worn->GetTemplate()->InventoryType == INVTYPE_HOLDABLE))
+            continue;   // nothing for this slot: what is on stays on (a held piece from before the pool lost them comes off)
         if (worn)
         {
             if (!transient)
@@ -1465,12 +1478,15 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel)
                     guid, uint32(LOADOUT_ROW_SUBSTITUTE), worn->GetGUID().GetCounter()).c_str());
             player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
         }
+        if (!kit)
+        {
+            ++swapped;
+            continue;
+        }
 
-        // The new piece, or - when there is none it can put on - the old one
-        // back: a slot the kit dressed is never left empty.
-        uint32 kit = PickKitPiece(player, slot, kitLevel);
+        // The new piece, or - should it be refused after all - the old one back.
         uint16 dest = 0;
-        if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
+        if (player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
         {
             kit = oldEntry;
             if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
