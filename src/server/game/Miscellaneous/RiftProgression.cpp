@@ -186,6 +186,8 @@ namespace
         // The League inventory's on-equip spells now on the champion, by spell:
         // how many held items carry it (SyncItems).
         std::map<uint32, uint32> ItemSpells;
+        // The field kit bracket the champion is dressed for (SyncItems swaps it).
+        uint8 KitApplied = 0;
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -823,7 +825,6 @@ namespace
 
     void SetMatchLevel(Player* player, State& state, uint8 level)
     {
-        uint8 const kitBefore = KitLevelFor(state);
         while (state.MatchLevel < level)
         {
             ++state.MatchLevel;
@@ -838,8 +839,6 @@ namespace
         player->SetHealth(std::min(std::max<uint32>(health, 1), player->GetMaxHealth()));
         if (player->GetMaxPower(POWER_MANA))
             player->SetPower(POWER_MANA, std::min<uint32>(mana, player->GetMaxPower(POWER_MANA)));
-        if (KitLevelFor(state) != kitBefore)
-            Tournament::UpgradeRiftKit(player, KitLevelFor(state));
         ShowProgress(player, state);
         SendState(player, state);
         if (state.PendingPicks && !Offers(state).empty())
@@ -981,6 +980,7 @@ void Enter(Player* player)
     // pet's call); everything else is a skill pick - one now, one a level.
     state.StartLevel = std::min<uint8>(START_LEVEL, state.RealLevel);
     state.MatchLevel = state.StartLevel;
+    state.KitApplied = KitLevelFor(state);   // ApplyRiftLoadout dressed it for the start
     for (uint32 first : state.FreeChains)
         state.Unlocked[first] = uint8(state.Chains.at(first).Ranks.size());
     state.PendingPicks = PICKS_PER_LEVEL;
@@ -1167,8 +1167,21 @@ void SyncItems(Player* player)
     if (!player)
         return;
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
-    if (State* state = Find(player))
-        SyncItemsFor(player, *state);
+    State* state = Find(player);
+    if (!state)
+        return;
+    SyncItemsFor(player, *state);
+    // The kit follows the match level. Armour goes on in combat in a match
+    // (Player::CanEquipItem asks IsInMatch): the level-up is a minion kill,
+    // mid-fight, and the swap once took every piece off and put none back.
+    // Not while casting, stunned or charmed: nothing can be put on then, the old
+    // piece included. The next sync tries again.
+    uint8 const kit = KitLevelFor(*state);
+    if (kit != state->KitApplied && !player->IsNonMeleeSpellCast(false) && !player->HasUnitState(UNIT_STATE_STUNNED) && !player->IsCharmed())
+    {
+        Tournament::UpgradeRiftKit(player, kit);
+        state->KitApplied = kit;
+    }
 }
 
 bool HasRoomFor(Player const* player, uint32 entry, std::vector<uint32> const& consumed)

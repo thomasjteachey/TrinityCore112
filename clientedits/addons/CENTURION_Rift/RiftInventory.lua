@@ -44,7 +44,7 @@ end
 local inv = CreateFrame("Frame", "CENTURION_RiftInventory", UIParent);
 inv:SetFrameStrata("HIGH");
 inv:SetWidth(PAD + STATS_W + PAD + 3 * SLOT + 2 * GAP + PAD + SLOT + PAD);
-inv:SetHeight(HEADER + PAD + 2 * SLOT + GAP + PAD + 18);
+inv:SetHeight(HEADER + PAD + 2 * SLOT + GAP + PAD + 34);
 inv:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -90, 120);
 inv:SetBackdrop({
 	bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -264,35 +264,82 @@ local function Toggle()
 	end
 end
 
+-- The bag functions call each other (ToggleBackpack runs ToggleBag(0),
+-- OpenAllBags runs OpenBackpack and OpenBag), so one key press fires several of
+-- these hooks: acting on each toggled the frame twice and F12 did nothing. They
+-- are collected instead and acted on once, the next frame: a toggle (F12, B, a
+-- bag button) wins over an open (the shop opening the bags).
 local busy = false;
-local function BagsOpened(toggle)
-	if ( busy or not InRift() ) then
+local pending = nil;           -- "toggle" or "open"
+local wasShown = false;        -- the frame before the first hook of this press
+local resolver = CreateFrame("Frame");
+resolver:Hide();
+resolver:SetScript("OnUpdate", function(self)
+	self:Hide();
+	local mode = pending;
+	pending = nil;
+	if ( not mode or not InRift() ) then
 		return;
 	end
 	busy = true;
-	local wasShown = inv:IsShown();
 	CloseAllBags();
 	busy = false;
-	if ( toggle and wasShown ) then
+	if ( mode == "toggle" and wasShown ) then
 		inv:Hide();
 	else
 		inv:Show();
 	end
-end
-
-hooksecurefunc("ToggleBackpack", function() BagsOpened(true); end);
-hooksecurefunc("ToggleBag", function() BagsOpened(true); end);
-if ( OpenAllBags ) then hooksecurefunc("OpenAllBags", function() BagsOpened(false); end); end
-if ( OpenBackpack ) then hooksecurefunc("OpenBackpack", function() BagsOpened(false); end); end
-if ( OpenBag ) then hooksecurefunc("OpenBag", function() BagsOpened(false); end); end
-hooksecurefunc("CloseAllBags", function()
-	if ( not busy and InRift() ) then
-		inv:Hide();
-	end
 end);
 
+local function BagsOpened(mode)
+	if ( busy or not InRift() ) then
+		return;
+	end
+	if ( not pending ) then
+		wasShown = inv:IsShown();
+	end
+	if ( pending ~= "toggle" ) then
+		pending = mode;
+	end
+	resolver:Show();
+end
+
+hooksecurefunc("ToggleBackpack", function() BagsOpened("toggle"); end);
+hooksecurefunc("ToggleBag", function() BagsOpened("toggle"); end);
+if ( OpenAllBags ) then
+	hooksecurefunc("OpenAllBags", function(forceOpen) BagsOpened(forceOpen and "open" or "toggle"); end);
+end
+if ( OpenBackpack ) then hooksecurefunc("OpenBackpack", function() BagsOpened("open"); end); end
+if ( OpenBag ) then hooksecurefunc("OpenBag", function() BagsOpened("open"); end); end
+local function BagsClosed()
+	if ( not busy and not pending and InRift() ) then
+		inv:Hide();
+	end
+end
+hooksecurefunc("CloseAllBags", BagsClosed);
+if ( CloseBackpack ) then hooksecurefunc("CloseBackpack", BagsClosed); end
+
+-- The real character pane is still there: /paperdoll (or /charpane), or the
+-- Character button on the frame.
+local bypass = false;
+local function RealCharacterPane()
+	bypass = true;
+	ToggleCharacter("PaperDollFrame");
+	bypass = false;
+end
+SLASH_CENTURIONPAPERDOLL1 = "/paperdoll";
+SLASH_CENTURIONPAPERDOLL2 = "/charpane";
+SlashCmdList["CENTURIONPAPERDOLL"] = RealCharacterPane;
+
+local paperdoll = CreateFrame("Button", nil, inv, "UIPanelButtonTemplate");
+paperdoll:SetWidth(84);
+paperdoll:SetHeight(18);
+paperdoll:SetPoint("BOTTOMLEFT", inv, "BOTTOMLEFT", PAD, 8);
+paperdoll:SetText("Character");
+paperdoll:SetScript("OnClick", RealCharacterPane);
+
 hooksecurefunc("ToggleCharacter", function(tab)
-	if ( tab ~= "PaperDollFrame" or not InRift() ) then
+	if ( bypass or tab ~= "PaperDollFrame" or not InRift() ) then
 		return;
 	end
 	local wasShown = inv:IsShown();

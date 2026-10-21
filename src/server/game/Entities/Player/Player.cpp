@@ -13528,7 +13528,8 @@ InventoryResult Player::CanEquipItem(uint8 slot, uint16& dest, Item* pItem, bool
                 // - in-progress arenas
                 if (!pProto->CanChangeEquipStateInCombat())
                 {
-                    if (IsInCombat())
+                    // Summoner's Rift swaps the field kit on the level-up, mid-fight
+                    if (IsInCombat() && !RiftProgression::IsInMatch(this))
                         return EQUIP_ERR_NOT_IN_COMBAT;
 
                     if (Battleground* bg = GetBattleground())
@@ -13701,7 +13702,7 @@ InventoryResult Player::CanUnequipItem(uint16 pos, bool swap) const
     // - in-progress arenas
     if (!pProto->CanChangeEquipStateInCombat())
     {
-        if (IsInCombat())
+        if (IsInCombat() && !RiftProgression::IsInMatch(this))
             return EQUIP_ERR_NOT_IN_COMBAT;
 
         if (Battleground* bg = GetBattleground())

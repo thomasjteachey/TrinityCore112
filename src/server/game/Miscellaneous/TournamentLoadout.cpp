@@ -1466,10 +1466,16 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel)
             player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
         }
 
-        uint32 const kit = PickKitPiece(player, slot, kitLevel);
+        // The new piece, or - when there is none it can put on - the old one
+        // back: a slot the kit dressed is never left empty.
+        uint32 kit = PickKitPiece(player, slot, kitLevel);
         uint16 dest = 0;
         if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
-            continue;
+        {
+            kit = oldEntry;
+            if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
+                continue;
+        }
         Item* item = player->EquipNewItem(dest, kit, true);
         if (!item)
             continue;
