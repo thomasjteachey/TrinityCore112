@@ -1587,8 +1587,20 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                             target->CastSpell(target, 50812, true);
                         break;
                     case 60970: // Heroic Fury (remove Intercept cooldown)
+                        // The cooldown is stored under the rank that was cast, so
+                        // every rank must be reset. Not by family mask: Heroic
+                        // Leap 81271 shares Intercept's 0x40000000 flag.
                         if (target->GetTypeId() == TYPEID_PLAYER)
-                            target->GetSpellHistory()->ResetCooldown(20252, true);
+                            target->GetSpellHistory()->ResetCooldowns([](SpellHistory::CooldownStorageType::iterator itr) -> bool
+                            {
+                                switch (itr->first)
+                                {
+                                    case 20252: case 20616: case 20617: case 25272: case 25275:
+                                        return true;
+                                    default:
+                                        return false;
+                                }
+                            }, true);
                         break;
                 }
                 break;
