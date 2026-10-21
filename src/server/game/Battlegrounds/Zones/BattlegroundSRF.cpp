@@ -528,7 +528,10 @@ void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*tea
     {
         player->RemoveAurasDueToSpell(SRF_SPELL_BRUSH);
         if (!player->HasAuraType(SPELL_AURA_MOD_STEALTH))
+        {
             player->RemoveByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_AURA_VISION, PLAYER_FIELD_BYTE2_STEALTH);
+            player->RemoveVisFlag(UNIT_VIS_FLAGS_CREEP);
+        }
         RiftProgression::Leave(player);
     }
 }
@@ -801,13 +804,25 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
             else
                 player->RemoveAurasDueToSpell(SRF_SPELL_BRUSH);
         }
-        // And the look of it: the translucency a stealthed character sees itself
-        // in (the flag HandleModStealth sets). Real stealth keeps its own flag.
-        bool const looksHidden = player->HasByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_AURA_VISION, PLAYER_FIELD_BYTE2_STEALTH);
+        // And the look of it, both flags HandleModStealth sets: the stealth
+        // vision, and the creep flag that draws the model see-through - for the
+        // champion and the allies who still see it, as League shows a champion
+        // in the brush. The vision flag alone left the model solid. Real stealth
+        // keeps its own flags.
+        bool const looksHidden = player->HasByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_AURA_VISION, PLAYER_FIELD_BYTE2_STEALTH)
+            && player->HasByteFlag(UNIT_FIELD_BYTES_1, UNIT_BYTES_1_OFFSET_VIS_FLAG, UNIT_VIS_FLAGS_CREEP);
         if (hidden && !looksHidden)
+        {
             player->SetByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_AURA_VISION, PLAYER_FIELD_BYTE2_STEALTH);
-        else if (!hidden && looksHidden && !player->HasAuraType(SPELL_AURA_MOD_STEALTH))
+            player->SetVisFlag(UNIT_VIS_FLAGS_CREEP);
+        }
+        else if (!hidden && !player->HasAuraType(SPELL_AURA_MOD_STEALTH)
+            && (player->HasByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_AURA_VISION, PLAYER_FIELD_BYTE2_STEALTH)
+                || player->HasByteFlag(UNIT_FIELD_BYTES_1, UNIT_BYTES_1_OFFSET_VIS_FLAG, UNIT_VIS_FLAGS_CREEP)))
+        {
             player->RemoveByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_AURA_VISION, PLAYER_FIELD_BYTE2_STEALTH);
+            player->RemoveVisFlag(UNIT_VIS_FLAGS_CREEP);
+        }
     }
 }
 

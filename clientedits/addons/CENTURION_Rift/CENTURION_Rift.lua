@@ -447,6 +447,21 @@ driver:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
 	if ( arg1 ~= ANSWER_PREFIX or type(arg2) ~= "string" or arg3 ~= "WHISPER" or (arg4 and arg4 ~= "" and arg4 ~= UnitName("player")) ) then
 		return;
 	end
+	-- The state the server sends on the way in can land under the loading
+	-- screen and be lost, and only a /reload asked again. The scoreboard comes
+	-- every 2 seconds of a match: while no state has arrived, it asks.
+	if ( string.match(arg2, "^RIFTSCORE:") ) then
+		if ( not state.live and GetTime() - (state.askedAt or 0) > 5 ) then
+			state.askedAt = GetTime();
+			Send("RIFTSTATE:");
+		end
+		return;
+	end
+	if ( arg2 == "RIFT:END" ) then
+		state.live = false;
+	elseif ( string.match(arg2, "^RIFT:%d+:") ) then
+		state.live = true;
+	end
 	OnAnswer(arg2);
 end);
 
@@ -777,9 +792,11 @@ do
 		if ( sender and sender ~= "" and sender ~= UnitName("player") ) then
 			return;
 		end
+		-- The scoreboard, every 2 seconds of a match, switches them on too: the
+		-- state sent on the way in can be lost under the loading screen.
 		if ( message == "RIFT:END" ) then
 			SetActive(false);
-		elseif ( string.match(message, "^RIFT:%d+:") ) then
+		elseif ( string.match(message, "^RIFT:%d+:") or string.match(message, "^RIFTSCORE:") ) then
 			SetActive(true);
 		end
 	end);
