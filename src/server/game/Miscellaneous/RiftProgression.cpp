@@ -493,9 +493,17 @@ namespace
         auto const chain = state.SpellToChain.find(spell);
         if (chain == state.SpellToChain.end())
             return active;
+        // Every unlocked rank as WoW lists ranks - a spell whose ranks stack
+        // (Arcane Shot) keeps them all; one whose new rank replaces the old
+        // (an aspect, a buff) only the best - and nothing past the unlocked.
+        // Showing only the best rank took rank 1 off the bar when rank 2 came.
         auto const unlocked = state.Unlocked.find(chain->second);
         uint8 const have = unlocked != state.Unlocked.end() ? unlocked->second : 0;
-        return have && state.Chains.at(chain->second).Ranks[have - 1] == spell;
+        std::vector<uint32> const& ranks = state.Chains.at(chain->second).Ranks;
+        auto const pos = std::find(ranks.begin(), ranks.end(), spell);
+        if (!have || pos == ranks.end() || size_t(pos - ranks.begin()) >= have)
+            return false;
+        return active || ranks[have - 1] == spell;
     }
 
     void SendSpellbookChange(Player* player, uint32 spell, bool add)
@@ -702,9 +710,11 @@ namespace
         state.ItemSpells.clear();
     }
 
-    // A button holding a higher rank than the one unlocked would cast the lower
-    // one anyway (AdjustCast), but shows the rank the spellbook no longer lists:
-    // it is pointed at the unlocked rank. RestoreButtons puts the real one back.
+    // A button holding a rank the spellbook does not list - one not unlocked yet
+    // (AdjustCast would cast the unlocked one anyway), or an old rank a new one
+    // replaced - is pointed at the best unlocked rank. A lower rank of a spell
+    // whose ranks stack stays where the player put it. RestoreButtons puts the
+    // real buttons back.
     void RetargetButtons(Player* player, State const& state)
     {
         bool changed = false;
@@ -719,6 +729,10 @@ namespace
             auto const unlocked = state.Unlocked.find(chain->second);
             uint8 const have = unlocked != state.Unlocked.end() ? unlocked->second : 0;
             if (!have)
+                continue;
+            auto const known = player->GetSpellMap().find(ab->GetAction());
+            bool const active = known != player->GetSpellMap().end() && known->second.active;
+            if (MatchShows(state, ab->GetAction(), active))
                 continue;
             uint32 const want = state.Chains.at(chain->second).Ranks[have - 1];
             if (want != ab->GetAction() && player->HasSpell(want) && player->addActionButton(button, want, ACTION_BUTTON_SPELL))
