@@ -992,8 +992,10 @@ void BattlegroundSRF::SpawnWave()
         // League announces the first wave only ("Minions have spawned!"), not
         // every one - every 30 seconds in the chat was noise.
         if (!_wavesSpawned)
+        {
             PSendMessageToAll(BG_SRF_STRING_MINIONS_SPAWNED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
             AnnounceEvent("MINIONS", TEAM_NEUTRAL);
+        }
         ++_wavesSpawned;
     }
 }
