@@ -2374,6 +2374,8 @@ void BattlegroundSRF::UpdateLeash(uint8 camp, uint32 elapsed)
     bool hit = false;
     float worstOut = 0.0f;     // yards beyond the leash; > 0 drains
     std::vector<Creature*> engaged;
+    std::vector<Position> homes;
+    std::vector<bool> hits;
     for (uint8 i = 0; i < BG_SRF_JUNGLE_MONSTERS; ++i)
     {
         SrfMonster const& m = SRF_MONSTERS[i];
@@ -2389,12 +2391,56 @@ void BattlegroundSRF::UpdateLeash(uint8 camp, uint32 elapsed)
             continue;
         fighting = true;
         engaged.push_back(creature);
-        Position const home = ToWorld(m.x, m.y, m.z, m.o);
-        float out = creature->GetExactDist2d(&home) - SRF_LEASH_RANGE;
+        homes.push_back(ToWorld(m.x, m.y, m.z, m.o));
+        hits.push_back(wasHit);
+    }
+
+    // League's aggro: no threat. A monster stays on its target, however hard
+    // someone else hits it, until that target is lost - dead, unseen (the
+    // brush), or out past the leash. Then it turns on the nearest champion
+    // still inside the leash that has fought the camp (the camp fights as one,
+    // so a hit on any of it counts), and only with nobody left does the
+    // patience below run down. TrinityCore's threat would have stayed on the
+    // champion who ran.
+    std::vector<Unit*> fought;
+    for (Creature* creature : engaged)
+        for (ThreatReference const* ref : creature->GetThreatManager().GetUnsortedThreatList())
+            if (Unit* unit = ref->GetVictim())
+                if (std::find(fought.begin(), fought.end(), unit) == fought.end())
+                    fought.push_back(unit);
+
+    for (size_t n = 0; n < engaged.size(); ++n)
+    {
+        Creature* creature = engaged[n];
+        Position const& home = homes[n];
+        auto const lost = [&](Unit* unit)
+        {
+            return !unit || !unit->IsAlive() || !creature->CanSeeOrDetect(unit)
+                || !creature->IsValidAttackTarget(unit) || unit->GetExactDist2d(&home) > SRF_LEASH_RANGE + 3.0f;
+        };
         Unit* victim = creature->GetVictim();
+        if (lost(victim))
+        {
+            Unit* next = nullptr;
+            for (Unit* unit : fought)
+                if (unit != victim && !lost(unit) && (!next || creature->GetExactDist2d(unit) < creature->GetExactDist2d(next)))
+                    next = unit;
+            if (next)
+            {
+                creature->GetThreatManager().AddThreat(next, 0.0f, nullptr, true, true);
+                creature->GetThreatManager().FixateTarget(next);
+                if (CreatureAI* ai = creature->AI())
+                    ai->AttackStart(next);
+                victim = next;
+            }
+        }
+        else if (creature->GetThreatManager().GetFixateTarget() != victim)
+            creature->GetThreatManager().FixateTarget(victim);
+
+        float out = creature->GetExactDist2d(&home) - SRF_LEASH_RANGE;
+        bool const wasHit = hits[n];
         // a target it cannot find (gone, hidden in the brush, out of reach of the leash) counts as outside
-        if (!victim || !victim->IsAlive() || !creature->CanSeeOrDetect(victim)
-            || victim->GetExactDist2d(&home) > SRF_LEASH_RANGE + 3.0f)
+        if (lost(victim))
             out = std::max(out, 0.5f);
         worstOut = std::max(worstOut, out);
         if (wasHit)
@@ -2433,8 +2479,11 @@ void BattlegroundSRF::UpdateLeash(uint8 camp, uint32 elapsed)
     cs.Patience = 100.0f;
     cs.PauseMs = 0;
     for (Creature* creature : engaged)
+    {
+        creature->GetThreatManager().ClearFixate();
         if (CreatureAI* ai = creature->AI())
             ai->EnterEvadeMode(CreatureAI::EVADE_REASON_BOUNDARY);
+    }
 }
 
 // The killer takes the gold (League's last hit) and its side the experience; the
