@@ -355,6 +355,7 @@ private:
         int8 AtBase = -1;          // in its fountain at the last tick (-1: not known yet)
     };
     std::unordered_map<ObjectGuid, BrushState> _brush;
+    uint32 _itemSyncTimer = 0;
 
     struct BotState
     {

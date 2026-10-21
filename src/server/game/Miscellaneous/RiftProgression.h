@@ -97,6 +97,14 @@ namespace RiftProgression
     // a match, and for the shirt and tabard.
     TC_GAME_API bool MayEquip(Player const* player, uint32 entry, uint8 slot);
 
+    // League's inventory: shop items are not worn but held (six item slots and a
+    // trinket slot, drawn by CENTURION_Rift); what the held ones give is put on
+    // the champion as auras. SyncItems re-reads the bags (BattlegroundSRF, twice
+    // a second, and after a purchase); HasRoomFor refuses a purchase with the
+    // slots full, the components going into it counted out.
+    TC_GAME_API void SyncItems(Player* player);
+    TC_GAME_API bool HasRoomFor(Player const* player, uint32 entry, std::vector<uint32> const& consumed);
+
     // Match experience, in League's own units (a melee minion is ~59).
     TC_GAME_API void AddExperience(Player* player, float leagueXp);
     // Rift gold, in League gold (1 League gold = 1 gold). With popup, the

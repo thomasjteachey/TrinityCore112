@@ -24866,6 +24866,13 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
         if (count == 1 && RiftProgression::IsInMatch(this))
             price = RiftProgression::ShopPrice(this, item, price, riftComponents);
 
+        // and League's inventory holds six items (and a trinket)
+        if (!RiftProgression::HasRoomFor(this, item, riftComponents))
+        {
+            SendBuyError(BUY_ERR_CANT_CARRY_MORE, creature, item, 0);
+            return false;
+        }
+
         if (!HasEnoughMoney(price))
         {
             SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, item, 0);
@@ -24878,6 +24885,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
         if (!_StoreOrEquipNewItem(vendorslot, item, count, bag, slot, price, pProto, creature, crItem, true))
             return false;
         RiftProgression::TakeComponents(this, riftComponents);
+        RiftProgression::SyncItems(this);
     }
     else if (IsEquipmentPos(bag, slot))
     {

@@ -367,8 +367,10 @@ namespace Tournament
     // battleground armour lock (Player.cpp) stands aside for the swap, which is
     // the one pass that has to change every slot.
     bool IsLoadoutSwapInProgress(Player const* player);
-    // True for an item the field kit hands out (Summoner's Rift's temporal gear).
-    bool IsFieldKitPiece(uint32 entry);
+    // Summoner's Rift: every worn field kit piece swapped for the kit's piece of
+    // `kitLevel` (the match's 5-level bracket), slot by slot, and empty slots the
+    // kit can now fill dressed. Nothing the character owns is touched.
+    void UpgradeRiftKit(Player* player, uint8 kitLevel);
     // The starter-template item a class wears in an equipment slot, 0 for none.
     uint32 GetLoadoutTemplateItem(uint8 playerClass, uint8 slot);
 

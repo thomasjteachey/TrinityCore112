@@ -286,6 +286,7 @@ uint32 constexpr SRF_BRUSH_TICK         = 250;
 uint32 constexpr SRF_BRUSH_REVEAL       = 1500;
 // Centurion spell 94142 "Brush": the buff a hidden champion wears, so they can see it.
 uint32 constexpr SRF_SPELL_BRUSH        = 94142;
+uint32 constexpr SRF_ITEM_SYNC_MS       = 500;
 
 // The brush patch in League's grid cell holding (lx, lz), 0 for none.
 uint8 BrushCellAt(float lx, float lz)
@@ -733,6 +734,13 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
 // stepping into the same bush sees it again.
 void BattlegroundSRF::UpdateBrush(uint32 elapsed)
 {
+    // League's inventory works from the bags: what a sale, a drop or a
+    // destroyed item changed is picked up here (RiftProgression::SyncItems).
+    _itemSyncTimer += elapsed;
+    bool const syncItems = _itemSyncTimer >= SRF_ITEM_SYNC_MS;
+    if (syncItems)
+        _itemSyncTimer = 0;
+
     for (auto const& [guid, bgPlayer] : GetPlayers())
     {
         Player* player = ObjectAccessor::FindPlayer(guid);
@@ -741,6 +749,8 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
             _brush.erase(guid);
             continue;
         }
+        if (syncItems)
+            RiftProgression::SyncItems(player);
         BrushState& st = _brush[guid];
         uint8 const patch = player->IsAlive() ? BrushPatchAt(player->GetPosition()) : 0;
         if (patch && AttackOf(player))

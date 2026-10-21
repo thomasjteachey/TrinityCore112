@@ -28,6 +28,7 @@
 #include "ObjectMgr.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "Player.h"
+#include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -181,6 +182,10 @@ namespace
         // inactive ones (a lower rank) put into it. SyncClientSpellbook.
         std::unordered_set<uint32> ClientHidden;
         std::unordered_set<uint32> ClientExtra;
+
+        // The League inventory's on-equip spells now on the champion, by spell:
+        // how many held items carry it (SyncItems).
+        std::map<uint32, uint32> ItemSpells;
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -555,6 +560,139 @@ namespace
         state.ClientExtra.clear();
     }
 
+    // League's inventory. A shop item is not WoW gear: it sits in the bags (the
+    // CENTURION_Rift frame shows it in one of six item slots, or the trinket
+    // slot) and works from there. What the held items give is summed and put on
+    // the champion through two hidden carriers, plus each item's on-equip
+    // spells - stat spells counted once per item that carries them, League's
+    // UNIQUE passives (the Rift's own spells) once.
+    uint32 constexpr SPELL_ITEM_STATS = 94147;    // stamina, intellect, armour
+    uint32 constexpr SPELL_ITEM_RESIST = 94148;   // fire..arcane resistance
+    uint32 constexpr ITEM_SLOTS = 6;
+    uint32 constexpr RIFT_SPELL_FIRST = 94120;
+    uint32 constexpr RIFT_SPELL_LAST = 94160;
+
+    bool IsShopItem(uint32 entry) { return entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST; }
+    // The trinket slot's items (League's wards and lenses). None in the shop yet.
+    bool IsTrinketItem(uint32 /*entry*/) { return false; }
+
+    // Item slots the held shop items fill, those going into a purchase left out.
+    uint32 HeldItemSlots(Player const* player, std::vector<uint32> const& consumed)
+    {
+        uint32 held = 0;
+        for (uint32 entry = SHOP_ITEM_FIRST; entry <= SHOP_ITEM_LAST; ++entry)
+            if (!IsTrinketItem(entry))
+                held += player->GetItemCount(entry, false);
+        for (uint32 entry : consumed)
+            if (!IsTrinketItem(entry) && held)
+                --held;
+        return held;
+    }
+
+    struct ItemEffects
+    {
+        int32 Stamina = 0;
+        int32 Intellect = 0;
+        int32 Armor = 0;
+        int32 Resist = 0;
+        std::map<uint32, uint32> Spells;
+    };
+
+    ItemEffects HeldItemEffects(Player const* player)
+    {
+        ItemEffects out;
+        for (uint32 entry = SHOP_ITEM_FIRST; entry <= SHOP_ITEM_LAST; ++entry)
+        {
+            int32 const count = int32(player->GetItemCount(entry, false));
+            ItemTemplate const* proto = count ? sObjectMgr->GetItemTemplate(entry) : nullptr;
+            if (!proto)
+                continue;
+            for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
+            {
+                if (proto->ItemStat[i].ItemStatType == ITEM_MOD_STAMINA)
+                    out.Stamina += proto->ItemStat[i].ItemStatValue * count;
+                else if (proto->ItemStat[i].ItemStatType == ITEM_MOD_INTELLECT)
+                    out.Intellect += proto->ItemStat[i].ItemStatValue * count;
+            }
+            out.Armor += int32(proto->Armor) * count;
+            out.Resist += int32(proto->FireRes) * count;   // the shop's resistances are all-school
+            for (_Spell const& spell : proto->Spells)
+                if (spell.SpellId > 0 && spell.SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
+                    out.Spells[uint32(spell.SpellId)] += uint32(count);
+        }
+        for (auto& [spell, count] : out.Spells)
+            if (spell >= RIFT_SPELL_FIRST && spell <= RIFT_SPELL_LAST)
+                count = 1;
+        return out;
+    }
+
+    // A carrier's effects set to `amounts`; gone when they are all zero.
+    void SetCarrier(Player* player, uint32 spell, std::initializer_list<int32> amounts)
+    {
+        bool const any = std::any_of(amounts.begin(), amounts.end(), [](int32 a) { return a != 0; });
+        Aura* aura = player->GetAura(spell);
+        if (!any)
+        {
+            if (aura)
+                player->RemoveAurasDueToSpell(spell);
+            return;
+        }
+        if (!aura)
+            aura = player->AddAura(spell, player);
+        if (!aura)
+            return;
+        uint8 i = 0;
+        for (int32 amount : amounts)
+        {
+            if (AuraEffect* effect = aura->GetEffect(i))
+                if (effect->GetAmount() != amount)
+                    effect->ChangeAmount(amount);
+            ++i;
+        }
+    }
+
+    void SyncItemsFor(Player* player, State& state)
+    {
+        ItemEffects const want = HeldItemEffects(player);
+        SetCarrier(player, SPELL_ITEM_STATS, { want.Stamina, want.Intellect, want.Armor });
+        SetCarrier(player, SPELL_ITEM_RESIST, { want.Resist });
+
+        for (auto itr = state.ItemSpells.begin(); itr != state.ItemSpells.end();)
+        {
+            if (!want.Spells.count(itr->first))
+            {
+                player->RemoveAurasDueToSpell(itr->first);
+                itr = state.ItemSpells.erase(itr);
+            }
+            else
+                ++itr;
+        }
+        for (auto const& [spell, count] : want.Spells)
+        {
+            Aura* aura = player->GetAura(spell);
+            auto const had = state.ItemSpells.find(spell);
+            if (aura && had != state.ItemSpells.end() && had->second == count)
+                continue;
+            if (!aura)
+                aura = player->AddAura(spell, player);
+            state.ItemSpells[spell] = count;
+            if (!aura || count == 1)
+                continue;
+            for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+                if (AuraEffect* effect = aura->GetEffect(i))
+                    effect->ChangeAmount(aura->GetSpellInfo()->GetEffect(SpellEffIndex(i)).CalcValue(player) * int32(count));
+        }
+    }
+
+    void TakeItemAuras(Player* player, State& state)
+    {
+        player->RemoveAurasDueToSpell(SPELL_ITEM_STATS);
+        player->RemoveAurasDueToSpell(SPELL_ITEM_RESIST);
+        for (auto const& [spell, count] : state.ItemSpells)
+            player->RemoveAurasDueToSpell(spell);
+        state.ItemSpells.clear();
+    }
+
     // A button holding a higher rank than the one unlocked would cast the lower
     // one anyway (AdjustCast), but shows the rank the spellbook no longer lists:
     // it is pointed at the unlocked rank. RestoreButtons puts the real one back.
@@ -674,8 +812,18 @@ namespace
         player->SetUInt32Value(PLAYER_XP, uint32(frac * float(player->GetUInt32Value(PLAYER_NEXT_LEVEL_XP))));
     }
 
+    // The field kit is issued for the 5-level bracket the match has reached
+    // (10, 15, 20 ...), never above the real level, and swapped as it climbs.
+    uint8 constexpr KIT_BRACKET = 5;
+    uint8 KitLevelFor(State const& state)
+    {
+        uint8 const bracket = uint8(state.MatchLevel - state.MatchLevel % KIT_BRACKET);
+        return std::min<uint8>(std::max<uint8>(bracket, state.StartLevel), state.RealLevel);
+    }
+
     void SetMatchLevel(Player* player, State& state, uint8 level)
     {
+        uint8 const kitBefore = KitLevelFor(state);
         while (state.MatchLevel < level)
         {
             ++state.MatchLevel;
@@ -690,6 +838,8 @@ namespace
         player->SetHealth(std::min(std::max<uint32>(health, 1), player->GetMaxHealth()));
         if (player->GetMaxPower(POWER_MANA))
             player->SetPower(POWER_MANA, std::min<uint32>(mana, player->GetMaxPower(POWER_MANA)));
+        if (KitLevelFor(state) != kitBefore)
+            Tournament::UpgradeRiftKit(player, KitLevelFor(state));
         ShowProgress(player, state);
         SendState(player, state);
         if (state.PendingPicks && !Offers(state).empty())
@@ -847,6 +997,7 @@ void Enter(Player* player)
         player->LearnSpell(SPELL_RIFT_RECALL, false);
     PlaceUnlockedSpell(player, state, 0, SPELL_RIFT_RECALL);
     SyncClientSpellbook(player, state);
+    SyncItemsFor(player, state);
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
     ShowProgress(player, state);
@@ -872,6 +1023,7 @@ void Leave(Player* player)
         Stashed.erase(player->GetGUID().GetCounter());
     }
 
+    TakeItemAuras(player, state);
     TakeShopItems(player);
     TakeRecall(player);
     TakeNoAmmo(player);
@@ -934,6 +1086,8 @@ void OnLogin(Player* player)
     // level first, so the character can wear it again.
     Field* fields = row->Fetch();
     uint8 const realLevel = fields[0].GetUInt8();
+    player->RemoveAurasDueToSpell(SPELL_ITEM_STATS);
+    player->RemoveAurasDueToSpell(SPELL_ITEM_RESIST);
     TakeShopItems(player);
     TakeRecall(player);
     TakeNoAmmo(player);
@@ -1008,11 +1162,35 @@ bool ShowsInSpellbook(Player const* player, uint32 spell, bool active)
     return state ? MatchShows(*state, spell, active) : active;
 }
 
+void SyncItems(Player* player)
+{
+    if (!player)
+        return;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    if (State* state = Find(player))
+        SyncItemsFor(player, *state);
+}
+
+bool HasRoomFor(Player const* player, uint32 entry, std::vector<uint32> const& consumed)
+{
+    if (!player || !IsShopItem(entry) || !IsInMatch(player))
+        return true;
+    if (IsTrinketItem(entry))
+    {
+        uint32 trinkets = 0;
+        for (uint32 e = SHOP_ITEM_FIRST; e <= SHOP_ITEM_LAST; ++e)
+            if (IsTrinketItem(e))
+                trinkets += player->GetItemCount(e, false);
+        return trinkets == 0;
+    }
+    return HeldItemSlots(player, consumed) < ITEM_SLOTS;
+}
+
 bool MayEquip(Player const* player, uint32 entry, uint8 slot)
 {
     if (slot >= EQUIPMENT_SLOT_END || slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
         return true;
-    if ((entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST) || Tournament::IsFieldKitPiece(entry))
+    if ((entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST) || IsFieldKitDuplicateEntry(entry))
         return true;
     return !IsInMatch(player);
 }
@@ -1255,47 +1433,9 @@ namespace
             player->SendTalentsInfoData(false);
     }
 
-    // The equipment slot a shop item goes into, preferring an empty one of a pair.
-    uint8 BotSlotFor(Player* player, ItemTemplate const* proto)
-    {
-        auto pick = [player](uint8 a, uint8 b)
-        {
-            if (!player->GetItemByPos(INVENTORY_SLOT_BAG_0, a))
-                return a;
-            if (!player->GetItemByPos(INVENTORY_SLOT_BAG_0, b))
-                return b;
-            // both taken: the one holding the cheaper shop item, or a kit piece
-            Item* ia = player->GetItemByPos(INVENTORY_SLOT_BAG_0, a);
-            Item* ib = player->GetItemByPos(INVENTORY_SLOT_BAG_0, b);
-            auto worth = [](Item* item)
-            {
-                uint32 const entry = item->GetEntry();
-                return entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST ? item->GetTemplate()->BuyPrice : 0;
-            };
-            return worth(ia) <= worth(ib) ? a : b;
-        };
-        switch (proto->InventoryType)
-        {
-            case INVTYPE_HEAD:      return EQUIPMENT_SLOT_HEAD;
-            case INVTYPE_NECK:      return EQUIPMENT_SLOT_NECK;
-            case INVTYPE_SHOULDERS: return EQUIPMENT_SLOT_SHOULDERS;
-            case INVTYPE_CHEST:
-            case INVTYPE_ROBE:      return EQUIPMENT_SLOT_CHEST;
-            case INVTYPE_WAIST:     return EQUIPMENT_SLOT_WAIST;
-            case INVTYPE_LEGS:      return EQUIPMENT_SLOT_LEGS;
-            case INVTYPE_FEET:      return EQUIPMENT_SLOT_FEET;
-            case INVTYPE_WRISTS:    return EQUIPMENT_SLOT_WRISTS;
-            case INVTYPE_HANDS:     return EQUIPMENT_SLOT_HANDS;
-            case INVTYPE_CLOAK:     return EQUIPMENT_SLOT_BACK;
-            case INVTYPE_FINGER:    return pick(EQUIPMENT_SLOT_FINGER1, EQUIPMENT_SLOT_FINGER2);
-            case INVTYPE_TRINKET:   return pick(EQUIPMENT_SLOT_TRINKET1, EQUIPMENT_SLOT_TRINKET2);
-            default:                return NULL_SLOT;
-        }
-    }
-
     // Buys one shop item the way the vendor would (League's price, components
-    // into it) and wears it. Whatever it displaces - a field kit piece, or a
-    // shop item it outgrew - goes, a shop item sold back at League's 70%.
+    // into it) into the League inventory. With the six item slots full, the
+    // cheapest held item not going into it is sold back first, at League's 70%.
     bool BotBuy(Player* player, uint32 entry)
     {
         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
@@ -1305,27 +1445,39 @@ namespace
         uint32 const price = ShopPrice(player, entry, uint32(proto->BuyPrice), consumed);
         if (!player->HasEnoughMoney(price))
             return false;
+
+        if (!HasRoomFor(player, entry, consumed))
+        {
+            std::unordered_map<uint32, uint32> going;
+            for (uint32 part : consumed)
+                ++going[part];
+            uint32 cheapest = 0;
+            int32 cheapestPrice = 0;
+            for (uint32 held = SHOP_ITEM_FIRST; held <= SHOP_ITEM_LAST; ++held)
+            {
+                if (IsTrinketItem(held) || player->GetItemCount(held, false) <= going[held])
+                    continue;
+                ItemTemplate const* hp = sObjectMgr->GetItemTemplate(held);
+                if (hp && (!cheapest || hp->BuyPrice < cheapestPrice))
+                {
+                    cheapest = held;
+                    cheapestPrice = hp->BuyPrice;
+                }
+            }
+            if (!cheapest)
+                return false;
+            player->ModifyMoney(int64(sObjectMgr->GetItemTemplate(cheapest)->SellPrice));
+            player->DestroyItemCount(cheapest, 1, true, false);
+            if (!HasRoomFor(player, entry, consumed))
+                return false;
+        }
+
+        ItemPosCountVec store;
+        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, store, entry, 1) != EQUIP_ERR_OK)
+            return false;
         player->ModifyMoney(-int64(price));
         TakeComponents(player, consumed);
-
-        uint8 const slot = BotSlotFor(player, proto);
-        if (slot != NULL_SLOT)
-            if (Item* old = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
-            {
-                uint32 const oldEntry = old->GetEntry();
-                if (oldEntry >= SHOP_ITEM_FIRST && oldEntry <= SHOP_ITEM_LAST)
-                    player->ModifyMoney(int64(old->GetTemplate()->SellPrice));
-                player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
-            }
-        uint16 dest = 0;
-        if (slot != NULL_SLOT && player->CanEquipNewItem(slot, dest, entry, false) == EQUIP_ERR_OK)
-            player->EquipNewItem(dest, entry, true);
-        else
-        {
-            ItemPosCountVec store;
-            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, store, entry, 1) == EQUIP_ERR_OK)
-                player->StoreNewItem(store, entry, true);
-        }
+        player->StoreNewItem(store, entry, true);
         return true;
     }
 

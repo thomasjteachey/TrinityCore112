@@ -367,16 +367,30 @@ namespace
             if (itr == KitPieces.end())
                 continue;
 
+            // Highest level first. Within the best piece's 5-level bracket, the
+            // heaviest armour the character can wear: a warrior at 45 had been
+            // handed whichever of cloth, mail or plate came first by entry.
+            uint32 best = 0;
+            ItemTemplate const* bestProto = nullptr;
             for (uint32 entry : itr->second)
             {
                 ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
                 if (!proto || proto->RequiredLevel > maxLevel)
                     continue;
+                if (bestProto && proto->RequiredLevel + 5 <= bestProto->RequiredLevel)
+                    break;
+                if (bestProto && !(proto->Class == ITEM_CLASS_ARMOR && proto->SubClass > bestProto->SubClass))
+                    continue;
 
                 uint16 dest = 0;
                 if (player->CanEquipNewItem(slot, dest, entry, false) == EQUIP_ERR_OK)
-                    return entry;
+                {
+                    best = entry;
+                    bestProto = proto;
+                }
             }
+            if (best)
+                return best;
         }
 
         return 0;
@@ -1240,14 +1254,6 @@ bool IsLoadoutSwapInProgress(Player const* player)
     return player && SwapInProgress == player;
 }
 
-bool IsFieldKitPiece(uint32 entry)
-{
-    for (auto const& [invType, entries] : KitPieces)
-        if (std::find(entries.begin(), entries.end(), entry) != entries.end())
-            return true;
-    return false;
-}
-
 bool HasBattlegroundLoadout(Player const* player)
 {
     if (!player)
@@ -1426,6 +1432,61 @@ void ApplyRiftLoadout(Player* player, uint8 kitLevel)
     }
 
     TC_LOG_DEBUG("bg.battleground", "Rift loadout: dressed {} in the field set: {} issued, {} put away.", player->GetName(), issued, putAway);
+}
+
+void UpgradeRiftKit(Player* player, uint8 kitLevel)
+{
+    if (!player || player->IsGameMaster())
+        return;
+
+    WorldSession const* session = player->GetSession();
+    bool const transient = !session || session->IsTransientPlayerSession();
+    if (!transient && !StashTablePresent)
+        return;
+
+    SwapGuard guard(player);
+    CharacterDatabaseTransaction trans = transient ? CharacterDatabaseTransaction(nullptr) : CharacterDatabase.BeginTransaction();
+    ObjectGuid::LowType const guid = player->GetGUID().GetCounter();
+
+    uint32 swapped = 0;
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
+            continue;
+        Item* worn = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (worn && !IsFieldKitDuplicateEntry(worn->GetEntry()))
+            continue;   // not the kit's
+
+        uint32 const oldEntry = worn ? worn->GetEntry() : 0;
+        if (worn)
+        {
+            if (!transient)
+                trans->Append(Trinity::StringFormat("DELETE FROM character_tournament_loadout WHERE guid = {} AND kind = {} AND id = {}",
+                    guid, uint32(LOADOUT_ROW_SUBSTITUTE), worn->GetGUID().GetCounter()).c_str());
+            player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+        }
+
+        uint32 const kit = PickKitPiece(player, slot, kitLevel);
+        uint16 dest = 0;
+        if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
+            continue;
+        Item* item = player->EquipNewItem(dest, kit, true);
+        if (!item)
+            continue;
+        ApplyStatsIfDead(player, item);
+        if (!transient)
+            InsertRow(trans, guid, LOADOUT_ROW_SUBSTITUTE, item->GetGUID().GetCounter(), PackPosition(item->GetBagSlot(), item->GetSlot()));
+        if (kit != oldEntry)
+            ++swapped;
+    }
+
+    if (!transient)
+    {
+        player->SaveInventoryAndGoldToDB(trans);
+        CharacterDatabase.CommitTransaction(trans);
+    }
+
+    TC_LOG_DEBUG("bg.battleground", "Rift loadout: {} moved up to the level-{} field kit, {} piece(s) changed.", player->GetName(), uint32(kitLevel), swapped);
 }
 
 void RestoreBattlegroundLoadout(Player* player)

@@ -1,6 +1,6 @@
 ## Interface: 30300
 ## Title: Centurion Summoner's Rift
-## Notes: Summoner's Rift skill picks: choose which spell to learn or rank up as the match levels you.
+## Notes: Summoner's Rift: skill picks, the shop's build paths, unit bars and League's inventory.
 ## Author: Centurion
 ## Version: 1.0
 ## DefaultState: Enabled
@@ -9,3 +9,4 @@
 RiftItems.lua
 CENTURION_Rift.lua
 RiftShop.lua
+RiftInventory.lua
