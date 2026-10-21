@@ -19,6 +19,7 @@
 
 #include "Battleground.h"
 #include "BattlegroundSRF.h"
+#include "Config.h"
 #include "Chat.h"
 #include "WorldPacket.h"
 #include "DatabaseEnv.h"
@@ -1482,8 +1483,11 @@ bool IsItemLocked(Player const* player, uint32 entry)
     return IsInMatch(player);
 }
 
+// What champions earn, as config (.reload config takes a change at once):
+// Centurion.Rift.PlayerXpRate / PlayerGoldRate, 1.5 each (owner, 2026-10-21).
 void AddExperience(Player* player, float leagueXp)
 {
+    leagueXp *= sConfigMgr->GetFloatDefault("Centurion.Rift.PlayerXpRate", 1.5f);
     if (!player || leagueXp <= 0.0f)
         return;
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
@@ -1509,6 +1513,7 @@ void AddExperience(Player* player, float leagueXp)
 
 void AddGold(Player* player, uint32 leagueGold, bool popup)
 {
+    leagueGold = uint32(std::lround(float(leagueGold) * sConfigMgr->GetFloatDefault("Centurion.Rift.PlayerGoldRate", 1.5f)));
     if (!player || !leagueGold || !IsInMatch(player))
         return;
     player->ModifyMoney(int32(leagueGold * COPPER_PER_LEAGUE_GOLD), false);

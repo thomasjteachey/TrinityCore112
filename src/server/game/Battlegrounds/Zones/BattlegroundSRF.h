@@ -337,6 +337,7 @@ private:
     void AwardGold(TeamId team, WorldObject const* where, uint32 leagueGold);
     void OnMinionDied(Minion const& minion, Creature const* corpse);
     uint8 AverageMatchLevel() const;
+    uint8 UnitLevel() const;
     void ApplyUnitLevel(Creature* creature, uint8 level, float healthScale);
     void UpdateProgression(uint32 diff);
 

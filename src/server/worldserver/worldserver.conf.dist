@@ -6197,3 +6197,24 @@ VanillaRaids.Naxx40.Nerf.Patchwerk = 0
 VanillaRaids.Naxx40.Nerf.Razuvious = 0
 VanillaRaids.Naxx40.Nerf.Gluth = 0
 
+#
+#    Centurion.Rift.PlayerGoldRate
+#    Centurion.Rift.PlayerXpRate
+#        Description: Summoner's Rift: the share of League's gold and experience a
+#                     champion earns (kills, minions, monsters, structures, the
+#                     passive gold). Read every time, so .reload config applies a
+#                     change at once.
+#        Default:     1.5 - (League's numbers and half again)
+
+Centurion.Rift.PlayerGoldRate = 1.5
+Centurion.Rift.PlayerXpRate = 1.5
+
+#
+#    Centurion.Rift.UnitLevelRate
+#        Description: Summoner's Rift: how fast minions, jungle monsters and
+#                     structures level with the champions - the share of the way
+#                     from the match's starting level (10) to the champions'
+#                     average level. .reload config applies a change at once.
+#        Default:     1.0 - (the champions' average level)
+
+Centurion.Rift.UnitLevelRate = 1.0

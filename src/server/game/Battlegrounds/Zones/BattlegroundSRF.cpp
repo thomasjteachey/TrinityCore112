@@ -2,6 +2,7 @@
 #include "BattlegroundSRFBrush.h"
 
 #include "BattlegroundMgr.h"
+#include "Config.h"
 #include "Creature.h"
 #include "GameTime.h"
 #include "CreatureAI.h"
@@ -406,6 +407,7 @@ uint32 constexpr SRF_PASSIVE_GOLD_TICK  = 5 * IN_MILLISECONDS;
 // with every wave, League's scaling over the course of a match.
 float constexpr SRF_MINION_GROWTH_PER_WAVE = 0.03f;
 uint32 constexpr SRF_STRUCTURE_LEVEL_TICK  = 30 * IN_MILLISECONDS;
+uint8 constexpr SRF_UNIT_BASE_LEVEL = 10;          // the match's starting level (RiftProgression)
 uint32 constexpr SRF_MAINTAIN_TICK         = 3 * IN_MILLISECONDS;
 // The denying rule: under this share of its health a minion turns neutral.
 float constexpr SRF_DENY_HEALTH_PCT     = 50.0f;
@@ -653,7 +655,7 @@ bool BattlegroundSRF::SpawnStructure(uint8 slot)
     }
     _structures[slot] = StructureState();
     _turrets[slot] = TurretState();
-    ApplyUnitLevel(GetBGCreature(slot, false), AverageMatchLevel(), 1.0f);
+    ApplyUnitLevel(GetBGCreature(slot, false), UnitLevel(), 1.0f);
     return true;
 }
 
@@ -1009,7 +1011,7 @@ void BattlegroundSRF::SpawnWave()
                 minion->SetReactState(REACT_DEFENSIVE);
                 // Baron's empowerment: the team's minions come out tougher while it lasts.
                 float const empowered = _baronTimer[team] ? SRF_BARON_MINION_HEALTH : 1.0f;
-                ApplyUnitLevel(minion, AverageMatchLevel(), (1.0f + SRF_MINION_GROWTH_PER_WAVE * float(_wavesSpawned)) * empowered);
+                ApplyUnitLevel(minion, UnitLevel(), (1.0f + SRF_MINION_GROWTH_PER_WAVE * float(_wavesSpawned)) * empowered);
                 Minion m;
                 m.Guid = minion->GetGUID();
                 m.Team = team;
@@ -2078,6 +2080,17 @@ uint8 BattlegroundSRF::AverageMatchLevel() const
     return count ? uint8(std::clamp<uint32>((total + count / 2) / count, 1, DEFAULT_MAX_LEVEL)) : 1;
 }
 
+// Minions, monsters and structures level with the champions: from the match's
+// starting level, Centurion.Rift.UnitLevelRate of the way the champions' average
+// has come (1.0: the average itself; .reload config takes a change).
+uint8 BattlegroundSRF::UnitLevel() const
+{
+    float const rate = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.UnitLevelRate", 1.0f));
+    float const average = float(AverageMatchLevel());
+    float const base = std::min(average, float(SRF_UNIT_BASE_LEVEL));
+    return uint8(std::clamp(std::lround(base + (average - base) * rate), 1L, long(DEFAULT_MAX_LEVEL)));
+}
+
 // A unit takes the players' level (and so their hit and miss odds) and keeps
 // the share of its health it had.
 void BattlegroundSRF::ApplyUnitLevel(Creature* creature, uint8 level, float healthScale)
@@ -2118,7 +2131,7 @@ void BattlegroundSRF::UpdateProgression(uint32 diff)
     if (_structureLevelTimer >= SRF_STRUCTURE_LEVEL_TICK)
     {
         _structureLevelTimer = 0;
-        uint8 const level = AverageMatchLevel();
+        uint8 const level = UnitLevel();
         for (uint8 slot = 0; slot < _structures.size(); ++slot)
             if (!_structures[slot].Destroyed)
                 if (Creature* creature = GetBGCreature(slot, false))
@@ -2399,7 +2412,7 @@ void BattlegroundSRF::SpawnCamp(uint8 camp)
         }
         // Neutral until struck; the scuttler never fights back.
         creature->SetReactState(SRF_CAMPS[camp].kind == SRF_CAMP_SCUTTLE ? REACT_PASSIVE : REACT_DEFENSIVE);
-        ApplyUnitLevel(creature, AverageMatchLevel(), 1.0f);
+        ApplyUnitLevel(creature, UnitLevel(), 1.0f);
         where = creature->GetPosition();
         ++spawned;
     }
