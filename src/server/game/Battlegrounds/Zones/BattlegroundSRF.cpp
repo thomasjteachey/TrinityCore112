@@ -16,6 +16,8 @@
 #include "RiftProgression.h"
 #include "SpellAuras.h"
 #include "SpellDefines.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "TemporarySummon.h"
 #include "WorldPacket.h"
 
@@ -360,6 +362,8 @@ float constexpr SRF_TURRET_CASTER_SHARE = 0.70f;
 float constexpr SRF_TURRET_PLAYER_SHARE = 0.20f;
 // Every turret shot at a quarter less than the shares above (owner, 2026-10-21).
 float constexpr SRF_TURRET_DAMAGE_SCALE = 0.75f;
+// The pause between one bolt landing and the next leaving the turret.
+uint32 constexpr SRF_TURRET_SHOT_GAP = 400;
 float constexpr SRF_TURRET_WARMUP_STEP  = 0.50f;
 uint8 constexpr SRF_TURRET_WARMUP_MAX   = 3;
 uint32 constexpr SRF_TURRET_WARMUP_RESET = 5 * IN_MILLISECONDS;
@@ -505,6 +509,7 @@ BattlegroundSRF::BattlegroundSRF()
     _unstuckTargets = 0;
     _unstuckPlaced = 0;
     _matchClock = 0;
+    _respawnAt.clear();
 }
 
 void BattlegroundSRF::AddPlayer(Player* player)
@@ -573,6 +578,7 @@ void BattlegroundSRF::Reset()
     _unstuckTargets = 0;
     _unstuckPlaced = 0;
     _matchClock = 0;
+    _respawnAt.clear();
     _stats.clear();
     _firstBlood = false;
     _scoreTimer = 0;
@@ -680,6 +686,8 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
 
+    UpdateRespawns();
+
     _structureTimer += diff;
     if (_structureTimer >= BG_SRF_STRUCTURE_CHECK_TICK)
     {
@@ -733,10 +741,10 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
     }
 
     _turretTimer += diff;
-    if (_turretTimer >= BG_SRF_TURRET_TICK)
+    if (_turretTimer >= BG_SRF_TURRET_STEP)
     {
+        UpdateTurrets(_turretTimer);
         _turretTimer = 0;
-        UpdateTurrets();
     }
 
     _fountainTimer += diff;
@@ -1867,6 +1875,10 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
     if (!victim || GetStatus() != STATUS_IN_PROGRESS)
         return;
     TeamId const victimTeam = GetTeamIndexByTeamId(GetPlayerTeam(victim->GetGUID()));
+    // League's death timer, the champion's own; CENTURION_Rift counts it down.
+    uint32 const respawn = DeathTimer(victim);
+    _respawnAt[victim->GetGUID()] = GameTime::GetGameTimeMS() + respawn;
+    RiftProgression::Tell(victim, Trinity::StringFormat("RIFTDEATH:{}", respawn));
     ChampionStats& vs = _stats[victim->GetGUID()];
     uint32 const victimStreak = vs.Streak;
     uint32 const victimDeaths = vs.DeathStreak;
@@ -1934,6 +1946,68 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
         uint32(killerTeam), arg, uint32(killer->GetClass()), uint32(victim->GetClass()), killer->GetGUID().GetCounter(),
         victim->GetGUID().GetCounter()));
     CheckAce(victimTeam);
+}
+
+// League's death timer: the base respawn wait for the champion's level, longer
+// the later the match (the time impact factor: +0.425% every 30 sec from 15:00,
+// +0.30% from 30:00, +1.45% from 45:00, at most +50%).
+uint32 BattlegroundSRF::DeathTimer(Player const* player) const
+{
+    static float constexpr BASE_RESPAWN_WAIT[18] =
+        { 10.0f, 10.0f, 12.0f, 12.0f, 14.0f, 16.0f, 20.0f, 25.0f, 28.0f, 32.5f, 35.0f, 37.5f, 40.0f, 42.5f, 45.0f, 47.5f, 50.0f, 52.5f };
+    uint8 const level = std::clamp<uint8>(RiftProgression::GetLeagueLevel(player), 1, 18);
+    uint32 const halfMinutes = _matchClock / (30 * IN_MILLISECONDS);
+    float impact = 0.0f;
+    if (halfMinutes > 30)
+        impact += 0.425f * float(std::min<uint32>(halfMinutes, 60) - 30);
+    if (halfMinutes > 60)
+        impact += 0.30f * float(std::min<uint32>(halfMinutes, 90) - 60);
+    if (halfMinutes > 90)
+        impact += 1.45f * float(halfMinutes - 90);
+    impact = std::min(impact, 50.0f);
+    return uint32(BASE_RESPAWN_WAIT[level - 1] * (1.0f + impact / 100.0f) * float(IN_MILLISECONDS));
+}
+
+// The spirit guides never call a wave: UpdateRespawns brings each champion back.
+uint32 BattlegroundSRF::GetResurrectionInterval() const
+{
+    return 24 * HOUR * IN_MILLISECONDS;
+}
+
+// A champion whose timer has run out is back at its fountain - released or not,
+// full health and mana, as in League. One found dead with no timer (back from a
+// disconnect, say) gets one now: with no waves it would never come back.
+void BattlegroundSRF::UpdateRespawns()
+{
+    uint32 const now = GameTime::GetGameTimeMS();
+    for (auto const& [guid, bgPlayer] : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player || player->GetBattleground() != this)
+            continue;
+        auto const itr = _respawnAt.find(guid);
+        if (player->IsAlive())
+        {
+            if (itr != _respawnAt.end())
+                _respawnAt.erase(itr);
+            continue;
+        }
+        if (itr == _respawnAt.end())
+        {
+            uint32 const respawn = DeathTimer(player);
+            _respawnAt[guid] = now + respawn;
+            RiftProgression::Tell(player, Trinity::StringFormat("RIFTDEATH:{}", respawn));
+            continue;
+        }
+        if (now < itr->second)
+            continue;
+        _respawnAt.erase(itr);
+        RemovePlayerFromResurrectQueue(player->GetGUID());
+        player->ResurrectPlayer(1.0f);
+        player->SpawnCorpseBones(false);
+        Position const at = FountainPos(GetTeamIndexByTeamId(GetPlayerTeam(player->GetGUID())));
+        player->NearTeleportTo(at.GetPositionX(), at.GetPositionY(), at.GetPositionZ(), at.GetOrientation());
+    }
 }
 
 // League's bounty (Classic): 300 a kill; a victim on a spree is worth more - 150
@@ -2114,7 +2188,10 @@ Unit* BattlegroundSRF::TurretCallForHelp(Creature* turret, TeamId team) const
     return nullptr;
 }
 
-void BattlegroundSRF::UpdateTurrets()
+// A turret fires every BG_SRF_TURRET_TICK, and never before its last bolt has
+// landed: at 50 yd a bolt flies longer than that, so it landed just as the next
+// one left - a champion died "before the shot came out" (owner, 2026-10-21).
+void BattlegroundSRF::UpdateTurrets(uint32 elapsed)
 {
     Map* map = FindBgMap();
     if (!map)
@@ -2130,6 +2207,15 @@ void BattlegroundSRF::UpdateTurrets()
 
         TeamId const team = SlotTeam(slot);
         TurretState& ts = _turrets[slot];
+        ts.SinceChampionShot += elapsed;
+        if (ts.SinceChampionShot >= SRF_TURRET_WARMUP_RESET)
+            ts.WarmStacks = 0;
+        if (ts.Cooldown > elapsed)
+        {
+            ts.Cooldown -= elapsed;
+            continue;
+        }
+        ts.Cooldown = 0;
         Unit* target = !ts.Target.IsEmpty() ? ObjectAccessor::GetUnit(*turret, ts.Target) : nullptr;
         if (!target || !target->IsAlive() || target->GetMap() != map
             || turret->GetExactDist2d(target) > SRF_TURRET_RANGE || !turret->IsValidAttackTarget(target))
@@ -2145,9 +2231,6 @@ void BattlegroundSRF::UpdateTurrets()
                 ts.Target = caller->GetGUID();
             }
 
-        ts.SinceChampionShot += BG_SRF_TURRET_TICK;
-        if (ts.SinceChampionShot >= SRF_TURRET_WARMUP_RESET)
-            ts.WarmStacks = 0;
         if (!target)
             continue;
 
@@ -2168,8 +2251,14 @@ void BattlegroundSRF::UpdateTurrets()
                     break;
                 }
         Creature* eye = TurretEye(slot, turret);
-        FireBolt(eye ? static_cast<Unit*>(eye) : turret, target, team == TEAM_ALLIANCE ? BG_SRF_SPELL_ORDER_TURRET_SHOT : BG_SRF_SPELL_CHAOS_TURRET_SHOT,
-            std::max<int32>(1, int32(target->GetMaxHealth() * share * SRF_TURRET_DAMAGE_SCALE)));
+        Unit* source = eye ? static_cast<Unit*>(eye) : turret;
+        uint32 const shot = team == TEAM_ALLIANCE ? BG_SRF_SPELL_ORDER_TURRET_SHOT : BG_SRF_SPELL_CHAOS_TURRET_SHOT;
+        FireBolt(source, target, shot, std::max<int32>(1, int32(target->GetMaxHealth() * share * SRF_TURRET_DAMAGE_SCALE)));
+        uint32 flight = 0;
+        if (SpellInfo const* info = sSpellMgr->GetSpellInfo(shot))
+            if (info->Speed > 0.0f)
+                flight = uint32(source->GetDistance(target) / info->Speed * float(IN_MILLISECONDS));
+        ts.Cooldown = std::max<uint32>(BG_SRF_TURRET_TICK, flight + SRF_TURRET_SHOT_GAP);
     }
 }
 

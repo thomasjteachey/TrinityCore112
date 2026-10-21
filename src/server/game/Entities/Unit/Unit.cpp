@@ -2256,9 +2256,11 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
     }
 
     // If this is a creature and it attacks from behind it has a probability to daze it's victim
+    // (not a champion in Summoner's Rift: League has no daze, and its minions dazed players walking past)
     if ((damageInfo->HitOutCome == MELEE_HIT_CRIT || damageInfo->HitOutCome == MELEE_HIT_CRUSHING || damageInfo->HitOutCome == MELEE_HIT_NORMAL || damageInfo->HitOutCome == MELEE_HIT_GLANCING) &&
         GetTypeId() != TYPEID_PLAYER && !ToCreature()->IsControlledByPlayer() && !victim->HasInArc(float(M_PI), this)
-        && (victim->GetTypeId() == TYPEID_PLAYER || !victim->ToCreature()->isWorldBoss())&& !victim->IsVehicle())
+        && (victim->GetTypeId() == TYPEID_PLAYER || !victim->ToCreature()->isWorldBoss())&& !victim->IsVehicle()
+        && !(victim->GetTypeId() == TYPEID_PLAYER && RiftProgression::IsInMatch(victim->ToPlayer())))
     {
         // 20% base chance
         float chance = 20.0f;

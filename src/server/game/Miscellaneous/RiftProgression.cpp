@@ -137,6 +137,7 @@ namespace
     struct Chain
     {
         std::vector<uint32> Ranks;   // the ranks the character knows, lowest first
+        bool Talent = false;         // its first rank is a talent's (Trueshot Aura): Ranks are the trained ones after it
     };
 
     struct LearnedTalent
@@ -173,6 +174,7 @@ namespace
         std::unordered_map<uint32 /*spell*/, uint32 /*first rank*/> SpellToChain;
         std::map<uint32 /*first rank*/, uint8 /*ranks unlocked*/> Unlocked;
         std::unordered_set<uint32> FreeChains;     // whitelisted free: usable from the start
+        std::unordered_set<uint32> TalentKnown;    // talent chains whose talent is learned in the match
         std::unordered_set<uint32> Removed;        // class spells off the whitelist: out of the match
         uint32 PendingPicks = 0;
 
@@ -180,6 +182,7 @@ namespace
         std::vector<SavedButton> RealButtons;     // the action bars it walked in with
         std::unordered_set<uint8> Returned;       // its buttons standing again (RefillSavedButtons)
         bool WasAlive = true;                     // at the last SyncItems: a revive re-checks the kit
+        uint32 SentSpeed = 0;                     // the run speed CENTURION_Rift was last told (RIFTSPEED)
 
         // What the client's spellbook was told against what it would hold
         // normally (every active spell): active spells taken out of it, and
@@ -330,7 +333,11 @@ namespace
                 itr = state.Chains.erase(itr);
                 continue;
             }
-            if (status == 2)
+            // The ranks after a talent are picks, once the talent is learned in
+            // the match - never free: learning Trueshot Aura at 30 handed over all
+            // three ranks, the level-50 and -60 ones too.
+            chain.Talent = GetTalentSpellPos(itr->first) != nullptr;
+            if (status == 2 && !chain.Talent)
                 state.FreeChains.insert(itr->first);
             for (uint32 spell : chain.Ranks)
                 state.SpellToChain[spell] = itr->first;
@@ -453,7 +460,7 @@ namespace
         {
             auto const itr = state.Unlocked.find(first);
             uint8 const have = itr != state.Unlocked.end() ? itr->second : 0;
-            if (have >= chain.Ranks.size())
+            if (have >= chain.Ranks.size() || (chain.Talent && !state.TalentKnown.count(first)))
                 continue;
             SpellInfo const* next = sSpellMgr->GetSpellInfo(chain.Ranks[have]);
             if (next && next->SpellLevel <= state.MatchLevel)
@@ -1344,11 +1351,18 @@ void OnTalentLearned(Player* player)
         return;
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
     State* state = Find(player);
-    if (!state || IsTransient(player))
+    if (!state)
+        return;
+    // A talent with trained ranks after it: those ranks are picks from now on.
+    for (auto const& [first, chain] : state->Chains)
+        if (chain.Talent && player->HasSpell(first))
+            state->TalentKnown.insert(first);
+    if (IsTransient(player))
         return;
     if (RefillSavedButtons(player, *state))
         player->SendActionButtons(1);
     RetargetButtons(player, *state);
+    SendState(player, *state);
 }
 
 int32 MatchRidingSkill(Player const* player)
@@ -1375,6 +1389,14 @@ void SyncItems(Player* player)
     if (!state)
         return;
     SyncItemsFor(player, *state);
+    // The run speed CENTURION_Rift shows on its inventory pane, as a share of the
+    // normal run (WoW's addon API has only the speed of the moment): sent when it changes.
+    uint32 const speed = uint32(player->GetSpeedRate(MOVE_RUN) * 100.0f + 0.5f);
+    if (speed != state->SentSpeed)
+    {
+        state->SentSpeed = speed;
+        SendLine(player, Trinity::StringFormat("RIFTSPEED:{}", speed));
+    }
     // The kit follows the match level. Armour goes on in combat in a match
     // (Player::CanEquipItem asks IsInMatch): the level-up is a minion kill,
     // mid-fight, and the swap once took every piece off and put none back.
@@ -1865,6 +1887,7 @@ void HandleStateRequest(Player* player, std::string_view /*argument*/)
     {
         SendState(player, *state);
         SendBase(player, CanSpendPoints(player, false));
+        SendLine(player, Trinity::StringFormat("RIFTSPEED:{}", uint32(player->GetSpeedRate(MOVE_RUN) * 100.0f + 0.5f)));
     }
 }
 

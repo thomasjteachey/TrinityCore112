@@ -163,7 +163,8 @@ enum BG_SRF_Constants
     // A wave that cannot be fought off must not pile up without end.
     BG_SRF_MAX_MINIONS_PER_TEAM  = 90,
     BG_SRF_MINION_TICK           = 500,
-    BG_SRF_TURRET_TICK           = 1200,
+    BG_SRF_TURRET_TICK           = 1200,  // the shortest time between a turret's shots
+    BG_SRF_TURRET_STEP           = 100,   // how often the turrets are looked at
     BG_SRF_FOUNTAIN_TICK         = 1 * IN_MILLISECONDS,
     BG_SRF_STRUCTURE_CHECK_TICK  = 500,
     BG_SRF_INHIBITOR_RESPAWN     = 5 * MINUTE * IN_MILLISECONDS,
@@ -204,6 +205,10 @@ public:
 
     WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
     bool HandlePlayerUnderMap(Player* player) override;
+
+    // League's death timers: no spirit-guide waves - every champion comes back
+    // at its fountain on its own clock (UpdateRespawns).
+    uint32 GetResurrectionInterval() const override;
 
     // At its own base - the fountain and its shop - the one place a character
     // spends skill picks and talent points (RiftProgression).
@@ -272,6 +277,7 @@ private:
         ObjectGuid Eye;
         uint8 WarmStacks = 0;          // League's Warming Up: champion hits in a row
         uint32 SinceChampionShot = 0;  // ms since the last shot at a champion
+        uint32 Cooldown = 0;           // ms before it may fire: its last bolt lands first
     };
 
     bool SpawnStructure(uint8 slot);
@@ -287,7 +293,7 @@ private:
     Unit* FindMinionTarget(Creature* minion, TeamId team, float range, ObjectGuid ignore = ObjectGuid::Empty) const;
     bool UnstickMinion(Creature* creature, Minion& m);
 
-    void UpdateTurrets();
+    void UpdateTurrets(uint32 elapsed);
     Unit* PickTurretTarget(Creature* turret, TeamId team) const;
     Unit* TurretCallForHelp(Creature* turret, TeamId team) const;
     // League's targeting: who a unit is attacking, and how much a minion wants a target.
@@ -304,6 +310,8 @@ private:
     void FireBolt(Unit* source, Unit* target, uint32 spellId, int32 damage);
     Creature* TurretEye(uint8 slot, Creature* turret);
     void Report(uint32 diff);
+    uint32 DeathTimer(Player const* player) const;
+    void UpdateRespawns();
     void UpdateCasterAttack(Creature* caster, Minion& minion, Unit* victim);
 
     void UpdateFountains();
@@ -346,6 +354,7 @@ private:
     uint32 _boltsRefused;
     uint32 _lastRefusal;
     uint32 _matchClock;            // ms since the gates opened (wave cadence)
+    std::unordered_map<ObjectGuid, uint32> _respawnAt;   // game time (ms) a dead champion is back
 
     struct BrushState
     {
