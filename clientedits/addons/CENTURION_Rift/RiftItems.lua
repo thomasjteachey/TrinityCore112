@@ -39,4 +39,7 @@ CENTURION_RIFT_ITEMS = {
 	[991035] = { name = "Trinity Force", gold = 3700, from = { 991019, 991020, 991021 }, tier = "legendary", tags = { "attack", "magic", "defense", "movement" } },
 	[991036] = { name = "Infinity Edge", gold = 3800, from = { 991012, 991011, 991015 }, tier = "legendary", tags = { "attack" } },
 	[991037] = { name = "Zhonya's Hourglass", gold = 3260, from = { 991013, 991016 }, tier = "legendary", tags = { "magic", "defense" } },
+	[991038] = { name = "Summoner's Steed", gold = 450, from = {  }, tier = "basic", tags = { "movement" } },
+	[991039] = { name = "Swift Summoner's Steed", gold = 1150, from = { 991038 }, tier = "epic", tags = { "movement" } },
+	[991040] = { name = "Total Biscuit", gold = 50, from = {  }, tier = "basic", tags = { "defense", "magic" } },
 };

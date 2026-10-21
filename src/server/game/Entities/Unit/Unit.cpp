@@ -51,6 +51,7 @@
 #include "Log.h"
 #include "LootMgr.h"
 #include "Miscellaneous/BotPvePower.h"
+#include "Miscellaneous/RiftProgression.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
 #include "MovementGenerator.h"
@@ -10317,7 +10318,9 @@ uint16 GetHighestRidingSkillValue(Player const* player)
 
 int32 GetPlainsrunningMountSpeedMod(Player const* player)
 {
-    uint16 const ridingSkill = GetHighestRidingSkillValue(player);
+    // Summoner's Rift counts the shop steed held, not the character's own riding.
+    int32 const matchRiding = RiftProgression::MatchRidingSkill(player);
+    uint16 const ridingSkill = matchRiding >= 0 ? uint16(matchRiding) : GetHighestRidingSkillValue(player);
 
     if (ridingSkill >= 100)
         return 100;

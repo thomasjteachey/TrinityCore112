@@ -34,9 +34,9 @@ local function IsShopItem(id)
 	return id and id >= SHOP_FIRST and id <= SHOP_LAST;
 end
 
--- The trinket slot's items (wards, lenses). None in the shop yet.
+-- The trinket slot's items: the Rift's steeds (the server's IsTrinketItem).
 local function IsTrinket(id)
-	return false;
+	return id == 991038 or id == 991039;
 end
 
 -- ------------------------------------------------------------------ frame

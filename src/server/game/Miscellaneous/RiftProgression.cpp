@@ -189,6 +189,8 @@ namespace
         std::map<uint32, uint32> ItemSpells;
         // The field kit bracket the champion is dressed for (SyncItems swaps it).
         uint8 KitApplied = 0;
+        // Riding as the match counts it (the steed held), last applied by SyncItems.
+        uint16 Riding = 0;
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -584,20 +586,44 @@ namespace
     uint32 constexpr RIFT_SPELL_LAST = 94160;
 
     bool IsShopItem(uint32 entry) { return entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST; }
-    // The trinket slot's items (League's wards and lenses). None in the shop yet.
-    bool IsTrinketItem(uint32 /*entry*/) { return false; }
+
+    // The Rift's mounts (rift_shop.py's extras): the trinket slot holds one, and
+    // they are the only mounts that work in a match.
+    uint32 constexpr ITEM_STEED = 991038;          // 60%, spell 94150
+    uint32 constexpr ITEM_SWIFT_STEED = 991039;    // 100%, spell 94151, built from the steed
+    uint32 constexpr SPELL_STEED = 94150;
+    uint32 constexpr SPELL_SWIFT_STEED = 94151;
+    uint32 constexpr SPELL_PLAINSRUNNING = 89153;  // the Tauren's run-mount: rides at the steed's speed
+    bool IsTrinketItem(uint32 entry) { return entry == ITEM_STEED || entry == ITEM_SWIFT_STEED; }
 
     // Item slots the held shop items fill, those going into a purchase left out.
+    // A stack (League's potions, the biscuit) fills one slot.
     uint32 HeldItemSlots(Player const* player, std::vector<uint32> const& consumed)
     {
         uint32 held = 0;
         for (uint32 entry = SHOP_ITEM_FIRST; entry <= SHOP_ITEM_LAST; ++entry)
-            if (!IsTrinketItem(entry))
-                held += player->GetItemCount(entry, false);
-        for (uint32 entry : consumed)
-            if (!IsTrinketItem(entry) && held)
-                --held;
+        {
+            if (IsTrinketItem(entry))
+                continue;
+            uint32 const count = player->GetItemCount(entry, false);
+            ItemTemplate const* proto = count ? sObjectMgr->GetItemTemplate(entry) : nullptr;
+            if (!proto)
+                continue;
+            uint32 const going = uint32(std::count(consumed.begin(), consumed.end(), entry));
+            uint32 const left = count > going ? count - going : 0;
+            held += proto->GetMaxStackSize() > 1 ? (left ? 1 : 0) : left;
+        }
         return held;
+    }
+
+    // Riding, as the match counts it: the steed held (75 = 60%, 150 = 100%).
+    uint16 MatchRiding(Player const* player)
+    {
+        if (player->GetItemCount(ITEM_SWIFT_STEED, false))
+            return 150;
+        if (player->GetItemCount(ITEM_STEED, false))
+            return 75;
+        return 0;
     }
 
     struct ItemEffects
@@ -699,12 +725,29 @@ namespace
                 if (AuraEffect* effect = aura->GetEffect(i))
                     effect->ChangeAmount(aura->GetSpellInfo()->GetEffect(SpellEffIndex(i)).CalcValue(player) * int32(count));
         }
+
+        // The steed held is the champion's riding: Plainsrunning follows it, and a
+        // steed no longer held (sold, built into the swift one) stops carrying it.
+        uint16 const riding = MatchRiding(player);
+        if (riding != state.Riding)
+        {
+            state.Riding = riding;
+            if (riding < 150)
+                player->RemoveAurasDueToSpell(SPELL_SWIFT_STEED);
+            if (riding < 75)
+                player->RemoveAurasDueToSpell(SPELL_STEED);
+            if (player->HasAura(SPELL_PLAINSRUNNING))
+                player->UpdateSpeed(MOVE_RUN);
+        }
     }
 
     void TakeItemAuras(Player* player, State& state)
     {
         player->RemoveAurasDueToSpell(SPELL_ITEM_STATS);
         player->RemoveAurasDueToSpell(SPELL_ITEM_RESIST);
+        player->RemoveAurasDueToSpell(SPELL_STEED);
+        player->RemoveAurasDueToSpell(SPELL_SWIFT_STEED);
+        state.Riding = 0;
         for (auto const& [spell, count] : state.ItemSpells)
             player->RemoveAurasDueToSpell(spell);
         state.ItemSpells.clear();
@@ -1166,6 +1209,10 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
         return false;
     if (state->Removed.count(spellInfo->Id))
         return true;
+    // A match is ridden on the shop's steeds (and Plainsrunning, at the steed's
+    // speed), not on the mounts a character brought: buying one is the point.
+    if (spellInfo->HasAura(SPELL_AURA_MOUNTED))
+        return spellInfo->Id != SPELL_STEED && spellInfo->Id != SPELL_SWIFT_STEED && spellInfo->Id != SPELL_PLAINSRUNNING;
     auto const chain = state->SpellToChain.find(spellInfo->Id);
     if (chain == state->SpellToChain.end())
         return false;
@@ -1174,6 +1221,14 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
     std::vector<uint32> const& ranks = state->Chains.at(chain->second).Ranks;
     auto const pos = std::find(ranks.begin(), ranks.end(), spellInfo->Id);
     return pos == ranks.end() || size_t(pos - ranks.begin()) >= have;
+}
+
+int32 MatchRidingSkill(Player const* player)
+{
+    if (!player)
+        return -1;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    return Find(player) ? int32(MatchRiding(player)) : -1;
 }
 
 bool ShowsInSpellbook(Player const* player, uint32 spell, bool active)

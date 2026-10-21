@@ -87,6 +87,9 @@ namespace RiftProgression
     TC_GAME_API SpellInfo const* AdjustCast(Player const* player, SpellInfo const* spellInfo);
     // Spell::CheckCast: true when this spell is not unlocked in the match yet.
     TC_GAME_API bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo);
+    // Riding as a match counts it - the shop steed held: 0, 75 (60%) or 150 (100%) -
+    // for Plainsrunning's speed (Unit::UpdateSpeed); -1 outside a match.
+    TC_GAME_API int32 MatchRidingSkill(Player const* player);
     // Player::SendInitialSpells: whether the client's spellbook lists this spell.
     // In a match only the best unlocked rank of each ability is shown (spells stay
     // known server side, so nothing is written down or relearned); outside one,

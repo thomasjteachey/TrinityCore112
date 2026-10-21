@@ -656,6 +656,18 @@ void BattlegroundSRF::StartingEventOpenDoors()
 
 void BattlegroundSRF::PostUpdateImpl(uint32 diff)
 {
+    // The scoreboard from the moment champions are in, the prep phase included
+    // (it only started with the gates: an empty board until then).
+    if (GetStatus() == STATUS_WAIT_JOIN || GetStatus() == STATUS_IN_PROGRESS)
+    {
+        _scoreTimer += diff;
+        if (_scoreTimer >= SRF_SCORE_TICK)
+        {
+            _scoreTimer = 0;
+            SendScores();
+        }
+    }
+
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
 
@@ -727,13 +739,6 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
 
     UpdateProgression(diff);
     Report(diff);
-
-    _scoreTimer += diff;
-    if (_scoreTimer >= SRF_SCORE_TICK)
-    {
-        _scoreTimer = 0;
-        SendScores();
-    }
 
     _brushTimer += diff;
     if (_brushTimer >= SRF_BRUSH_TICK)
