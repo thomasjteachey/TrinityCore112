@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="CENTURIONRIFT_SCORE" runOnUp="true" header="CENTURIONRIFT">
+		CENTURION_RiftScore_Key(keystate);
+	</Binding>
+</Bindings>

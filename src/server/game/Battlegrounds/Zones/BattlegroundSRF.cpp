@@ -287,6 +287,9 @@ uint32 constexpr SRF_BRUSH_REVEAL       = 1500;
 // Centurion spell 94142 "Brush": the buff a hidden champion wears, so they can see it.
 uint32 constexpr SRF_SPELL_BRUSH        = 94142;
 uint32 constexpr SRF_ITEM_SYNC_MS       = 500;
+uint32 constexpr SRF_SCORE_TICK         = 2000;    // the scoreboard feed (RIFTSCORE)
+uint32 constexpr SRF_MULTIKILL_MS       = 10000;   // League: each kill of a multikill within 10 s of the last...
+uint32 constexpr SRF_PENTAKILL_MS       = 30000;   // ...and the pentakill within 30 s of the quadra
 
 // The brush patch in League's grid cell holding (lx, lz), 0 for none.
 uint8 BrushCellAt(float lx, float lz)
@@ -384,6 +387,8 @@ float constexpr SRF_XP_KILL_SHARED_MAX  = 891.0f;
 uint32 constexpr SRF_GOLD_MELEE_MINION  = 20;
 uint32 constexpr SRF_GOLD_CASTER_MINION = 15;
 uint32 constexpr SRF_GOLD_KILL          = 300;
+uint32 constexpr SRF_GOLD_FIRST_BLOOD   = 100;     // on top of the kill
+uint32 constexpr SRF_GOLD_BOUNTY_MAX    = 1000;    // a shutdown at most
 uint32 constexpr SRF_GOLD_STRUCTURE     = 150;     // to every player of the side that destroys it
 uint32 constexpr SRF_GOLD_PASSIVE       = 10;      // every SRF_PASSIVE_GOLD_TICK: League's ~1.9 a second
 uint32 constexpr SRF_PASSIVE_GOLD_TICK  = 5 * IN_MILLISECONDS;
@@ -559,6 +564,9 @@ void BattlegroundSRF::Reset()
     _unstuckTargets = 0;
     _unstuckPlaced = 0;
     _matchClock = 0;
+    _stats.clear();
+    _firstBlood = false;
+    _scoreTimer = 0;
 }
 
 bool BattlegroundSRF::SetupBattleground()
@@ -643,6 +651,7 @@ void BattlegroundSRF::StartingEventOpenDoors()
         _camps[camp].Up = false;
         _camps[camp].Timer = SRF_CAMPS[camp].firstSpawn;
     }
+    AnnounceEvent("WELCOME", TEAM_NEUTRAL);
 }
 
 void BattlegroundSRF::PostUpdateImpl(uint32 diff)
@@ -668,6 +677,7 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
             // A fallen inhibitor stands back up.
             SpawnStructure(slot);
             PSendMessageToAll(BG_SRF_STRING_INHIBITOR_RESPAWNED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, TeamName(SlotTeam(slot)));
+            AnnounceEvent("INHIBRESPAWN", SlotTeam(slot));
             RefreshVulnerability();
         }
         UpdateStructures();
@@ -717,6 +727,13 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
 
     UpdateProgression(diff);
     Report(diff);
+
+    _scoreTimer += diff;
+    if (_scoreTimer >= SRF_SCORE_TICK)
+    {
+        _scoreTimer = 0;
+        SendScores();
+    }
 
     _brushTimer += diff;
     if (_brushTimer >= SRF_BRUSH_TICK)
@@ -857,10 +874,12 @@ void BattlegroundSRF::OnStructureDestroyed(uint8 slot)
         case BG_SRF_KIND_INHIBITOR:
             st.RespawnTimer = BG_SRF_INHIBITOR_RESPAWN;
             PSendMessageToAll(BG_SRF_STRING_INHIBITOR_DESTROYED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, TeamName(destroyer));
+            AnnounceEvent("INHIB", destroyer);
             RewardHonorToTeam(BG_SRF_HONOR_INHIBITOR, TeamValue(destroyer));
             break;
         default:
             PSendMessageToAll(BG_SRF_STRING_TURRET_DESTROYED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, TeamName(destroyer));
+            AnnounceEvent("TURRET", destroyer);
             RewardHonorToTeam(BG_SRF_HONOR_TURRET, TeamValue(destroyer));
             break;
     }
@@ -974,6 +993,7 @@ void BattlegroundSRF::SpawnWave()
         // every one - every 30 seconds in the chat was noise.
         if (!_wavesSpawned)
             PSendMessageToAll(BG_SRF_STRING_MINIONS_SPAWNED, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
+            AnnounceEvent("MINIONS", TEAM_NEUTRAL);
         ++_wavesSpawned;
     }
 }
@@ -1806,6 +1826,7 @@ void BattlegroundSRF::HandleKillUnit(Creature* creature, Player* killer)
         it->Denied = true;
         return;
     }
+    ++_stats[killer->GetGUID()].Minions;
     if (GetCustomRules().RiftLastHitGold)
         RiftProgression::AddGold(killer, it->Caster ? SRF_GOLD_CASTER_MINION : SRF_GOLD_MELEE_MINION, true);
 }
@@ -1813,13 +1834,127 @@ void BattlegroundSRF::HandleKillUnit(Creature* creature, Player* killer)
 void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
 {
     Battleground::HandleKillPlayer(victim, killer);
-    if (!victim || !killer || killer == victim || GetStatus() != STATUS_IN_PROGRESS)
+    if (!victim || GetStatus() != STATUS_IN_PROGRESS)
         return;
-    TeamId const killerTeam = GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID()));
-    if (killerTeam == GetTeamIndexByTeamId(GetPlayerTeam(victim->GetGUID())))
+    TeamId const victimTeam = GetTeamIndexByTeamId(GetPlayerTeam(victim->GetGUID()));
+    ChampionStats& vs = _stats[victim->GetGUID()];
+    uint32 const victimStreak = vs.Streak;
+    uint32 const victimDeaths = vs.DeathStreak;
+    ++vs.Deaths;
+    ++vs.DeathStreak;
+    vs.Streak = 0;
+    vs.Multi = 0;
+
+    // No champion to credit - a turret, a minion, a monster: League's "Executed".
+    if (!killer || killer == victim || GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID())) == victimTeam)
+    {
+        Announce(Trinity::StringFormat("RIFTANN:EXECUTED::{}:{}:0::{}", victim->GetName(), uint32(OtherTeam(victimTeam)), uint32(victim->GetClass())));
+        CheckAce(victimTeam);
         return;
-    RiftProgression::AddGold(killer, SRF_GOLD_KILL, true);
+    }
+
+    TeamId const killerTeam = OtherTeam(victimTeam);
+    ChampionStats& ks = _stats[killer->GetGUID()];
+    bool const firstBlood = !_firstBlood;
+    _firstBlood = true;
+    uint32 const gold = KillBounty(victimStreak, victimDeaths) + (firstBlood ? SRF_GOLD_FIRST_BLOOD : 0);
+    ++ks.Kills;
+    ++ks.Streak;
+    ks.DeathStreak = 0;
+    uint32 const window = ks.Multi == 4 ? SRF_PENTAKILL_MS : SRF_MULTIKILL_MS;
+    ks.Multi = ks.Multi && _matchClock - ks.LastKillMs <= window ? ks.Multi + 1 : 1;
+    ks.LastKillMs = _matchClock;
+
+    // Assists: League's are the allies who damaged the victim in its last 10 s;
+    // here, the allies fighting next to the killer when it fell (the experience
+    // range). They share half the kill's gold, as in League.
+    std::vector<Player*> assists;
+    for (Player* ally : TeamPlayers(killerTeam))
+        if (ally != killer && ally->IsAlive() && ally->IsInCombat() && ally->GetExactDist2d(victim) <= SRF_XP_RANGE)
+            assists.push_back(ally);
+    for (Player* ally : assists)
+    {
+        ++_stats[ally->GetGUID()].Assists;
+        RiftProgression::AddGold(ally, std::max<uint32>(1, gold / 2 / uint32(assists.size())), true);
+    }
+    RiftProgression::AddGold(killer, gold, true);
     AwardKillExperience(killerTeam, victim, killer);
+
+    // One announcement a kill, League's order: a multikill, a shutdown, first
+    // blood, a spree, or the kill itself.
+    static char const* const MULTI[] = { "DOUBLE", "TRIPLE", "QUADRA", "PENTA" };
+    char const* kind = "KILL";
+    uint32 arg = gold;
+    if (ks.Multi >= 2)
+        kind = MULTI[std::min<uint32>(ks.Multi, 5) - 2];
+    else if (victimStreak >= 3)
+        kind = "SHUTDOWN";
+    else if (firstBlood)
+        kind = "FIRSTBLOOD";
+    else if (ks.Streak >= 3)
+    {
+        kind = "SPREE";
+        arg = ks.Streak;
+    }
+    Announce(Trinity::StringFormat("RIFTANN:{}:{}:{}:{}:{}:{}:{}", kind, killer->GetName(), victim->GetName(), uint32(killerTeam), arg,
+        uint32(killer->GetClass()), uint32(victim->GetClass())));
+    CheckAce(victimTeam);
+}
+
+// League's bounty (Classic): 300 a kill; a victim on a spree is worth more - 150
+// at 3 kills, 150 more each kill after, to 1000 in all; one that keeps dying is
+// worth less - 15% less each death in a row past the first, to a fifth.
+uint32 BattlegroundSRF::KillBounty(uint32 victimStreak, uint32 victimDeathStreak) const
+{
+    if (victimStreak >= 3)
+        return std::min<uint32>(SRF_GOLD_KILL + 150 * (victimStreak - 2), SRF_GOLD_BOUNTY_MAX);
+    if (victimDeathStreak >= 1)
+        return uint32(float(SRF_GOLD_KILL) * std::max(0.2f, 1.0f - 0.15f * float(victimDeathStreak)));
+    return SRF_GOLD_KILL;
+}
+
+void BattlegroundSRF::Announce(std::string const& line)
+{
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+        for (Player* player : TeamPlayers(team))
+            RiftProgression::Tell(player, line);
+}
+
+// A structure, a monster, the waves, the end: RIFTANN:<kind>:::<team>:<arg>.
+void BattlegroundSRF::AnnounceEvent(char const* kind, TeamId team, uint32 arg)
+{
+    Announce(Trinity::StringFormat("RIFTANN:{}:::{}:{}::", kind, uint32(team), arg));
+}
+
+// Ace: every champion of a team is dead.
+void BattlegroundSRF::CheckAce(TeamId deadTeam)
+{
+    std::vector<Player*> const team = TeamPlayers(deadTeam);
+    if (team.size() < 2)
+        return;
+    for (Player* player : team)
+        if (player->IsAlive())
+            return;
+    AnnounceEvent("ACE", OtherTeam(deadTeam));
+}
+
+// The Tab scoreboard: one line per champion to everyone, held items in slot order.
+void BattlegroundSRF::SendScores()
+{
+    std::vector<std::string> lines;
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+        for (Player* player : TeamPlayers(team))
+        {
+            ChampionStats const& st = _stats[player->GetGUID()];
+            std::string items;
+            for (uint32 entry : RiftProgression::HeldShopItems(player))
+                items += (items.empty() ? "" : ",") + std::to_string(entry);
+            lines.push_back(Trinity::StringFormat("RIFTSCORE:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}", player->GetGUID().GetCounter(),
+                player->GetName(), uint32(team), uint32(player->GetClass()), uint32(RiftProgression::GetLeagueLevel(player)),
+                st.Kills, st.Deaths, st.Assists, st.Minions, items));
+        }
+    for (std::string const& line : lines)
+        Announce(line);
 }
 
 uint8 BattlegroundSRF::AverageMatchLevel() const
@@ -2308,6 +2443,7 @@ bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
     SrfMonster const& m = SRF_MONSTERS[index];
     TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID()));
     RiftProgression::AddGold(killer, m.gold, true);
+    ++_stats[killer->GetGUID()].Minions;      // League's CS counts monsters too
     switch (SRF_CAMPS[m.camp].kind)
     {
         case SRF_CAMP_BARON:
@@ -2336,6 +2472,7 @@ bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
             for (Player* player : TeamPlayers(team))
                 ApplyDragonBuff(player, team);
             PSendMessageToAll(BG_SRF_STRING_DRAGON_SLAIN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, TeamName(team));
+            AnnounceEvent("DRAGON", team);
             break;
         case SRF_CAMP_BARON:
             _baronTimer[team] = SRF_BARON_BUFF_DURATION;
@@ -2347,6 +2484,7 @@ bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
                     ApplyBuff(player, BG_SRF_SPELL_BARON_BUFF, 0, 0, SRF_BARON_STATS_PCT, SRF_BARON_BUFF_DURATION);
             }
             PSendMessageToAll(BG_SRF_STRING_BARON_SLAIN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, TeamName(team));
+            AnnounceEvent("BARON", team);
             break;
         default:
             break;
@@ -2440,6 +2578,9 @@ bool BattlegroundSRF::HandlePlayerUnderMap(Player* player)
 
 void BattlegroundSRF::EndBattleground(uint32 winner)
 {
+    // the last scoreboard, then Victory / Defeat
+    SendScores();
+    AnnounceEvent("END", winner == ALLIANCE ? TEAM_ALLIANCE : winner == HORDE ? TEAM_HORDE : TEAM_NEUTRAL);
     _wavesStarted = false;
     DespawnMinions();
     Battleground::EndBattleground(winner);

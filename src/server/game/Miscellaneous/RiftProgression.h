@@ -20,6 +20,7 @@
 
 #include "Define.h"
 
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -103,6 +104,12 @@ namespace RiftProgression
     // a second, and after a purchase); HasRoomFor refuses a purchase with the
     // slots full, the components going into it counted out.
     TC_GAME_API void SyncItems(Player* player);
+    // The shop items a champion holds, in bag order (CENTURION_Rift's slot order),
+    // for the scoreboard.
+    TC_GAME_API std::vector<uint32> HeldShopItems(Player const* player);
+    // One CCGAME line to a real client (not a bot): the Rift's announcer and
+    // scoreboard feed (BattlegroundSRF).
+    TC_GAME_API void Tell(Player* player, std::string const& line);
     TC_GAME_API bool HasRoomFor(Player const* player, uint32 entry, std::vector<uint32> const& consumed);
 
     // Match experience, in League's own units (a melee minion is ~59).

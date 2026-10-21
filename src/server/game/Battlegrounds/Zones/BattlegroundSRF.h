@@ -357,6 +357,30 @@ private:
     std::unordered_map<ObjectGuid, BrushState> _brush;
     uint32 _itemSyncTimer = 0;
 
+    // League's announcer and scoreboard: CENTURION_Rift draws the banners from
+    // RIFTANN lines and the Tab scoreboard from RIFTSCORE lines.
+    struct ChampionStats
+    {
+        uint32 Kills = 0;
+        uint32 Deaths = 0;
+        uint32 Assists = 0;
+        uint32 Minions = 0;        // League's CS: minions and monsters last-hit
+        uint32 Streak = 0;         // kills since its last death
+        uint32 DeathStreak = 0;    // deaths since its last kill
+        uint32 Multi = 0;          // kills in the running multikill window
+        uint32 LastKillMs = 0;     // _matchClock at its last kill
+    };
+    std::unordered_map<ObjectGuid, ChampionStats> _stats;
+    bool _firstBlood = false;
+    uint32 _scoreTimer = 0;
+    void Announce(std::string const& line);
+    void AnnounceEvent(char const* kind, TeamId team, uint32 arg = 0);
+    void CheckAce(TeamId deadTeam);
+    void SendScores();
+    // League's gold for a champion kill, before first blood's extra: the
+    // victim's bounty for its streak, less for a champion that keeps dying.
+    uint32 KillBounty(uint32 victimStreak, uint32 victimDeathStreak) const;
+
     struct BotState
     {
         uint8 Lane = BG_SRF_LANE_NONE;

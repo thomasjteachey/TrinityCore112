@@ -67,6 +67,9 @@ local function YourCost(id)
 	return Cost(id, Held());
 end
 
+-- For the League shop frame (RiftShopFrame.lua).
+CENTURION_RiftShop = { Cost = YourCost, Held = Held, IntoOf = intoOf };
+
 local function NameOf(id)
 	return (ITEMS[id] and ITEMS[id].name) or GetItemInfo(id) or ("item " .. id);
 end

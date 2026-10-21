@@ -1,6 +1,6 @@
 ## Interface: 30300
 ## Title: Centurion Summoner's Rift
-## Notes: Summoner's Rift: skill picks, the shop's build paths, unit bars and League's inventory.
+## Notes: Summoner's Rift: skill picks, League's shop, inventory, announcer and scoreboard, and unit bars.
 ## Author: Centurion
 ## Version: 1.0
 ## DefaultState: Enabled
@@ -10,3 +10,7 @@ RiftItems.lua
 CENTURION_Rift.lua
 RiftShop.lua
 RiftInventory.lua
+RiftShopFrame.lua
+RiftAnnouncerVO.lua
+RiftAnnouncer.lua
+RiftScoreboard.lua

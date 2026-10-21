@@ -23,6 +23,7 @@
 #include "WorldPacket.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "Bag.h"
 #include "Item.h"
 #include "Log.h"
 #include "ObjectMgr.h"
@@ -1188,6 +1189,31 @@ void SyncItems(Player* player)
         Tournament::UpgradeRiftKit(player, kit);
         state->KitApplied = kit;
     }
+}
+
+std::vector<uint32> HeldShopItems(Player const* player)
+{
+    std::vector<uint32> out;
+    if (!player)
+        return out;
+    auto take = [&out](Item const* item)
+    {
+        if (item && IsShopItem(item->GetEntry()))
+            out.push_back(item->GetEntry());
+    };
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        take(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+    for (uint8 bag = INVENTORY_SLOT_BAG_START; bag < INVENTORY_SLOT_BAG_END; ++bag)
+        if (Bag const* container = player->GetBagByPos(bag))
+            for (uint32 slot = 0; slot < container->GetBagSize(); ++slot)
+                take(container->GetItemByPos(uint8(slot)));
+    return out;
+}
+
+void Tell(Player* player, std::string const& line)
+{
+    if (player)
+        SendLine(player, line);
 }
 
 bool HasRoomFor(Player const* player, uint32 entry, std::vector<uint32> const& consumed)
