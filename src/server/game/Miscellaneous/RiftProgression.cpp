@@ -622,9 +622,15 @@ namespace
                 if (spell.SpellId > 0 && spell.SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
                     out.Spells[uint32(spell.SpellId)] += uint32(count);
         }
+        // League's UNIQUE passives count once, and so do boots: their run speed
+        // (SPELL_AURA_MOD_INCREASE_SPEED) is "only the fastest boots count".
         for (auto& [spell, count] : out.Spells)
+        {
             if (spell >= RIFT_SPELL_FIRST && spell <= RIFT_SPELL_LAST)
                 count = 1;
+            else if (SpellInfo const* info = sSpellMgr->GetSpellInfo(spell); info && info->HasAura(SPELL_AURA_MOD_INCREASE_SPEED))
+                count = 1;
+        }
         return out;
     }
 
