@@ -7,7 +7,9 @@
 #include "Battleground.h"
 #include "BattlegroundVHR.h"
 #include "CellImpl.h"
+#include "Chat.h"
 #include "Containers.h"
+#include "DatabaseEnv.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "Map.h"
@@ -20,6 +22,7 @@
 #include "ItemEnchantmentMgr.h"
 #include "ItemTemplate.h"
 #include "Log.h"
+#include "Mail.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "Random.h"
@@ -1114,6 +1117,47 @@ void RestoreTaughtSpells(Player* player)
     }
 }
 
+// Gear put on while the borrowed levels lasted is still worn after they go:
+// the level drop checks nothing. It kept working (stats and all) until the
+// next login, where _LoadInventory refused it and posted it back as "problems
+// with equipping item(s)". Take it off now - into the bags, or by post when
+// they are full. The broker's own weapons are left where they are: StripAll
+// destroys them next, and a posted run-only legendary would escape that.
+static void UnequipAboveLevel(Player* player)
+{
+    std::array<Item*, ITEM_GRANT_COUNT> granted{};
+    for (uint8 i = 0; i < ITEM_GRANT_COUNT; ++i)
+        granted[i] = GetGrantedItem(player, i);
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item || player->GetLevel() >= item->GetTemplate()->RequiredLevel)
+            continue;
+        if (std::find(granted.begin(), granted.end(), item) != granted.end())
+            continue;
+
+        ItemPosCountVec dest;
+        if (player->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
+        {
+            player->RemoveItem(INVENTORY_SLOT_BAG_0, slot, true);
+            player->StoreItem(dest, item, true);
+            ChatHandler(player->GetSession()).PSendSysMessage("%s is above your level now and was put in your bags.", item->GetTemplate()->Name1.c_str());
+            continue;
+        }
+
+        player->MoveItemFromInventory(INVENTORY_SLOT_BAG_0, slot, true);
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        item->DeleteFromInventoryDB(trans);
+        item->SaveToDB(trans);
+        ChatHandler(player->GetSession()).PSendSysMessage("%s is above your level now and your bags are full, so it was sent to your mailbox.", item->GetTemplate()->Name1.c_str());
+        MailDraft(item->GetTemplate()->Name1, "Your bags were full when you left the Violet Hold, so this came back by post.")
+            .AddItem(item)
+            .SendMailTo(trans, player, MailSender(player, MAIL_STATIONERY_GM), MAIL_CHECK_MASK_COPIED);
+        CharacterDatabase.CommitTransaction(trans);
+    }
+}
+
 void RollbackBorrowedLevels(Player* player, uint8 baseLevel)
 {
     if (!player || !baseLevel || baseLevel >= player->GetLevel())
@@ -1122,6 +1166,7 @@ void RollbackBorrowedLevels(Player* player, uint8 baseLevel)
     // Talents first, so the level drop below never finds points over budget.
     UndoRunTalentsFor(player, baseLevel);
     player->GiveLevel(baseLevel, /*borrowed*/ true);
+    UnequipAboveLevel(player);
 }
 
 uint8 GetBaseLevel(Player const* player)
