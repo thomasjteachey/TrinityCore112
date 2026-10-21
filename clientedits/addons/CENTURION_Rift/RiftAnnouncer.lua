@@ -5,7 +5,8 @@
 --   CCGAME  RIFTANN:<kind>:<killer>:<victim>:<killer's team>:<arg>:<killer class>:<victim class>
 -- kinds: KILL FIRSTBLOOD DOUBLE TRIPLE QUADRA PENTA SPREE (arg = streak) SHUTDOWN
 -- (arg = gold) EXECUTED ACE TURRET INHIB INHIBRESPAWN DRAGON BARON MINIONS WELCOME
--- END. Teams are 0 = Order (Alliance), 1 = Chaos (Horde). The banner is worded
+-- END. Teams are 0 = Order (Alliance), 1 = Chaos (Horde) - the match's teams, not
+-- the faction (MyTeam). The banner is worded
 -- from where you stand - your kill, an ally's, an enemy's - as League words it,
 -- and the line is the announcer's own (CENTURION_RIFT_VO, RiftAnnouncerVO.lua).
 
@@ -20,7 +21,15 @@ local SPREES = { [3] = "KILLING SPREE", [4] = "RAMPAGE", [5] = "UNSTOPPABLE", [6
 local SPREE_VO = { [3] = "killing_spree", [4] = "rampage", [5] = "unstoppable", [6] = "dominating", [7] = "godlike" };
 local MULTI = { DOUBLE = "DOUBLE KILL", TRIPLE = "TRIPLE KILL", QUADRA = "QUADRA KILL", PENTA = "PENTAKILL" };
 
+-- Your side. Centurion's battleground teams do not follow the faction - a Night Elf
+-- can play for Chaos, and every kill read backwards for one - so it comes from your
+-- own row of the scoreboard (RIFTSCORE, every 2 seconds of a match from the prep
+-- phase on). The faction only stands in until the first row has come.
+local myTeam;
 local function MyTeam()
+	if ( myTeam ) then
+		return myTeam;
+	end
 	return UnitFactionGroup("player") == "Horde" and 1 or 0;
 end
 
@@ -255,9 +264,19 @@ events:SetScript("OnEvent", function(self, event, prefix, message)
 	if ( prefix ~= ANSWER_PREFIX or type(message) ~= "string" ) then
 		return;
 	end
+	local name, team = string.match(message, "^RIFTSCORE:%d+:([^:]*):(%d+):");
+	if ( name ) then
+		if ( name == UnitName("player") ) then
+			myTeam = tonumber(team);
+		end
+		return;
+	end
 	local kind, rest = string.match(message, "^RIFTANN:([A-Z]+):(.*)$");
 	if ( not kind ) then
 		return;
+	end
+	if ( kind == "END" ) then
+		myTeam = nil;           -- the next match may put you on the other side
 	end
 	local f = {};
 	for field in string.gmatch(rest .. ":", "([^:]*):") do
