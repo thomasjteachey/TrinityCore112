@@ -513,7 +513,11 @@ do
 
 	local SetActive;
 
-	if ( CenturionUnitBarsScan and CenturionUnitBar ) then
+	-- The DLL registers its functions when the world UI's Lua is built, and on a fresh
+	-- login that can come after this file has run: choosing here sent every login to
+	-- the nameplate stand-ins, and only a /reload found the DLL. Both kinds are built
+	-- when a match first switches the bars on (SetBarsOn below).
+	local function DllBars()
 		-- Every bar owns a click band at least CLICK_BAND pixels tall, the bar in
 		-- its middle, and bands never overlap: the stacking keeps them apart and
 		-- each bar's hit rectangle is exactly its band. Three bars on one spot
@@ -683,7 +687,7 @@ do
 		end);
 		driver:Hide();
 
-		SetActive = function(on)
+		return function(on)
 			if ( on == active ) then
 				return;
 			end
@@ -695,10 +699,13 @@ do
 				HideFrom(1);
 			end
 		end
-	else
+	end
+
+	local function PlateBars()
 		local PLATE_CVARS = { "nameplateShowEnemies", "nameplateShowFriends" };
 		local FLASH = "Interface\\TargetingFrame\\UI-TargetingFrame-Flash";
 		local saved = nil;
+		local platesOn = false;     -- its own: the stand-ins can give way to the DLL's bars
 		local skins = {};           -- nameplate frame -> { health, cast, regions, bar }
 		local seen = 0;
 
@@ -711,7 +718,7 @@ do
 		end
 
 		local function Apply(skin)
-			local alpha = active and 0 or 1;
+			local alpha = platesOn and 0 or 1;
 			for _, region in ipairs(skin.regions) do
 				region:SetAlpha(alpha);
 			end
@@ -719,7 +726,7 @@ do
 			if ( skin.cast ) then
 				skin.cast:SetAlpha(alpha);
 			end
-			if ( active ) then
+			if ( platesOn ) then
 				skin.bar:Show();
 			else
 				skin.bar:Hide();
@@ -768,11 +775,11 @@ do
 			end
 		end);
 
-		SetActive = function(on)
-			if ( on == active ) then
+		return function(on)
+			if ( on == platesOn ) then
 				return;
 			end
-			active = on;
+			platesOn = on;
 			if ( on ) then
 				saved = {};
 				for _, cvar in ipairs(PLATE_CVARS) do
@@ -788,6 +795,21 @@ do
 			for _, skin in pairs(skins) do
 				Apply(skin);
 			end
+		end
+	end
+
+	local bars, dll = nil, false;
+	local function SetBarsOn(on)
+		if ( on and not dll and CenturionUnitBarsScan and CenturionUnitBar ) then
+			if ( bars ) then
+				bars(false);        -- the stand-ins give way to the DLL's bars
+			end
+			bars, dll = DllBars(), true;
+		elseif ( on and not bars ) then
+			bars = PlateBars();
+		end
+		if ( bars ) then
+			bars(on);
 		end
 	end
 
@@ -814,10 +836,9 @@ do
 			savedNames = nil;
 		end
 	end
-	local SetBars = SetActive;
 	SetActive = function(on)
 		HideNames(on);
-		SetBars(on);
+		SetBarsOn(on);
 	end
 
 	local events = CreateFrame("Frame");
