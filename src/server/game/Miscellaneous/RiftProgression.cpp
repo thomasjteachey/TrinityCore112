@@ -1837,10 +1837,14 @@ void HandlePickRequest(Player* player, std::string_view argument)
         if (std::find(offers.begin(), offers.end(), *spellId) != offers.end())
         {
             uint32 const first = state->SpellToChain.at(*spellId);
-            if (++state->Unlocked[first] == 1)
+            bool const firstUnlock = ++state->Unlocked[first] == 1;
+            // The client's spellbook learns the spell before any button holds
+            // it: the buttons used to go out first, for a spell it did not know
+            // yet, and the picks after the first never showed on the bars.
+            SyncClientSpellbook(player, *state);
+            if (firstUnlock)
                 PlaceUnlockedSpell(player, *state, first, *spellId);
             RetargetButtons(player, *state);
-            SyncClientSpellbook(player, *state);
             --state->PendingPicks;
         }
     }
