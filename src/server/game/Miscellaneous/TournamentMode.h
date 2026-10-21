@@ -371,6 +371,8 @@ namespace Tournament
     // `kitLevel` (the match's 5-level bracket), slot by slot, and empty slots the
     // kit can now fill dressed. Nothing the character owns is touched.
     void UpgradeRiftKit(Player* player, uint8 kitLevel);
+    // Puts the kit's piece into every empty slot (a revive, after an upgrade).
+    void FillRiftKit(Player* player, uint8 kitLevel);
     // The starter-template item a class wears in an equipment slot, 0 for none.
     uint32 GetLoadoutTemplateItem(uint8 playerClass, uint8 slot);
 

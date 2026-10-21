@@ -64,6 +64,7 @@ namespace
     // combat, broken by moving or taking damage; custom_rift_progression.cpp
     // sends the caster to its fountain). Known only for the match.
     uint32 constexpr SPELL_RIFT_RECALL = 94120;
+    uint32 constexpr SPELL_RIFT_FOCUS = 94153;   // the match aura BattlegroundSRF keeps on
     // Valor's Reward, a League item passive (scripts/Custom/custom_rift_items.cpp).
     uint32 constexpr SPELL_VALORS_REWARD = 94141;
     // Stock 46699 "Requires No Ammo" (Thori'dal's passive). The match no longer
@@ -177,6 +178,8 @@ namespace
 
         std::vector<LearnedTalent> RealTalents;   // the active spec's build, put back on the way out
         std::vector<SavedButton> RealButtons;     // the action bars it walked in with
+        std::unordered_set<uint8> Returned;       // its buttons standing again (RefillSavedButtons)
+        bool WasAlive = true;                     // at the last SyncItems: a revive re-checks the kit
 
         // What the client's spellbook was told against what it would hold
         // normally (every active spell): active spells taken out of it, and
@@ -816,6 +819,7 @@ namespace
         player->RemoveAurasDueToSpell(SPELL_ITEM_RESIST);
         player->RemoveAurasDueToSpell(SPELL_STEED);
         player->RemoveAurasDueToSpell(SPELL_SWIFT_STEED);
+        player->RemoveAurasDueToSpell(SPELL_RIFT_FOCUS);
         state.Riding = 0;
         for (auto const& [spell, count] : state.ItemSpells)
             player->RemoveAurasDueToSpell(spell);
@@ -874,31 +878,66 @@ namespace
             player->GetGUID().GetCounter(), SPELL_RIFT_RECALL);
     }
 
-    // A chain's first unlock puts the spell on the bars: back on its own button
-    // when that is free, otherwise on the first free button of the usual bars.
-    void PlaceUnlockedSpell(Player* player, State const& state, uint32 first, uint32 spell)
+    // Every button the character walked in with whose spell the match has
+    // given back - a pick, a talent re-learned - returns to where it was. A
+    // button the player clears afterwards stays cleared (Returned).
+    bool RefillSavedButtons(Player* player, State& state)
     {
+        bool changed = false;
         for (SavedButton const& b : state.RealButtons)
-        {
-            if (b.Type != ACTION_BUTTON_SPELL)
-                continue;
-            auto const chain = state.SpellToChain.find(b.Action);
-            if (chain == state.SpellToChain.end() || chain->second != first)
-                continue;
-            if (!player->GetActionButton(b.Button) && player->addActionButton(b.Button, b.Action, ACTION_BUTTON_SPELL))
+            if (b.Type == ACTION_BUTTON_SPELL && !state.Returned.count(b.Button)
+                && !player->GetActionButton(b.Button) && !HiddenInMatch(player, state, b.Action)
+                && player->addActionButton(b.Button, b.Action, ACTION_BUTTON_SPELL))
             {
-                player->SendActionButtons(1);
-                return;
+                state.Returned.insert(b.Button);
+                changed = true;
+            }
+        return changed;
+    }
+
+    bool OnBars(Player* player, State const& state, uint32 first, uint32 spell)
+    {
+        for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+            if (ActionButton const* ab = player->GetActionButton(button))
+                if (ab->GetType() == ACTION_BUTTON_SPELL)
+                {
+                    if (ab->GetAction() == spell)
+                        return true;
+                    auto const chain = state.SpellToChain.find(ab->GetAction());
+                    if (first && chain != state.SpellToChain.end() && chain->second == first)
+                        return true;
+                }
+        return false;
+    }
+
+    // A chain's first unlock puts the spell on the bars: back on its own button,
+    // otherwise on the first free button of the usual bars that no spell still
+    // to come back held - the recall and earlier picks took the first free
+    // buttons, which were often another ability's, and that one then landed
+    // somewhere new.
+    void PlaceUnlockedSpell(Player* player, State& state, uint32 first, uint32 spell)
+    {
+        bool const refilled = RefillSavedButtons(player, state);
+        if (!OnBars(player, state, first, spell))
+        {
+            std::unordered_set<uint8> reserved;
+            for (SavedButton const& b : state.RealButtons)
+                reserved.insert(b.Button);
+            for (bool strict : { true, false })
+            {
+                for (uint8 start : BAR_ORDER)
+                    for (uint8 button = start; button < start + 12; ++button)
+                        if (!player->GetActionButton(button) && !(strict && reserved.count(button))
+                            && player->addActionButton(button, spell, ACTION_BUTTON_SPELL))
+                        {
+                            state.Returned.insert(button);
+                            player->SendActionButtons(1);
+                            return;
+                        }
             }
         }
-        for (uint8 start : BAR_ORDER)
-            for (uint8 button = start; button < start + 12; ++button)
-                if (!player->GetActionButton(button))
-                {
-                    if (player->addActionButton(button, spell, ACTION_BUTTON_SPELL))
-                        player->SendActionButtons(1);
-                    return;
-                }
+        if (refilled)
+            player->SendActionButtons(1);
     }
 
     // An addon whisper from the character to itself, as Mok'gora's are: the
@@ -1125,6 +1164,9 @@ void Enter(Player* player)
     }
     player->SendTalentsInfoData(false);
     HideLockedButtons(player, state);
+    for (SavedButton const& b : state.RealButtons)
+        if (player->GetActionButton(b.Button))
+            state.Returned.insert(b.Button);
     RetargetButtons(player, state);
     if (!player->HasSpell(SPELL_RIFT_RECALL))
         player->LearnSpell(SPELL_RIFT_RECALL, false);
@@ -1221,6 +1263,7 @@ void OnLogin(Player* player)
     uint8 const realLevel = fields[0].GetUInt8();
     player->RemoveAurasDueToSpell(SPELL_ITEM_STATS);
     player->RemoveAurasDueToSpell(SPELL_ITEM_RESIST);
+    player->RemoveAurasDueToSpell(SPELL_RIFT_FOCUS);
     TakeShopItems(player);
     TakeRecall(player);
     TakeNoAmmo(player);
@@ -1294,6 +1337,20 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
     return pos == ranks.end() || size_t(pos - ranks.begin()) >= have;
 }
 
+// A talent learned in the match: its old button comes back too.
+void OnTalentLearned(Player* player)
+{
+    if (!player)
+        return;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State* state = Find(player);
+    if (!state || IsTransient(player))
+        return;
+    if (RefillSavedButtons(player, *state))
+        player->SendActionButtons(1);
+    RetargetButtons(player, *state);
+}
+
 int32 MatchRidingSkill(Player const* player)
 {
     if (!player)
@@ -1323,12 +1380,21 @@ void SyncItems(Player* player)
     // mid-fight, and the swap once took every piece off and put none back.
     // Not while casting, stunned or charmed: nothing can be put on then, the old
     // piece included. The next sync tries again.
+    // Not while dead either: it waits for the revive.
     uint8 const kit = KitLevelFor(*state);
-    if (kit != state->KitApplied && !player->IsNonMeleeSpellCast(false) && !player->HasUnitState(UNIT_STATE_STUNNED) && !player->IsCharmed())
+    bool const alive = player->IsAlive();
+    bool const free = alive && !player->IsNonMeleeSpellCast(false) && !player->HasUnitState(UNIT_STATE_STUNNED) && !player->IsCharmed();
+    bool fill = alive && !state->WasAlive;   // just revived: is everything on?
+    if (kit != state->KitApplied && free)
     {
         Tournament::UpgradeRiftKit(player, kit);
         state->KitApplied = kit;
+        fill = true;
     }
+    if (fill && free)
+        Tournament::FillRiftKit(player, state->KitApplied);
+    if (!fill || free)
+        state->WasAlive = alive;
 }
 
 std::vector<uint32> HeldShopItems(Player const* player)

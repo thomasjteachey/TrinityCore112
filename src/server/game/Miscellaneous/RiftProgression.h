@@ -102,6 +102,8 @@ namespace RiftProgression
     TC_GAME_API bool MayEquip(Player const* player, uint32 entry, uint8 slot);
     // In a match only shop items can be used.
     TC_GAME_API bool IsItemLocked(Player const* player, uint32 entry);
+    // A talent learned in a match puts its old action button back.
+    TC_GAME_API void OnTalentLearned(Player* player);
 
     // League's inventory: shop items are not worn but held (six item slots and a
     // trinket slot, drawn by CENTURION_Rift); what the held ones give is put on

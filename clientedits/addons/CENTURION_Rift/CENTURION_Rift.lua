@@ -531,12 +531,6 @@ do
 			shown = first - 1;
 		end
 
-		-- Two bars' click bands (x = centre, y = the bar's top, pad above and below) touch.
-		local function Overlaps(a, b)
-			return math.abs(a.x - b.x) * 2 < a.w + b.w + 2 * CLICK_PAD_X
-				and a.y + a.pad > b.y - b.h - b.pad and a.y - a.h - a.pad < b.y + b.pad;
-		end
-
 		local target, mouseover;
 		local function Before(a, b)
 			if ( a.guid == target ) ~= ( b.guid == target ) then
@@ -576,18 +570,27 @@ do
 			-- No bar in front of another, as WoW stacks nameplates: the target's
 			-- bar keeps its place, then from the bottom of the screen up each bar
 			-- that touches one already placed moves up above it.
+			-- Two bars' click bands (x = centre, y = the bar's top, pad above and
+			-- below) touch: tested inline, not through a function - this runs
+			-- every frame for every pair of bars, and with a teamfight's hundred
+			-- bars the calls alone were a good share of the frame.
 			table.sort(order, Before);
+			local abs = math.abs;
 			for k = 2, n do
 				local e = order[k];
-				for _ = 1, 24 do
+				local ex, ew, eh, ep = e.x, e.w, e.h, e.pad;
+				for _ = 1, 8 do
 					local moved = false;
+					local ey = e.y;
 					for j = 1, k - 1 do
-						local other = order[j];
-						if ( Overlaps(e, other) ) then
-							e.y = other.y + other.pad + e.h + e.pad;
+						local o = order[j];
+						if ( abs(ex - o.x) * 2 < ew + o.w + 2 * CLICK_PAD_X
+							and ey + ep > o.y - o.h - o.pad and ey - eh - ep < o.y + o.pad ) then
+							ey = o.y + o.pad + eh + ep;
 							moved = true;
 						end
 					end
+					e.y = ey;
 					if ( not moved ) then
 						break;
 					end
@@ -615,29 +618,63 @@ do
 					end
 					pool[k] = bar;
 				end
+				-- Each setter only when its value changed: a widget call per bar per
+				-- frame for ten properties was most of what this cost, and
+				-- SetFrameLevel and SetTexture are not cheap. Positions go to the
+				-- whole pixel the screen draws anyway.
 				bar.guid = e.guid;
-				if ( CenturionTargetGUID ) then
-					bar:SetHitRectInsets(-CLICK_PAD_X, -CLICK_PAD_X, -e.pad, -e.pad);
+				local w, h = math.floor(e.w + 0.5), math.floor(e.h + 0.5);
+				if ( w < 1 ) then w = 1; end
+				if ( h < 1 ) then h = 1; end
+				local x, y = math.floor(e.x + 0.5), math.floor(e.y + 0.5);
+				local pad = math.floor(e.pad + 0.5);
+				if ( CenturionTargetGUID and bar.cPad ~= pad ) then
+					bar.cPad = pad;
+					bar:SetHitRectInsets(-CLICK_PAD_X, -CLICK_PAD_X, -pad, -pad);
 				end
-				bar:SetWidth(e.w);
-				bar:SetHeight(e.h);
-				bar:ClearAllPoints();
-				bar:SetPoint("TOP", WorldFrame, "BOTTOMLEFT", e.x, e.y);
-				bar:SetValue(e.health);
-				bar:SetStatusBarColor(ReactionColour(e.reaction));
-				bar:SetAlpha(e.guid == target and 1 or (e.player and PLAYER_BAR_ALPHA or BAR_ALPHA));
+				if ( bar.cW ~= w ) then
+					bar.cW = w;
+					bar:SetWidth(w);
+				end
+				if ( bar.cH ~= h ) then
+					bar.cH = h;
+					bar:SetHeight(h);
+				end
+				if ( bar.cX ~= x or bar.cY ~= y ) then
+					bar.cX, bar.cY = x, y;
+					bar:SetPoint("TOP", WorldFrame, "BOTTOMLEFT", x, y);
+				end
+				if ( bar.cHealth ~= e.health ) then
+					bar.cHealth = e.health;
+					bar:SetValue(e.health);
+				end
+				if ( bar.cReaction ~= e.reaction ) then
+					bar.cReaction = e.reaction;
+					bar:SetStatusBarColor(ReactionColour(e.reaction));
+				end
+				local alpha = e.guid == target and 1 or (e.player and PLAYER_BAR_ALPHA or BAR_ALPHA);
+				if ( bar.cAlpha ~= alpha ) then
+					bar.cAlpha = alpha;
+					bar:SetAlpha(alpha);
+				end
 				-- The target's bar is framed in white and drawn over the rest.
-				if ( e.guid == target ) then
-					bar.bg:SetTexture(1, 1, 1, 0.95);
-					bar:SetFrameLevel(driver:GetFrameLevel() + 20);
-				elseif ( e.guid == mouseover or bar.hover ) then
-					bar.bg:SetTexture(0.65, 0.65, 0.65, 0.9);
-					bar:SetFrameLevel(driver:GetFrameLevel() + 1);
-				else
-					bar.bg:SetTexture(0, 0, 0, 0.75);
-					bar:SetFrameLevel(driver:GetFrameLevel() + 1);
+				local look = e.guid == target and 2 or ((e.guid == mouseover or bar.hover) and 1 or 0);
+				if ( bar.cLook ~= look ) then
+					bar.cLook = look;
+					if ( look == 2 ) then
+						bar.bg:SetTexture(1, 1, 1, 0.95);
+						bar:SetFrameLevel(driver:GetFrameLevel() + 20);
+					elseif ( look == 1 ) then
+						bar.bg:SetTexture(0.65, 0.65, 0.65, 0.9);
+						bar:SetFrameLevel(driver:GetFrameLevel() + 1);
+					else
+						bar.bg:SetTexture(0, 0, 0, 0.75);
+						bar:SetFrameLevel(driver:GetFrameLevel() + 1);
+					end
 				end
-				bar:Show();
+				if ( not bar:IsShown() ) then
+					bar:Show();
+				end
 			end
 			if ( n < shown ) then
 				HideFrom(n + 1);

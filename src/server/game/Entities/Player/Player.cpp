@@ -29808,6 +29808,9 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     // reset InitTalentForLevel would otherwise fall back to.
     if (Battleground const* bg = GetBattleground(); bg && bg->GetTypeID() == BATTLEGROUND_VHR)
         VioletHoldBoons::OnTalentLearnedInRun(this, spellid, curtalent_maxrank ? talentInfo->SpellRank[curtalent_maxrank - 1] : 0);
+
+    // Summoner's Rift: the talent's spell goes back on the button it had.
+    RiftProgression::OnTalentLearned(this);
 }
 
 // The activatable ranks and dependent spells a talent brings with it - what

@@ -286,6 +286,9 @@ uint32 constexpr SRF_BRUSH_TICK         = 250;
 uint32 constexpr SRF_BRUSH_REVEAL       = 1500;
 // Centurion spell 94142 "Brush": the buff a hidden champion wears, so they can see it.
 uint32 constexpr SRF_SPELL_BRUSH        = 94142;
+// Centurion spell 94153 "Summoner's Focus": every champion's match aura, +5% hit
+// and +3% spell hit, a buff anyone can see.
+uint32 constexpr SRF_SPELL_FOCUS        = 94153;
 uint32 constexpr SRF_ITEM_SYNC_MS       = 500;
 uint32 constexpr SRF_SCORE_TICK         = 2000;    // the scoreboard feed (RIFTSCORE)
 uint32 constexpr SRF_MULTIKILL_MS       = 10000;   // League: each kill of a multikill within 10 s of the last...
@@ -527,6 +530,7 @@ void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*tea
     if (player)
     {
         player->RemoveAurasDueToSpell(SRF_SPELL_BRUSH);
+        player->RemoveAurasDueToSpell(SRF_SPELL_FOCUS);
         if (!player->HasAuraType(SPELL_AURA_MOD_STEALTH))
         {
             player->RemoveByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_AURA_VISION, PLAYER_FIELD_BYTE2_STEALTH);
@@ -776,6 +780,8 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
         }
         if (syncItems)
             RiftProgression::SyncItems(player);
+        if (player->IsAlive() && !player->HasAura(SRF_SPELL_FOCUS))
+            player->AddAura(SRF_SPELL_FOCUS, player);
         BrushState& st = _brush[guid];
         uint8 const patch = player->IsAlive() ? BrushPatchAt(player->GetPosition()) : 0;
         if (patch && AttackOf(player))

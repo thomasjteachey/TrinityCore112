@@ -1495,6 +1495,52 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel)
     TC_LOG_DEBUG("bg.battleground", "Rift loadout: {} moved up to the level-{} field kit, {} piece(s) changed.", player->GetName(), uint32(kitLevel), swapped);
 }
 
+// Every kit slot left empty gets its piece: a champion once came back from the
+// dead with nothing on. Asked on revive and after an upgrade (RiftProgression).
+void FillRiftKit(Player* player, uint8 kitLevel)
+{
+    if (!player || player->IsGameMaster() || !player->IsAlive())
+        return;
+
+    WorldSession const* session = player->GetSession();
+    bool const transient = !session || session->IsTransientPlayerSession();
+    if (!transient && !StashTablePresent)
+        return;
+
+    std::vector<uint8> empty;
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        if (slot != EQUIPMENT_SLOT_BODY && slot != EQUIPMENT_SLOT_TABARD && !player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            empty.push_back(slot);
+    if (empty.empty())
+        return;
+
+    SwapGuard guard(player);
+    CharacterDatabaseTransaction trans = transient ? CharacterDatabaseTransaction(nullptr) : CharacterDatabase.BeginTransaction();
+    uint32 issued = 0;
+    for (uint8 slot : empty)
+    {
+        uint32 const kit = PickKitPiece(player, slot, kitLevel);
+        uint16 dest = 0;
+        if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
+            continue;
+        Item* item = player->EquipNewItem(dest, kit, true);
+        if (!item)
+            continue;
+        if (!transient)
+            InsertRow(trans, player->GetGUID().GetCounter(), LOADOUT_ROW_SUBSTITUTE, item->GetGUID().GetCounter(),
+                PackPosition(item->GetBagSlot(), item->GetSlot()));
+        ++issued;
+    }
+    if (!transient)
+    {
+        if (issued)
+            player->SaveInventoryAndGoldToDB(trans);
+        CharacterDatabase.CommitTransaction(trans);
+    }
+    if (issued)
+        TC_LOG_DEBUG("bg.battleground", "Rift loadout: {} was missing {} level-{} kit piece(s); put on.", player->GetName(), issued, uint32(kitLevel));
+}
+
 void RestoreBattlegroundLoadout(Player* player)
 {
     if (!player || !StashTablePresent)
