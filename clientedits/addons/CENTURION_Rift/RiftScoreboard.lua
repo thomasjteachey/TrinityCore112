@@ -1,5 +1,6 @@
--- Summoner's Rift: League's scoreboard. Hold Tab (as in League; the key is
--- given back when you leave the Rift) or open the battleground score window:
+-- Summoner's Rift: League's scoreboard. Hold ` (the key left of 1 - Tab stays
+-- WoW's targeting; any key can be set under Key Bindings, "Scoreboard (hold)")
+-- or open the battleground score window (its key, the minimap icon):
 -- both teams, every champion's level, kills / deaths / assists, minions and the
 -- items they hold.
 --
@@ -214,8 +215,10 @@ SlashCmdList["CENTURIONRIFTSCORE"] = function()
 	if ( board:IsShown() ) then board:Hide(); else board:Show(); end
 end;
 
--- Tab is League's scoreboard key while in the Rift; it is WoW's target key again
--- outside it. Bindings cannot change in combat, so a change waits for it to end.
+-- ` holds the scoreboard while in the Rift, if that key is free (League uses Tab,
+-- but Tab is WoW's targeting). Given back outside the Rift. Bindings cannot change
+-- in combat, so a change waits for it to end.
+local SCORE_KEY = "`";
 local owner = CreateFrame("Frame");
 local bound = false;
 local function Rebind()
@@ -225,7 +228,10 @@ local function Rebind()
 	end
 	local want = InRift();
 	if ( want and not bound ) then
-		SetOverrideBinding(owner, false, "TAB", "CENTURIONRIFT_SCORE");
+		local current = GetBindingAction(SCORE_KEY);
+		if ( current == nil or current == "" or current == "CENTURIONRIFT_SCORE" ) then
+			SetOverrideBinding(owner, false, SCORE_KEY, "CENTURIONRIFT_SCORE");
+		end
 		bound = true;
 	elseif ( not want and bound ) then
 		ClearOverrideBindings(owner);
@@ -234,15 +240,44 @@ local function Rebind()
 	end
 end
 
--- The battleground score window (and the one the match opens at its end) is this one.
+-- The battleground score window (the minimap icon, its key, the match's end) is
+-- this one. It is not hidden but kept open out of sight while the board shows:
+-- hiding it made every toggle an "open", and at the end of a match WoW reopens a
+-- closed score window on every status update - the board could not be closed.
+-- So the two open and close together, whichever way either is opened or closed.
+local scoreHidden = false;
+local function Invisible(on)
+	if ( not WorldStateScoreFrame or on == scoreHidden ) then
+		return;
+	end
+	WorldStateScoreFrame:SetAlpha(on and 0 or 1);
+	WorldStateScoreFrame:SetScale(on and 0.001 or 1);
+	scoreHidden = on;
+end
 if ( WorldStateScoreFrame ) then
 	WorldStateScoreFrame:HookScript("OnShow", function(self)
 		if ( InRift() ) then
-			HideUIPanel(self);
+			Invisible(true);
 			board:Show();
+		else
+			Invisible(false);
+		end
+	end);
+	WorldStateScoreFrame:HookScript("OnHide", function()
+		if ( scoreHidden ) then
+			board:Hide();
 		end
 	end);
 end
+board:HookScript("OnHide", function()
+	if ( scoreHidden and WorldStateScoreFrame and WorldStateScoreFrame:IsShown() ) then
+		HideUIPanel(WorldStateScoreFrame);
+	end
+end);
+
+local close = CreateFrame("Button", nil, board, "UIPanelCloseButton");
+close:SetPoint("TOPRIGHT", board, "TOPRIGHT", 2, 2);
+close:SetScript("OnClick", function() board:Hide(); end);
 
 owner:RegisterEvent("CHAT_MSG_ADDON");
 owner:RegisterEvent("ZONE_CHANGED_NEW_AREA");

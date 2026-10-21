@@ -137,6 +137,20 @@ banner:SetScript("OnUpdate", function(self, elapsed)
 	end
 end);
 
+-- WoW's red error text sits where the banner does: it is out of sight while a
+-- banner shows (errors raised then still fade out on their own), back after.
+banner:SetScript("OnShow", function()
+	if ( UIErrorsFrame ) then
+		UIErrorsFrame:Clear();
+		UIErrorsFrame:SetAlpha(0);
+	end
+end);
+banner:SetScript("OnHide", function()
+	if ( UIErrorsFrame ) then
+		UIErrorsFrame:SetAlpha(1);
+	end
+end);
+
 local function Push(a)
 	-- a long backlog (a teamfight) keeps the latest few
 	while ( #queue > 4 ) do
