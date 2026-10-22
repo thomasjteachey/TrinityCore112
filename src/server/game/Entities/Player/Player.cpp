@@ -29870,6 +29870,14 @@ void Player::LearnTalentSpellDependencies(uint32 spellid, uint8 levelCap)
             if (!nextRankSpellInfo)
                 break;
 
+            // A talent's own ranks are chained too (LoadSpellTalentRanks), and
+            // they are bought with points, never handed out. Fiery Payback's rank
+            // spells are not passive, so rank 1 walked straight into rank 2 -
+            // two ranks for one point, and the rank-2 click then refused as
+            // "already known".
+            if (GetTalentSpellPos(nextRankSpellId))
+                break;
+
             // Stop if next rank requires a higher level
             uint32 requiredLevel = std::max(nextRankSpellInfo->BaseLevel, nextRankSpellInfo->SpellLevel);
             if (requiredLevel && requiredLevel > levelCap)
