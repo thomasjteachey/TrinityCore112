@@ -710,6 +710,10 @@ class TC_GAME_API Battleground
         void AddPlayerToResurrectQueue(ObjectGuid npc_guid, ObjectGuid player_guid);
         void RemovePlayerFromResurrectQueue(ObjectGuid player_guid);
         uint32 GetTimeUntilResurrection() const;
+        // What a ghost's "Resurrection in" window counts down from
+        // (SMSG_AREA_SPIRIT_HEALER_TIME): the next wave, or a battleground's own
+        // per-champion timer (Summoner's Rift).
+        virtual uint32 GetTimeUntilResurrectionFor(Player const* /*player*/) const { return GetTimeUntilResurrection(); }
         bool IsPlayerInResurrectQueue(ObjectGuid player_guid) const;
 
         /// Relocate all players in ReviveQueue to the closest graveyard

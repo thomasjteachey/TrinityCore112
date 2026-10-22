@@ -132,6 +132,16 @@ public:
     // and the spell is a shock.
     void SyncShockCooldownsToClient(SpellInfo const* castSpell);
 
+    // League's cooldown reduction (Summoner's Rift, RiftProgression::
+    // CooldownReduction): StartCooldown shortens a champion's class spell on the
+    // server, and the client - which starts its own from Spell.dbc on
+    // SMSG_SPELL_GO - is told the real one right after it: call this right after
+    // SendSpellGo. A stock SPELLMOD_COOLDOWN aura cannot do it: the client adds a
+    // modifier once for every class-mask bit a spell has (Spell_C_GetSpellModifiers
+    // 0x7FD970), so a spell with two bits would show -40%. No-op unless
+    // StartCooldown shortened this cast's cooldown.
+    void SyncReducedCooldownToClient(SpellInfo const* castSpell);
+
     // School lockouts
     void LockSpellSchool(SpellSchoolMask schoolMask, uint32 lockoutTime);
     bool IsSchoolLocked(SpellSchoolMask schoolMask) const;
@@ -179,6 +189,10 @@ private:
 
     typedef std::unordered_map<uint32, uint32> PacketCooldowns;
     void BuildCooldownPacket(WorldPacket& data, uint8 flags, PacketCooldowns const& cooldowns) const;
+    // The client's records for these spells replaced by the server's remaining
+    // times (ms), its GCD kept: SyncShockCooldownsToClient's three steps.
+    void ResendCooldownRecords(Player* player, SpellInfo const* castSpell, PacketCooldowns const& remaining);
+    uint32 _reducedCooldownSpell = 0;   // StartCooldown shortened it; SyncReducedCooldownToClient tells the client
 
     static void GetCooldownDurations(SpellInfo const* spellInfo, uint32 itemId, int32* cooldown, uint32* categoryId, int32* categoryCooldown);
 

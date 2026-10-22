@@ -175,7 +175,8 @@ void WorldSession::HandleGossipHelloOpcode(WorldPacket& recvData)
         Battleground* bg = _player->GetBattleground();
         if (bg)
         {
-            bg->AddPlayerToResurrectQueue(unit->GetGUID(), _player->GetGUID());
+            if (bg->UsesSpiritGuideWaves())
+                bg->AddPlayerToResurrectQueue(unit->GetGUID(), _player->GetGUID());
             sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(_player, bg, unit->GetGUID());
             return;
         }

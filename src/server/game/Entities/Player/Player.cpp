@@ -6146,19 +6146,22 @@ void Player::RepopAtGraveyard()
                     return;
 
                 Battleground* bg = GetBattleground();
-                if (!bg || !bg->UsesSpiritGuideWaves())
+                if (!bg)
                     return;
 
-                if (bg->IsPlayerInResurrectQueue(GetGUID()))
+                if (bg->UsesSpiritGuideWaves() && bg->IsPlayerInResurrectQueue(GetGUID()))
                     return;
 
                 uint32 spiritEntry = GetBGTeam() == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
                 if (!spiritEntry)
                     return;
 
+                // A battleground without waves (Summoner's Rift) queues no one;
+                // its window shows the champion's own timer.
                 if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
                 {
-                    bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
+                    if (bg->UsesSpiritGuideWaves())
+                        bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
                     sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
                 }
             }, Milliseconds(500));

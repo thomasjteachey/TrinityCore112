@@ -1555,7 +1555,7 @@ void WorldSession::HandleAreaSpiritHealerQueryOpcode(WorldPacket& recvData)
     if (!unit->IsSpiritService())                            // it's not spirit service
         return;
 
-    if (bg && bg->UsesSpiritGuideWaves())
+    if (bg)
         sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(_player, bg, guid);
 
     if (Battlefield* bf = sBattlefieldMgr->GetBattlefieldToZoneId(_player->GetZoneId()))

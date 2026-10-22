@@ -27,10 +27,11 @@
  * The jungle is League's: its camps at League's own spots, neutral to both teams,
  * fighting as one camp and leashing home, first up 90 seconds after the gates open
  * and back a League respawn time after they are cleared. The buff camps give their
- * killer a buff, the Dragon gives its whole team a stack of the Dragonslayer's cry
- * for the rest of the match, and Baron Nashor, from 20 minutes, gives the living
- * members of its team three minutes of Zandalar's spirit and their minions more
- * health. League's buffs are stood in for by stock spells with the values set here.
+ * killer League Season 3's Crest of the Ancient Golem or Blessing of the Lizard
+ * Elder (the champion who kills the holder takes it), the Dragon gives gold to its
+ * whole team, and Baron Nashor, from 15 minutes, gold, experience and four minutes
+ * of Exalted with Baron Nashor to the living of its team. The buffs are the Rift's
+ * own spells (94161-94164); RiftProgression makes them do what League's did.
  *
  * Units, structures and the shot effects are League's own models and textures,
  * converted by wow/import/rift/scripts.
@@ -108,10 +109,10 @@ enum BG_SRF_Spells
     BG_SRF_SPELL_ORDER_CASTER_BOLT = 94145, // "Minion Bolt", Arcane Bolt's missile, 24 yd/s
     BG_SRF_SPELL_CHAOS_CASTER_BOLT = 94146, // "Minion Bolt", Shadow Bolt's missile, 24 yd/s
     // Stand-ins for League's buffs, their values and durations set when cast.
-    BG_SRF_SPELL_BLUE_BUFF   = 18194, // "Mana Regeneration": periodic mana
-    BG_SRF_SPELL_RED_BUFF    = 22817, // "Fengus' Ferocity": attack power
-    BG_SRF_SPELL_DRAGON_BUFF = 22888, // "Rallying Cry of the Dragonslayer": crit, attack power
-    BG_SRF_SPELL_BARON_BUFF  = 24425  // "Spirit of Zandalar": speed, all stats
+    BG_SRF_SPELL_BLUE_BUFF   = 94161, // "Crest of the Ancient Golem": cooldowns, mana
+    BG_SRF_SPELL_RED_BUFF    = 94162, // "Blessing of the Lizard Elder": basic attacks burn and slow
+    BG_SRF_SPELL_RED_BURN    = 94163, // the Blessing's burn and slow, on the one struck
+    BG_SRF_SPELL_BARON_BUFF  = 94164  // "Exalted with Baron Nashor": damage, ability power, regeneration
 };
 
 enum BG_SRF_TrinityStrings
@@ -246,6 +247,7 @@ public:
     bool UsesLeagueCombat() const override { return true; }
     // League's death timers (DeathTimer, UpdateRespawns): no spirit-guide waves.
     bool UsesSpiritGuideWaves() const override { return false; }
+    uint32 GetTimeUntilResurrectionFor(Player const* player) const override;
     uint8 GetLeagueCombatLevel() const override { return _combatLevel; }
     void EndBattleground(uint32 winner) override;
 
@@ -347,8 +349,8 @@ private:
     void UpdateJungle(uint32 elapsed);
     bool HandleJungleKill(Creature* creature, Player* killer);
     void ApplyBuff(Player* player, uint32 spellId, int32 bp0, int32 bp1, int32 bp2, int32 durationMs);
-    void ApplyDragonBuff(Player* player, TeamId team);
-    void MaintainObjectiveBuffs();
+    void ApplyCampBuff(Player* player, uint32 spellId);
+    void PassCampBuffs(Player* victim, Player* heir);
 
     // Progression (RiftProgression): experience and gold, and keeping the
     // units' levels with the players'.
@@ -385,8 +387,8 @@ private:
     std::vector<Minion> _minions;
     std::array<std::array<std::vector<Position>, BG_SRF_LANE_COUNT>, PVP_TEAMS_COUNT> _lanePaths;
     std::array<CampState, BG_SRF_JUNGLE_CAMPS> _camps;
-    std::array<uint8, PVP_TEAMS_COUNT> _dragonsSlain;
-    std::array<uint32, PVP_TEAMS_COUNT> _baronTimer;   // ms of Baron's empowerment left
+    // When each champion's Crest and Blessing end (game ms), for PassCampBuffs.
+    std::unordered_map<ObjectGuid, std::array<uint32, 2>> _campBuffEnds;
     uint32 _jungleTimer;
     // What the match did, for the periodic log line (Report).
     uint32 _reportTimer;

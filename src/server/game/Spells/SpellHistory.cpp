@@ -23,6 +23,7 @@
 #include "Opcodes.h"
 #include "Pet.h"
 #include "Player.h"
+#include "RiftProgression.h"
 #include "Spell.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -346,6 +347,20 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
                 cooldown += cooldownMod * IN_MILLISECONDS;   // SPELL_AURA_MOD_COOLDOWN does not affect category cooldows, verified with shaman shocks
             }
         }
+
+        // League's cooldown reduction (Summoner's Rift): a cast's own class spell,
+        // cast for itself; the client hears after SMSG_SPELL_GO
+        // (SyncReducedCooldownToClient).
+        if (spell && !itemId && spellInfo->SpellFamilyName && (cooldown > 0 || categoryCooldown > 0))
+            if (Player* player = _owner->ToPlayer())
+                if (float const reduction = RiftProgression::CooldownReduction(player, spellInfo); reduction > 0.0f)
+                {
+                    if (cooldown > 0)
+                        cooldown = int32(float(cooldown) * (1.0f - reduction) + 0.5f);
+                    if (categoryCooldown > 0)
+                        categoryCooldown = int32(float(categoryCooldown) * (1.0f - reduction) + 0.5f);
+                    _reducedCooldownSpell = spellInfo->Id;
+                }
 
         // replace negative cooldowns by 0
         if (cooldown < 0)
@@ -1007,8 +1022,45 @@ void SpellHistory::SyncShockCooldownsToClient(SpellInfo const* castSpell)
     if (!remaining)
         return;
 
-    // 1. drop the client's own records for these ids
+    PacketCooldowns times;
     for (uint32 id : ids)
+        times[id] = remaining;
+    ResendCooldownRecords(player, castSpell, times);
+}
+
+void SpellHistory::SyncReducedCooldownToClient(SpellInfo const* castSpell)
+{
+    if (!castSpell || _reducedCooldownSpell != castSpell->Id)
+        return;
+    _reducedCooldownSpell = 0;
+    Player* player = _owner->ToPlayer();
+    if (!player)
+        return;
+    uint32 const remaining = GetRemainingCooldown(castSpell);
+    if (!remaining)
+        return;
+
+    // The cast's record holds its category's half too: every spell sharing the
+    // category is re-sent with its own time, or the client would free them.
+    PacketCooldowns times;
+    times[castSpell->Id] = remaining;
+    if (uint32 const category = castSpell->GetCategory())
+        for (auto const& [id, known] : player->GetSpellMap())
+        {
+            if (id == castSpell->Id || known.state == PLAYERSPELL_REMOVED || known.disabled)
+                continue;
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(id);
+            if (info && info->GetCategory() == category)
+                if (uint32 const left = GetRemainingCooldown(info))
+                    times[id] = left;
+        }
+    ResendCooldownRecords(player, castSpell, times);
+}
+
+void SpellHistory::ResendCooldownRecords(Player* player, SpellInfo const* castSpell, PacketCooldowns const& remaining)
+{
+    // 1. drop the client's own records for these ids
+    for (auto const& [id, ms] : remaining)
     {
         WorldPacket clear(SMSG_CLEAR_COOLDOWN, 4 + 8);
         clear << uint32(id);
@@ -1039,8 +1091,8 @@ void SpellHistory::SyncShockCooldownsToClient(SpellInfo const* castSpell)
     }
 
     PacketCooldowns cooldowns;
-    for (uint32 id : ids)
-        cooldowns[id] = uint32(int32(remaining) - delta);
+    for (auto const& [id, ms] : remaining)
+        cooldowns[id] = uint32(int32(ms) - delta);
 
     WorldPacket data;
     BuildCooldownPacket(data, flags, cooldowns);
@@ -1049,7 +1101,7 @@ void SpellHistory::SyncShockCooldownsToClient(SpellInfo const* castSpell)
     // 3. shift the start back so both halves line up with the server
     if (delta)
     {
-        for (uint32 id : ids)
+        for (auto const& [id, ms] : remaining)
         {
             WorldPacket modify(SMSG_MODIFY_COOLDOWN, 4 + 8 + 4);
             modify << uint32(id);

@@ -123,28 +123,31 @@ struct SrfCamp
 
 uint32 constexpr SRF_JUNGLE_START = 90 * IN_MILLISECONDS;
 uint32 constexpr SRF_SMALL_CAMP_RESPAWN = 135 * IN_MILLISECONDS;
+// The buff camps, the Dragon and Baron Nashor on League Season 3's clock (the
+// mid-2013 wiki infoboxes): 1:55 and 5:00, 2:30 and 6:00, 15:00 and 7:00.
+uint32 constexpr SRF_BUFF_CAMP_START = 115 * IN_MILLISECONDS;
 uint32 constexpr SRF_BUFF_CAMP_RESPAWN = 5 * MINUTE * IN_MILLISECONDS;
 
 SrfCamp constexpr SRF_CAMPS[BG_SRF_JUNGLE_CAMPS] =
 {
     // Order's side of the jungle (0-5), then Chaos's (6-11)
-    { SRF_CAMP_BLUE,    SRF_JUNGLE_START, SRF_BUFF_CAMP_RESPAWN },
+    { SRF_CAMP_BLUE,    SRF_BUFF_CAMP_START, SRF_BUFF_CAMP_RESPAWN },
     { SRF_CAMP_WOLVES,  SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
     { SRF_CAMP_RAPTORS, SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
-    { SRF_CAMP_RED,     SRF_JUNGLE_START, SRF_BUFF_CAMP_RESPAWN },
+    { SRF_CAMP_RED,     SRF_BUFF_CAMP_START, SRF_BUFF_CAMP_RESPAWN },
     { SRF_CAMP_KRUGS,   SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
     { SRF_CAMP_GROMP,   SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
-    { SRF_CAMP_BLUE,    SRF_JUNGLE_START, SRF_BUFF_CAMP_RESPAWN },
+    { SRF_CAMP_BLUE,    SRF_BUFF_CAMP_START, SRF_BUFF_CAMP_RESPAWN },
     { SRF_CAMP_WOLVES,  SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
     { SRF_CAMP_RAPTORS, SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
-    { SRF_CAMP_RED,     SRF_JUNGLE_START, SRF_BUFF_CAMP_RESPAWN },
+    { SRF_CAMP_RED,     SRF_BUFF_CAMP_START, SRF_BUFF_CAMP_RESPAWN },
     { SRF_CAMP_KRUGS,   SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
     { SRF_CAMP_GROMP,   SRF_JUNGLE_START, SRF_SMALL_CAMP_RESPAWN },
     // the river
     { SRF_CAMP_SCUTTLE, 210 * IN_MILLISECONDS, 150 * IN_MILLISECONDS },
     { SRF_CAMP_SCUTTLE, 210 * IN_MILLISECONDS, 150 * IN_MILLISECONDS },
-    { SRF_CAMP_DRAGON,  5 * MINUTE * IN_MILLISECONDS, 5 * MINUTE * IN_MILLISECONDS },
-    { SRF_CAMP_BARON,   20 * MINUTE * IN_MILLISECONDS, 6 * MINUTE * IN_MILLISECONDS }
+    { SRF_CAMP_DRAGON,  150 * IN_MILLISECONDS, 6 * MINUTE * IN_MILLISECONDS },
+    { SRF_CAMP_BARON,   15 * MINUTE * IN_MILLISECONDS, 7 * MINUTE * IN_MILLISECONDS }
 };
 
 struct SrfMonster
@@ -191,20 +194,26 @@ SrfMonster constexpr SRF_MONSTERS[BG_SRF_JUNGLE_MONSTERS] =
     { 11, BG_SRF_ENTRY_GROMP,             12703.6f,  54.0f,  6444.0f, 4.2500f,  80,  90.0f },
     { 12, BG_SRF_ENTRY_RIFT_SCUTTLER,     10500.0f, -62.0f,  5170.0f, 5.4978f,  55, 100.0f },
     { 13, BG_SRF_ENTRY_RIFT_SCUTTLER,      4400.0f, -62.0f,  9600.0f, 2.3562f,  55, 100.0f },
-    { 14, BG_SRF_ENTRY_DRAGON,             9866.1f, -69.8f,  4414.0f, 0.7854f,  25, 200.0f },
-    { 15, BG_SRF_ENTRY_BARON_NASHOR,       5007.1f,  24.4f, 10471.4f, 3.9270f, 300, 600.0f }
+    // Season 3: the Dragon 190 gold to every player of the team and 25 more to
+    // its killer, 400 experience shared; Baron 300 gold and 900 experience to
+    // every player of the team, nothing more to its killer
+    { 14, BG_SRF_ENTRY_DRAGON,             9866.1f, -69.8f,  4414.0f, 0.7854f,  25, 400.0f },
+    { 15, BG_SRF_ENTRY_BARON_NASHOR,       5007.1f,  24.4f, 10471.4f, 3.9270f,   0, 900.0f }
 };
 
-// League's buff durations, and what the stand-in spells are set to.
-int32 constexpr SRF_BUFF_DURATION         = 2 * MINUTE * IN_MILLISECONDS;   // Blue and Red
-int32 constexpr SRF_BARON_BUFF_DURATION   = 3 * MINUTE * IN_MILLISECONDS;
-float constexpr SRF_BLUE_MANA_PER_TICK    = 0.02f;   // of maximum mana
-int32 constexpr SRF_RED_AP_PER_LEVEL      = 3;
-int32 constexpr SRF_DRAGON_CRIT_PER_STACK = 2;       // spell and melee crit, percent
-int32 constexpr SRF_DRAGON_AP_PER_STACK   = 30;
-int32 constexpr SRF_BARON_STATS_PCT       = 15;
+// League Season 3's camp buffs (the mid-2013 wiki): Crest of the Ancient Golem
+// and Blessing of the Lizard Elder last 2:30 and pass to the champion credited
+// with killing the holder; Exalted with Baron Nashor lasts 4:00, goes to the
+// living of the team and is lost on death - 40 attack damage and ability power,
+// 35 before 35:00. What they do is RiftProgression's (SetChampionCarriers,
+// CooldownReduction, OnBasicAttackDamage). The Dragon gave no buff then.
+int32 constexpr SRF_BUFF_DURATION         = 150 * IN_MILLISECONDS;   // Blue and Red
+int32 constexpr SRF_BARON_BUFF_DURATION   = 4 * MINUTE * IN_MILLISECONDS;
+int32 constexpr SRF_BARON_POWER           = 40;
+int32 constexpr SRF_BARON_POWER_EARLY     = 35;
+float constexpr SRF_BARON_EARLY_MINUTES   = 35.0f;
 uint32 constexpr SRF_GOLD_BARON_TEAM      = 300;     // to every player of the team
-float constexpr SRF_BARON_MINION_HEALTH   = 1.5f;
+uint32 constexpr SRF_GOLD_DRAGON_TEAM     = 190;     // likewise
 // Long enough that the core never brings a corpse back on its own: the
 // battleground respawns its camps and inhibitors itself. A fallen turret came
 // back five minutes after it was despawned (the core's default delay) - standing,
@@ -525,8 +534,7 @@ BattlegroundSRF::BattlegroundSRF()
     _structureLevelTimer = 0;
     _wavesSpawned = 0;
     _wavesStarted = false;
-    _dragonsSlain.fill(0);
-    _baronTimer.fill(0);
+    _campBuffEnds.clear();
     _jungleTimer = 0;
     _reportTimer = 0;
     _boltsCast = 0;
@@ -594,8 +602,7 @@ void BattlegroundSRF::Reset()
     _wavesSpawned = 0;
     _wavesStarted = false;
     _camps.fill(CampState());
-    _dragonsSlain.fill(0);
-    _baronTimer.fill(0);
+    _campBuffEnds.clear();
     _jungleTimer = 0;
     _reportTimer = 0;
     _boltsCast = 0;
@@ -1076,13 +1083,11 @@ void BattlegroundSRF::SpawnWave()
                 // left to aggro on sight, a wave would turn on its own deniable
                 // minions, which are hostile to everyone.
                 minion->SetReactState(REACT_DEFENSIVE);
-                // Baron's empowerment: the team's minions come out tougher while it lasts.
-                float const empowered = _baronTimer[team] ? SRF_BARON_MINION_HEALTH : 1.0f;
                 float const minutes = LeagueMinutes();
-                ApplyLeagueStats(minion, SRF_MINION_KIND[kind], minutes, empowered, false);
+                ApplyLeagueStats(minion, SRF_MINION_KIND[kind], minutes, 1.0f, false);
                 Minion m;
                 m.SpawnMinutes = minutes;
-                m.HealthScale = empowered;
+                m.HealthScale = 1.0f;
                 m.Guid = minion->GetGUID();
                 m.Team = team;
                 m.Lane = lane;
@@ -1979,6 +1984,7 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
     if (killer && killer != victim)
         RiftProgression::OnUnitKill(killer);
     TeamId const victimTeam = GetTeamIndexByTeamId(GetPlayerTeam(victim->GetGUID()));
+    PassCampBuffs(victim, killer && killer != victim && GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID())) != victimTeam ? killer : nullptr);
     // League's death timer, the champion's own; CENTURION_Rift counts it down.
     uint32 const respawn = DeathTimer(victim);
     _respawnAt[victim->GetGUID()] = GameTime::GetGameTimeMS() + respawn;
@@ -2082,6 +2088,16 @@ uint32 BattlegroundSRF::GetResurrectionInterval() const
 // A champion whose timer has run out is back at its fountain - released or not,
 // full health and mana, as in League. One found dead with no timer (back from a
 // disconnect, say) gets one now: with no waves it would never come back.
+// The spirit guide's "Resurrection in" window counts the champion's own timer.
+uint32 BattlegroundSRF::GetTimeUntilResurrectionFor(Player const* player) const
+{
+    auto const itr = player ? _respawnAt.find(player->GetGUID()) : _respawnAt.end();
+    if (itr == _respawnAt.end())
+        return 0;
+    uint32 const now = GameTime::GetGameTimeMS();
+    return itr->second > now ? itr->second - now : 0;
+}
+
 void BattlegroundSRF::UpdateRespawns()
 {
     uint32 const now = GameTime::GetGameTimeMS();
@@ -2487,7 +2503,6 @@ void BattlegroundSRF::UpdateProgression(uint32 diff)
         for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
             for (Player* player : TeamPlayers(team))
                 RiftProgression::Maintain(player);
-        MaintainObjectiveBuffs();
     }
 
     _structureLevelTimer += diff;
@@ -2844,9 +2859,6 @@ void BattlegroundSRF::SpawnCamp(uint8 camp)
 // camp's threat radius.
 void BattlegroundSRF::UpdateJungle(uint32 elapsed)
 {
-    for (uint32& left : _baronTimer)
-        left = left > elapsed ? left - elapsed : 0;
-
     Map* map = FindBgMap();
     if (!map)
         return;
@@ -3061,31 +3073,31 @@ bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
     switch (SRF_CAMPS[m.camp].kind)
     {
         case SRF_CAMP_BLUE:
-            ApplyBuff(killer, BG_SRF_SPELL_BLUE_BUFF,
-                std::max<int32>(1, int32(float(killer->GetMaxPower(POWER_MANA)) * SRF_BLUE_MANA_PER_TICK)), 0, 0, SRF_BUFF_DURATION);
+            ApplyCampBuff(killer, BG_SRF_SPELL_BLUE_BUFF);
             break;
         case SRF_CAMP_RED:
-            ApplyBuff(killer, BG_SRF_SPELL_RED_BUFF, SRF_RED_AP_PER_LEVEL * int32(killer->GetLevel()), 0, 0, SRF_BUFF_DURATION);
+            ApplyCampBuff(killer, BG_SRF_SPELL_RED_BUFF);
             break;
         case SRF_CAMP_DRAGON:
-            ++_dragonsSlain[team];
             for (Player* player : TeamPlayers(team))
-                ApplyDragonBuff(player, team);
+                RiftProgression::AddGold(player, SRF_GOLD_DRAGON_TEAM, true);
             PSendMessageToAll(BG_SRF_STRING_DRAGON_SLAIN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, TeamName(team));
             AnnounceEvent("DRAGON", team);
             break;
         case SRF_CAMP_BARON:
-            _baronTimer[team] = SRF_BARON_BUFF_DURATION;
+        {
+            int32 const power = LeagueMinutes() < SRF_BARON_EARLY_MINUTES ? SRF_BARON_POWER_EARLY : SRF_BARON_POWER;
             for (Player* player : TeamPlayers(team))
             {
                 RiftProgression::AddGold(player, SRF_GOLD_BARON_TEAM, true);
-                // League's Hand of Baron: the living only, and lost on death.
+                // Exalted with Baron Nashor: the living only, and lost on death.
                 if (player->IsAlive())
-                    ApplyBuff(player, BG_SRF_SPELL_BARON_BUFF, 0, 0, SRF_BARON_STATS_PCT, SRF_BARON_BUFF_DURATION);
+                    ApplyBuff(player, BG_SRF_SPELL_BARON_BUFF, power, 0, 0, SRF_BARON_BUFF_DURATION);
             }
             PSendMessageToAll(BG_SRF_STRING_BARON_SLAIN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, TeamName(team));
             AnnounceEvent("BARON", team);
             break;
+        }
         default:
             break;
     }
@@ -3112,26 +3124,30 @@ void BattlegroundSRF::ApplyBuff(Player* player, uint32 spellId, int32 bp0, int32
         }
 }
 
-// The Dragonslayer's cry grows with every dragon the team has slain and lasts
-// the match (the spell's own two hours).
-void BattlegroundSRF::ApplyDragonBuff(Player* player, TeamId team)
+// A buff camp's buff, its whole 2:30. When it ends is written down: dying takes
+// the aura off before HandleKillPlayer hears of it, and the killer inherits it.
+void BattlegroundSRF::ApplyCampBuff(Player* player, uint32 spellId)
 {
-    int32 const stacks = _dragonsSlain[team];
-    if (!stacks || !player->IsAlive())
-        return;
-    ApplyBuff(player, BG_SRF_SPELL_DRAGON_BUFF, SRF_DRAGON_CRIT_PER_STACK * stacks, SRF_DRAGON_AP_PER_STACK * stacks,
-        SRF_DRAGON_CRIT_PER_STACK * stacks, 0);
+    ApplyBuff(player, spellId, 0, 0, 0, SRF_BUFF_DURATION);
+    _campBuffEnds[player->GetGUID()][spellId == BG_SRF_SPELL_BLUE_BUFF ? 0 : 1] = GameTime::GetGameTimeMS() + SRF_BUFF_DURATION;
 }
 
-// Dying strips the stand-in auras, but League's dragon buffs are kept for the
-// match: put them back on whoever lacks them.
-void BattlegroundSRF::MaintainObjectiveBuffs()
+// League Season 3: the champion credited with a kill takes the victim's Crest
+// and Blessing, each for a whole 2:30 again; with none to credit they are lost.
+void BattlegroundSRF::PassCampBuffs(Player* victim, Player* heir)
 {
-    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
-        if (_dragonsSlain[team])
-            for (Player* player : TeamPlayers(team))
-                if (player->IsAlive() && !player->HasAura(BG_SRF_SPELL_DRAGON_BUFF))
-                    ApplyDragonBuff(player, team);
+    auto const held = _campBuffEnds.find(victim->GetGUID());
+    if (held == _campBuffEnds.end())
+        return;
+    std::array<uint32, 2> const ends = held->second;
+    _campBuffEnds.erase(held);
+    if (!heir || !heir->IsAlive())
+        return;
+    uint32 const now = GameTime::GetGameTimeMS();
+    if (ends[0] > now)
+        ApplyCampBuff(heir, BG_SRF_SPELL_BLUE_BUFF);
+    if (ends[1] > now)
+        ApplyCampBuff(heir, BG_SRF_SPELL_RED_BUFF);
 }
 
 // ----------------------------------------------------------------- fountains

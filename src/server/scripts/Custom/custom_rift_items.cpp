@@ -84,6 +84,21 @@ namespace
         source->DealSpellDamage(&log, false);
     }
 
+    // League's true damage: no armour, resistance or crit - shields still take it.
+    void DealTrueDamage(Unit* source, Unit* victim, SpellInfo const* spellInfo, uint32 damage)
+    {
+        if (!damage || !victim->IsAlive() || !source->IsValidAttackTarget(victim))
+            return;
+        DamageInfo info(source, victim, damage, spellInfo, SPELL_SCHOOL_MASK_NORMAL, DOT, BASE_ATTACK);
+        Unit::CalcAbsorbResist(info);
+        SpellNonMeleeDamage log(source, victim, spellInfo->Id, SPELL_SCHOOL_MASK_NORMAL);
+        log.damage = info.GetDamage();
+        log.absorb = info.GetAbsorb();
+        Unit::DealDamageMods(log.target, log.damage, &log.absorb);
+        source->SendSpellNonMeleeDamageLog(&log);
+        source->DealSpellDamage(&log, false);
+    }
+
     float WeaponAverage(Unit* unit, WeaponAttackType attackType)
     {
         return (unit->GetWeaponDamageRange(attackType, MINDAMAGE) + unit->GetWeaponDamageRange(attackType, MAXDAMAGE)) / 2.0f;
@@ -209,6 +224,26 @@ class spell_rift_item_immolate : public AuraScript
     void Register() override
     {
         OnEffectPeriodic += AuraEffectPeriodicFn(spell_rift_item_immolate::Tick, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
+    }
+};
+
+// 94163 Blessing of the Lizard Elder, on the one struck: its second effect's
+// amount in true damage each 1.5 sec (RiftProgression::LizardBurn keeps it going).
+class spell_rift_lizard_burn : public AuraScript
+{
+    PrepareAuraScript(spell_rift_lizard_burn);
+
+    void Tick(AuraEffect const* aurEff)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || aurEff->GetAmount() <= 0)
+            return;
+        DealTrueDamage(caster, GetTarget(), GetSpellInfo(), uint32(aurEff->GetAmount()));
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_rift_lizard_burn::Tick, EFFECT_1, SPELL_AURA_PERIODIC_DUMMY);
     }
 };
 
@@ -372,6 +407,7 @@ void AddSC_custom_rift_items()
     new custom_rift_items_unit();
     new custom_rift_items_player();
     RegisterSpellScript(spell_rift_item_immolate);
+    RegisterSpellScript(spell_rift_lizard_burn);
     RegisterSpellScript(spell_rift_item_warmog);
     RegisterSpellScript(spell_rift_item_rod_of_ages);
     RegisterSpellScript(spell_rift_item_guardian_angel);

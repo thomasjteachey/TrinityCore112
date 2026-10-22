@@ -3941,7 +3941,11 @@ void Spell::_cast(bool skipCheck)
     // to be told the real per-spell picture right after it. No-op for everyone
     // else (see SpellHistory::SyncShockCooldownsToClient).
     if (Player* shockCaster = m_caster->ToPlayer())
+    {
         shockCaster->GetSpellHistory()->SyncShockCooldownsToClient(m_spellInfo);
+        // League's cooldown reduction, likewise (SyncReducedCooldownToClient).
+        shockCaster->GetSpellHistory()->SyncReducedCooldownToClient(m_spellInfo);
+    }
 
     if (!m_spellInfo->IsChanneled())
         if (Creature* creatureCaster = m_caster->ToCreature())

@@ -704,6 +704,21 @@ namespace
     uint8 constexpr BLOODTHIRSTER_MAX_STACKS = 30;
     float constexpr BLOODTHIRSTER_DAMAGE_PER_STACK = 1.0f;
     float constexpr BLOODTHIRSTER_LIFE_STEAL_PER_STACK = 0.2f;
+    // League Season 3's camp buffs (BattlegroundSRF puts them on; the mid-2013
+    // wiki's numbers): the Crest's cooldown reduction (its first effect's
+    // amount, capped at League's 40%) and mana - 25 every 5 sec in League's
+    // mana, 0.5% of the pool a second, the same share of energy - and Baron's
+    // attack damage and ability power (its first effect's amount) and 3% of
+    // health and 1% of mana every 5 sec.
+    float constexpr COOLDOWN_REDUCTION_CAP = 40.0f;
+    float constexpr CREST_MANA_PER_5 = 25.0f;
+    float constexpr CREST_POOL_PER_5 = 0.025f;
+    float constexpr BARON_HEALTH_PER_5 = 0.03f;
+    float constexpr BARON_MANA_PER_5 = 0.01f;
+    // The Blessing's basic attacks: a slow of 8 / 16 / 24% (5 / 10 / 15% at
+    // range) from League level 1 / 6 / 11 for 3 sec, and 8 + 2 a level true
+    // damage twice (BG_SRF_SPELL_RED_BURN, spell_rift_lizard_burn).
+    int32 constexpr LIZARD_BURN_DURATION = 3000;
     // Rift structures: no life steal from them (League).
     uint32 constexpr RIFT_STRUCTURE_FIRST = 922100;
     uint32 constexpr RIFT_STRUCTURE_LAST = 922105;
@@ -950,6 +965,15 @@ namespace
         it.Damage += BLOODTHIRSTER_DAMAGE_PER_STACK * thirst;
         it.LifeSteal += BLOODTHIRSTER_LIFE_STEAL_PER_STACK * thirst;
 
+        // The camp buffs (League Season 3).
+        Aura* const crest = player->GetAura(BG_SRF_SPELL_BLUE_BUFF);
+        AuraEffect const* const baron = player->GetAuraEffect(BG_SRF_SPELL_BARON_BUFF, EFFECT_0);
+        if (baron)
+        {
+            it.Damage += float(baron->GetAmount());
+            it.AbilityPower += float(baron->GetAmount());
+        }
+
         float const health = cs->Health + cs->HealthPerLevel * l + it.Health;
         float const armor = cs->Armor + cs->ArmorPerLevel * l + cs->RuneArmor + it.Armor;
         float const resist = cs->Resist + (cs->ResistPerLevel + cs->RuneResistPerLevel) * l + it.Resist;
@@ -992,9 +1016,22 @@ namespace
             float const natural = float(player->GetCreateMana()) + ManaFromIntellect(player->GetCreateStat(STAT_INTELLECT));
             float const ratio = leagueMana > 0.0f ? natural / leagueMana : 0.0f;
             mana = Round(it.Mana * ratio);
-            manaRegen = Round(it.ManaRegen * ratio);
+            float const pool = float(player->GetMaxPower(POWER_MANA));
+            manaRegen = Round(it.ManaRegen * ratio + (crest ? CREST_MANA_PER_5 * ratio + CREST_POOL_PER_5 * pool : 0.0f)
+                + (baron ? BARON_MANA_PER_5 * pool : 0.0f));
         }
-        int32 const healthRegen = Round(s * it.HealthRegen);
+        // Health per 5 sec (League's unit) on SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT,
+        // which adds its whole amount at every 2 sec regeneration tick
+        // (Player::RegenerateHealth): 2/5 of it. Carried whole, the items' health
+        // regeneration came out 2.5 times League's.
+        int32 const healthRegen = Round(0.4f * (s * it.HealthRegen + (baron ? BARON_HEALTH_PER_5 * float(player->GetMaxHealth()) : 0.0f)));
+        // The Crest's energy: 0.5% of the pool a second, on WoW's 10 a second.
+        if (AuraEffect* energy = crest ? crest->GetEffect(EFFECT_1) : nullptr)
+        {
+            int32 const want = player->GetPowerType() == POWER_ENERGY ? Round(0.05f * float(player->GetMaxPower(POWER_ENERGY))) : 0;
+            if (energy->GetAmount() != want)
+                energy->ChangeAmount(want);
+        }
         int32 const penetration = -Round((cs->RuneMagicPen + it.MagicPen) * MAGIC_PEN_PER_POINT);
 
         // League's numbers as League's stat panel shows them; WoW's attack power
@@ -1509,6 +1546,8 @@ void Leave(Player* player)
     }
 
     TakeItemAuras(player, state);
+    for (uint32 spell : { uint32(BG_SRF_SPELL_BLUE_BUFF), uint32(BG_SRF_SPELL_RED_BUFF), uint32(BG_SRF_SPELL_BARON_BUFF) })
+        player->RemoveAurasDueToSpell(spell);
     TakeShopItems(player);
     TakeRecallButtons(player);
     TakeNoAmmo(player);
@@ -1653,6 +1692,51 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
     std::vector<uint32> const& ranks = state->Chains.at(chain->second).Ranks;
     auto const pos = std::find(ranks.begin(), ranks.end(), spellInfo->Id);
     return pos == ranks.end() || size_t(pos - ranks.begin()) >= have;
+}
+
+// The Blessing of the Lizard Elder on a basic attack: the slow and the burn, put
+// on or, already there, made to last 3 sec again without restarting its ticks -
+// a new aura every swing would never tick for anyone attacking faster than the
+// burn's 1.5 sec.
+void LizardBurn(Player* attacker, Unit* victim, bool ranged)
+{
+    if (!attacker)
+        return;
+    uint8 const level = GetLeagueLevel(attacker);
+    int32 const slow = level >= 11 ? (ranged ? 15 : 24) : level >= 6 ? (ranged ? 10 : 16) : (ranged ? 5 : 8);
+    float const scale = MatchScale(attacker);
+    int32 const tick = std::max(1, Round((scale > 0.0f ? scale : 1.0f) * (8.0f + 2.0f * float(level))));
+    if (Aura* burn = victim->GetAura(BG_SRF_SPELL_RED_BURN, attacker->GetGUID()))
+    {
+        burn->SetDuration(burn->GetMaxDuration());
+        if (AuraEffect* slowed = burn->GetEffect(EFFECT_0); slowed && slowed->GetAmount() != -slow)
+            slowed->ChangeAmount(-slow);
+        if (AuraEffect* burning = burn->GetEffect(EFFECT_1); burning && burning->GetAmount() != tick)
+            burning->ChangeAmount(tick);
+        return;
+    }
+    CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+    args.AddSpellMod(SPELLVALUE_BASE_POINT0, -slow);
+    args.AddSpellMod(SPELLVALUE_BASE_POINT1, tick);
+    attacker->CastSpell(victim, BG_SRF_SPELL_RED_BURN, args);
+    if (Aura* burn = victim->GetAura(BG_SRF_SPELL_RED_BURN, attacker->GetGUID()))
+    {
+        burn->SetMaxDuration(LIZARD_BURN_DURATION);
+        burn->SetDuration(LIZARD_BURN_DURATION);
+    }
+}
+
+float CooldownReduction(Player const* player, SpellInfo const* spellInfo)
+{
+    if (!player || !spellInfo)
+        return 0.0f;
+    AuraEffect const* crest = player->GetAuraEffect(BG_SRF_SPELL_BLUE_BUFF, EFFECT_0);
+    if (!crest || crest->GetAmount() <= 0)
+        return 0.0f;
+    ChrClassesEntry const* playerClass = sChrClassesStore.LookupEntry(player->GetClass());
+    if (!playerClass || !spellInfo->SpellFamilyName || spellInfo->SpellFamilyName != playerClass->SpellClassSet || !IsInMatch(player))
+        return 0.0f;
+    return std::min(float(crest->GetAmount()), COOLDOWN_REDUCTION_CAP) / 100.0f;
 }
 
 bool KeepsButton(Player* player, uint8 button)
@@ -1909,11 +1993,16 @@ void OnBasicAttackDamage(Unit* attacker, Unit* victim, uint32 damage, SpellInfo 
     if (!damage || !attacker || !victim || attacker == victim || attacker->GetTypeId() != TYPEID_PLAYER)
         return;
     AuraEffect const* lifeSteal = attacker->GetAuraEffect(SPELL_CHAMPION_F, EFFECT_1);
-    if (!lifeSteal || lifeSteal->GetAmount() <= 0 || !attacker->IsAlive())
+    bool const blessed = attacker->HasAura(BG_SRF_SPELL_RED_BUFF);
+    if ((!blessed && (!lifeSteal || lifeSteal->GetAmount() <= 0)) || !attacker->IsAlive())
         return;
     if (victim->GetTypeId() == TYPEID_UNIT && victim->GetEntry() >= RIFT_STRUCTURE_FIRST && victim->GetEntry() <= RIFT_STRUCTURE_LAST)
         return;
     if (spell && !IsRangedBasicAttack(spell))
+        return;
+    if (blessed && victim->IsAlive())
+        LizardBurn(attacker->ToPlayer(), victim, spell != nullptr);
+    if (!lifeSteal || lifeSteal->GetAmount() <= 0)
         return;
     // Healing cuts on the champion (Mortal Strike's) cut it too, as Grievous Wounds does in League.
     float heal = float(damage) * float(lifeSteal->GetAmount()) / 1000.0f;
