@@ -56,8 +56,8 @@ struct SpellModifier;
 // out, "CCGAMEREQ RIFTPICK:<spell>" back). One pick a level, as League's skill
 // points: a level-60 mage has 46 picks by 55 for its 106 rank steps, so what to
 // learn and what to rank up is the player's choice (owner, 2026-10-22: keep it).
-// A rogue's poisons are not picks: the match teaches them at the classic poison
-// trainers' levels (SyncPoisons).
+// A rogue's poison coats are picks too, each rank offered from the level the
+// classic poison trainers taught it (AddPoisonChains).
 //
 // Rift gold is the character's money slot: the real money is put aside, the
 // match is played from a fixed purse, and the real money comes back.
