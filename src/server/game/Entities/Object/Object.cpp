@@ -31,6 +31,7 @@
 #include "Map.h"
 #include "MiscPackets.h"
 #include "Miscellaneous/BotUpdatePolicy.h"
+#include "Miscellaneous/RiftProgression.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MovementInfo.h"
 #include "MovementPacketBuilder.h"
@@ -2851,14 +2852,27 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
         if (hasAura)
             resist_chance += victim->GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_DEBUFF_RESISTANCE, static_cast<int32>(spellInfo->Dispel)) * 100;
 
-        // resistance chance for binary spells, equals to average damage reduction of non-binary spell.
-        // Not under League's rules (Summoner's Rift): there magic resist only ever reduces magic
-        // damage and never makes a spell miss, and a champion's League MR - a third of the damage
-        // off by late game - had become a third of every Polymorph and Fear resisted outright
-        // (owner, 2026-10-22).
-        if (spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL) && (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_MAGIC)
-            && !GetLeagueCombatBattleground(victim))
-            resist_chance += int32(Unit::CalculateAverageResistReduction(this, spellInfo->GetSchoolMask(), victim, spellInfo) * 10000.f);
+        // resistance chance for binary spells, equals to average damage reduction of non-binary spell
+        if (spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL) && (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_MAGIC))
+        {
+            // Under League's rules (Summoner's Rift) a champion's own magic resist - its class's
+            // base and its rune page - never makes a spell miss: only magic resist bought in the
+            // shop does, at League's reduction for that much, MR / (100 + MR), after the caster's
+            // magic penetration. Monsters and minions have only their own. The whole League MR
+            // had made a third of every Polymorph and Fear miss by late game (owner, 2026-10-22:
+            // "natural gear shouldn't count against it").
+            if (GetLeagueCombatBattleground(victim))
+            {
+                Player const* target = victim->ToPlayer();
+                Unit const* casterUnit = ToUnit();
+                Player const* casterPlayer = casterUnit ? casterUnit->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+                float const gear = target ? std::max(0.0f, RiftProgression::GearMagicResist(target)
+                    - (casterPlayer ? RiftProgression::MagicPenetration(casterPlayer) : 0.0f)) : 0.0f;
+                resist_chance += int32(gear / (100.0f + gear) * 10000.f);
+            }
+            else
+                resist_chance += int32(Unit::CalculateAverageResistReduction(this, spellInfo->GetSchoolMask(), victim, spellInfo) * 10000.f);
+        }
     }
 
     // Roll chance

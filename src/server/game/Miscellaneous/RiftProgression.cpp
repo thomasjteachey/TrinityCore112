@@ -217,6 +217,9 @@ namespace
         uint8 BloodthirsterStacks = 0;
         // League's flat magic penetration, League's points (SetChampionCarriers).
         float MagicPen = 0.0f;
+        // The magic resist the champion's shop items give, League's points: the only magic
+        // resist that can make a no-damage spell miss (GearMagicResist).
+        float GearResist = 0.0f;
         // League's own numbers for CENTURION_Rift's pane (RIFTSTATS): the line as
         // SetChampionCarriers last made it, and as the client was last sent it.
         std::string StatsLine;
@@ -1041,6 +1044,7 @@ namespace
         // on the carrier, Unit::CalculateAverageResistReduction takes it off the
         // target's League magic resist (MagicPenetration)
         state.MagicPen = cs->RuneMagicPen + it.MagicPen;
+        state.GearResist = it.Resist;
 
         // League's numbers as League's stat panel shows them; WoW's attack power
         // is only the dial that makes a basic attack hit for League's damage.
@@ -2014,6 +2018,13 @@ float MagicPenetration(Player const* player)
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
     State const* state = player ? Find(player) : nullptr;
     return state ? state->MagicPen : 0.0f;
+}
+
+float GearMagicResist(Player const* player)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = player ? Find(player) : nullptr;
+    return state ? state->GearResist : 0.0f;
 }
 
 void CrestCooldownMod(AuraEffect const* crest, SpellModifier*& mod)

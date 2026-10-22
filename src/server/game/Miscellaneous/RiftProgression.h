@@ -195,6 +195,10 @@ namespace RiftProgression
     // points: Unit::CalculateAverageResistReduction takes it off the target's
     // magic resist, converted back (RiftLeague::FromWowResist). 0 outside a match.
     TC_GAME_API float MagicPenetration(Player const* player);
+    // The magic resist the champion's shop items give, in League's points - not its class's
+    // base or its rune page. Under League's rules only this can make a no-damage spell (a
+    // Polymorph, a Fear) miss outright (WorldObject::MagicSpellHitResult). 0 outside a match.
+    TC_GAME_API float GearMagicResist(Player const* player);
     // BattlegroundSRF: a champion killed a unit (minion, monster, champion), and a
     // champion died - the Bloodthirster's stacks.
     TC_GAME_API void OnUnitKill(Player* player);
