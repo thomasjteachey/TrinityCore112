@@ -324,9 +324,16 @@ end
 -- The match trims the spellbook to the ranks it has unlocked spell by spell
 -- (the client keeps whatever spell list it was once sent), and every one of
 -- those prints "You have unlearned ..." - a level-60 character walks in to a
--- wall of them, and out again to "You have learned ...". Hidden in the Rift.
+-- wall of them, and out again to "You have learned ...": spells, mounts and
+-- companions ("added the pet ... to your collection"), and hunter pet skills
+-- ("learned how to create a new item: Lightning Breath"). Hidden in the Rift
+-- and for a while after leaving it: the real spellbook comes back as the
+-- player zones out, so the zone is no longer the Rift when those lines land
+-- (owner, 2026-10-22, zoning back into Gurubashi). And just after login, where
+-- a match a crash or a restart cut off is handed back.
 local spellbookSpam = {};
-for _, fmt in ipairs({ ERR_LEARN_SPELL_S, ERR_LEARN_ABILITY_S, ERR_LEARN_PASSIVE_S, ERR_SPELL_UNLEARNED_S }) do
+for _, fmt in ipairs({ ERR_LEARN_SPELL_S, ERR_LEARN_ABILITY_S, ERR_LEARN_PASSIVE_S, ERR_SPELL_UNLEARNED_S,
+		ERR_LEARN_RECIPE_S, ERR_LEARN_COMPANION_S, ERR_LEARN_MOUNT_S }) do
 	if ( fmt ) then
 		local pattern = string.gsub(fmt, "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1");
 		pattern = string.gsub(pattern, "%%%%s", ".+");
@@ -334,8 +341,27 @@ for _, fmt in ipairs({ ERR_LEARN_SPELL_S, ERR_LEARN_ABILITY_S, ERR_LEARN_PASSIVE
 	end
 end
 local RIFT_ZONE = "Summoner's Rift";
+local QUIET_AFTER = 30;            -- seconds after leaving the Rift, or after login
+local quietSince = GetTime();      -- the load: login, or a /reload
+local inRift = false;
+local riftWatch = CreateFrame("Frame");
+riftWatch:RegisterEvent("PLAYER_ENTERING_WORLD");
+riftWatch:RegisterEvent("ZONE_CHANGED_NEW_AREA");
+riftWatch:SetScript("OnEvent", function()
+	local now = GetRealZoneText() == RIFT_ZONE;
+	if ( inRift and not now ) then
+		quietSince = GetTime();
+	end
+	inRift = now;
+end);
+local function QuietSpellbook()   -- RIFT:END starts the quiet too
+	quietSince = GetTime();
+end
 ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", function(self, event, message, ...)
-	if ( GetRealZoneText() ~= RIFT_ZONE or type(message) ~= "string" ) then
+	if ( type(message) ~= "string" ) then
+		return false;
+	end
+	if ( GetRealZoneText() ~= RIFT_ZONE and not inRift and GetTime() - quietSince > QUIET_AFTER ) then
 		return false;
 	end
 	for _, pattern in ipairs(spellbookSpam) do
@@ -356,6 +382,7 @@ end
 
 local function OnAnswer(message)
 	if ( message == "RIFT:END" ) then
+		QuietSpellbook();
 		state.picks = 0;
 		state.offers = {};
 		state.atBase = false;
