@@ -422,8 +422,23 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
             triggerFlag = TRIGGERED_FULL_MASK;
         }
 
+        // Summoner's Rift: a spell whose ranks replace one another (everything
+        // that costs energy or rage, and auras and forms - IsStackableWithRanks)
+        // has only its top rank active, and the match lists the best rank it has
+        // unlocked, a lower one. That rank is the one the bars cast.
+        if (!allow && RiftProgression::IsInMatch(_player) && _player->HasSpell(spellId)
+            && RiftProgression::ShowsInSpellbook(_player, spellId, false))
+            allow = true;
+
+        // Never refused in silence: a 3.3.5 client waits for the answer to a cast
+        // and casts nothing else until it gets one - a rogue in the Rift found
+        // every ability dead after his first press of an unlocked rank.
         if (!allow)
+        {
+            Spell::SendCastResult(_player, spellInfo, castCount, SPELL_FAILED_NOT_KNOWN);
+            recvPacket.rfinish();
             return;
+        }
     }
 
     // Client is resending autoshot cast opcode when other spell is cast during shoot rotation
