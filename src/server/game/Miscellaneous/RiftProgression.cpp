@@ -25,6 +25,7 @@
 #include "WorldPacket.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "GameTime.h"
 #include "Bag.h"
 #include "Item.h"
 #include "Log.h"
@@ -183,6 +184,10 @@ namespace
         std::vector<LearnedTalent> RealTalents;   // the active spec's build, put back on the way out
         std::vector<SavedButton> RealButtons;     // the action bars it walked in with
         std::unordered_set<uint8> Returned;       // its buttons standing again (RefillSavedButtons)
+        // The bars as PublishBars last sent them, and when it last filled each
+        // button (KeepsButton).
+        std::map<uint8, uint32> SentBars;
+        std::map<uint8, uint32> FilledAt;
         bool WasAlive = true;                     // at the last SyncItems: a revive re-checks the kit
         uint32 SentSpeed = 0;                     // the run speed CENTURION_Rift was last told (RIFTSPEED)
 
@@ -433,14 +438,14 @@ namespace
 
     // The bars exactly as they were: whatever the match put on them comes off,
     // and every saved button goes back (its spell is known again by now - the
-    // talents are restored first).
+    // talents are restored first). The caller sends them, once the client knows
+    // every spell on them again.
     void RestoreButtons(Player* player, std::vector<SavedButton> const& buttons)
     {
         for (uint32 button = 0; button < MAX_ACTION_BUTTONS; ++button)
             player->removeActionButton(uint8(button));
         for (SavedButton const& b : buttons)
             player->addActionButton(b.Button, b.Action, b.Type);
-        player->SendActionButtons(1);
     }
 
     uint32 TotalSteps(State const& state)
@@ -574,7 +579,6 @@ namespace
             if (!keep)
                 player->removeActionButton(b.Button);
         }
-        player->SendActionButtons(1);
     }
 
     // In a match the spellbook lists the best unlocked rank of each ability and
@@ -622,7 +626,10 @@ namespace
     // talent reset does it; CENTURION_Rift hides the "You have (un)learned"
     // lines that come with it. Spells stay known server side - nothing is
     // written down. A bot has no client: BotSyncSpellbook.
-    void SyncClientSpellbook(Player* player, State& state)
+    //
+    // Half at a time (PublishBars): the spells the client gains (gains), or the
+    // ones it loses.
+    void SyncClientSpellbook(Player* player, State& state, bool gains)
     {
         if (!state.Persistent || !player->GetSession())
             return;
@@ -632,7 +639,7 @@ namespace
                 continue;
             bool const want = MatchShows(state, spell, known.active);
             bool const has = known.active ? !state.ClientHidden.count(spell) : state.ClientExtra.count(spell) != 0;
-            if (want == has)
+            if (want == has || want != gains)
                 continue;
             SendSpellbookChange(player, spell, want);
             if (known.active)
@@ -649,19 +656,26 @@ namespace
         }
     }
 
-    // The way out: the client is told the spellbook it normally holds.
-    void ResetClientSpellbook(Player* player, State& state)
+    // The way out: the client is told the spellbook it normally holds - what it
+    // gains before the real bars go out (gains), what it loses after them.
+    void ResetClientSpellbook(Player* player, State& state, bool gains)
     {
         if (player->GetSession())
         {
-            for (uint32 spell : state.ClientHidden)
-                if (player->HasSpell(spell))
-                    SendSpellbookChange(player, spell, true);
-            for (uint32 spell : state.ClientExtra)
-                SendSpellbookChange(player, spell, false);
+            if (gains)
+            {
+                for (uint32 spell : state.ClientHidden)
+                    if (player->HasSpell(spell))
+                        SendSpellbookChange(player, spell, true);
+            }
+            else
+                for (uint32 spell : state.ClientExtra)
+                    SendSpellbookChange(player, spell, false);
         }
-        state.ClientHidden.clear();
-        state.ClientExtra.clear();
+        if (gains)
+            state.ClientHidden.clear();
+        else
+            state.ClientExtra.clear();
     }
 
     // League's inventory. A shop item is not WoW gear: it sits in the bags (the
@@ -1087,7 +1101,7 @@ namespace
     // replaced - is pointed at the best unlocked rank. A lower rank of a spell
     // whose ranks stack stays where the player put it. RestoreButtons puts the
     // real buttons back.
-    void RetargetButtons(Player* player, State const& state)
+    bool RetargetButtons(Player* player, State const& state)
     {
         bool changed = false;
         for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
@@ -1110,22 +1124,22 @@ namespace
             if (want != ab->GetAction() && player->HasSpell(want) && player->addActionButton(button, want, ACTION_BUTTON_SPELL))
                 changed = true;
         }
-        if (changed)
-            player->SendActionButtons(1);
+        return changed;
     }
 
-    void TakeRecall(Player* player)
+    // The recall comes off the bars here (the caller sends them) and out of the
+    // spellbook in ForgetRecall, after the bars: the client clears a button
+    // whose spell it is told it lost, and tells the server to.
+    void TakeRecallButtons(Player* player)
     {
-        bool removed = false;
         for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
             if (ActionButton const* ab = player->GetActionButton(button))
                 if (ab->GetType() == ACTION_BUTTON_SPELL && ab->GetAction() == SPELL_RIFT_RECALL)
-                {
                     player->removeActionButton(button);
-                    removed = true;
-                }
-        if (removed)
-            player->SendActionButtons(1);
+    }
+
+    void ForgetRecall(Player* player)
+    {
         if (player->HasSpell(SPELL_RIFT_RECALL))
             player->RemoveSpell(SPELL_RIFT_RECALL, false, false);
         // RemoveSpell is only written at the next save; a crash before it must
@@ -1173,7 +1187,7 @@ namespace
     // somewhere new.
     void PlaceUnlockedSpell(Player* player, State& state, uint32 first, uint32 spell)
     {
-        bool const refilled = RefillSavedButtons(player, state);
+        RefillSavedButtons(player, state);
         if (!OnBars(player, state, first, spell))
         {
             std::unordered_set<uint8> reserved;
@@ -1187,13 +1201,53 @@ namespace
                             && player->addActionButton(button, spell, ACTION_BUTTON_SPELL))
                         {
                             state.Returned.insert(button);
-                            player->SendActionButtons(1);
                             return;
                         }
             }
         }
-        if (refilled)
-            player->SendActionButtons(1);
+    }
+
+    // What the 3.3.5 client does to its bars on its own (Wow.exe 12340), each
+    // time telling the server with a CMSG_SET_ACTION_BUTTON:
+    //  - SMSG_ACTION_BUTTONS (handler 0x6D8750): every button whose spell is
+    //    not in its spellbook is cleared - and every empty one, "cleared"
+    //    again (ClearAction 0x5AAA90 -> 0x5AA390 sends the opcode).
+    //  - SMSG_REMOVED_SPELL (0x6E7840 -> 0x5AAB90): every button holding the
+    //    spell is cleared.
+    //  - SMSG_LEARNED_SPELL (0x6E7B00 -> 0x5AAFD0): a button holding the
+    //    same-named spell one rank lower is moved up to the new rank.
+    // A pick used to send the bars twice, the saved rank first and the
+    // unlocked one after: the client showed the unlocked rank, and then its
+    // "that button is empty" for the first packet came in and emptied the
+    // server's. The next bars sent (the next pick) took the spell off the
+    // client too - Raptor Strike, gone when Wing Clip was learned.
+    //
+    // So every change to the bars or the spellbook is sent once, at the end,
+    // in the order the client needs: the spells it gains, then the bars (each
+    // button a spell it knows by then), then the spells it loses. A button
+    // filled here keeps its spell through the client's late "empty" for the
+    // packet before (KeepsButton).
+    uint32 constexpr FILLED_BUTTON_GUARD_MS = 3000;
+
+    void PublishBars(Player* player, State& state)
+    {
+        SyncClientSpellbook(player, state, true);
+        RetargetButtons(player, state);
+        uint32 const now = GameTime::GetGameTimeMS();
+        for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+        {
+            ActionButton const* ab = player->GetActionButton(button);
+            uint32 const packed = ab ? ab->packedData : 0;
+            auto const sent = state.SentBars.find(button);
+            if (packed && (sent == state.SentBars.end() || sent->second != packed))
+                state.FilledAt[button] = now;
+            if (packed)
+                state.SentBars[button] = packed;
+            else
+                state.SentBars.erase(button);
+        }
+        player->SendActionButtons(1);
+        SyncClientSpellbook(player, state, false);
     }
 
     // An addon whisper from the character to itself, as Mok'gora's are: the
@@ -1377,7 +1431,7 @@ void Enter(Player* player)
             else if (!known.active && shows)
                 existing->ClientExtra.insert(spell);
         }
-        SyncClientSpellbook(player, *existing);
+        PublishBars(player, *existing);
         SendState(player, *existing);
         return;
     }
@@ -1424,11 +1478,10 @@ void Enter(Player* player)
     for (SavedButton const& b : state.RealButtons)
         if (player->GetActionButton(b.Button))
             state.Returned.insert(b.Button);
-    RetargetButtons(player, state);
     if (!player->HasSpell(SPELL_RIFT_RECALL))
         player->LearnSpell(SPELL_RIFT_RECALL, false);
     PlaceUnlockedSpell(player, state, 0, SPELL_RIFT_RECALL);
-    SyncClientSpellbook(player, state);
+    PublishBars(player, state);
     SyncItemsFor(player, state);
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
@@ -1457,14 +1510,19 @@ void Leave(Player* player)
 
     TakeItemAuras(player, state);
     TakeShopItems(player);
-    TakeRecall(player);
+    TakeRecallButtons(player);
     TakeNoAmmo(player);
     player->GiveLevel(state.RealLevel, true);
     player->SetUInt32Value(PLAYER_XP, state.RealXp);
     RestoreTalents(player, state.RealTalents);
     RestoreButtons(player, state.RealButtons);
     player->SetMoney(state.RealMoney);
-    ResetClientSpellbook(player, state);
+    // The real bars go out once the client knows every spell on them again (see
+    // PublishBars): a button it cannot place is cleared on both sides.
+    ResetClientSpellbook(player, state, true);
+    player->SendActionButtons(1);
+    ResetClientSpellbook(player, state, false);
+    ForgetRecall(player);
 
     if (state.Persistent)
         CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
@@ -1523,13 +1581,15 @@ void OnLogin(Player* player)
     player->RemoveAurasDueToSpell(SPELL_BLOODTHIRSTER_STACK);
     player->RemoveAurasDueToSpell(SPELL_RIFT_FOCUS);
     TakeShopItems(player);
-    TakeRecall(player);
+    TakeRecallButtons(player);
     TakeNoAmmo(player);
     player->GiveLevel(realLevel, true);
     player->SetUInt32Value(PLAYER_XP, fields[1].GetUInt32());
     player->SetMoney(fields[2].GetUInt32());
     RestoreTalents(player, TalentsFromString(fields[3].GetString()));
     RestoreButtons(player, ButtonsFromString(fields[4].GetString()));
+    player->SendActionButtons(1);
+    ForgetRecall(player);
     CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
     TC_LOG_INFO("bg.battleground", "Rift: {} logged in outside the match it left; level {}, experience, money and talents restored.", player->GetName(), realLevel);
 }
@@ -1595,6 +1655,24 @@ bool IsSpellLocked(Player const* player, SpellInfo const* spellInfo)
     return pos == ranks.end() || size_t(pos - ranks.begin()) >= have;
 }
 
+bool KeepsButton(Player* player, uint8 button)
+{
+    if (!player)
+        return false;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = Find(player);
+    if (!state)
+        return false;
+    auto const filled = state->FilledAt.find(button);
+    return filled != state->FilledAt.end() && GameTime::GetGameTimeMS() - filled->second < FILLED_BUTTON_GUARD_MS
+        && player->GetActionButton(button);
+}
+
+bool LearnsHigherRanks(Player const* player)
+{
+    return !IsInMatch(player);
+}
+
 // A talent learned in the match: its old button comes back too.
 void OnTalentLearned(Player* player)
 {
@@ -1604,15 +1682,19 @@ void OnTalentLearned(Player* player)
     State* state = Find(player);
     if (!state)
         return;
-    // A talent with trained ranks after it: those ranks are picks from now on.
+    // A talent with trained ranks after it: the talent point pays for its own
+    // rank, and the trained ranks after it are picks from now on (the core no
+    // longer hands them back with the talent in a match: Player::LearnSpell).
     for (auto const& [first, chain] : state->Chains)
-        if (chain.Talent && player->HasSpell(first))
-            state->TalentKnown.insert(first);
+        if (chain.Talent && player->HasSpell(first) && state->TalentKnown.insert(first).second)
+        {
+            uint8& have = state->Unlocked[first];
+            have = std::max<uint8>(have, 1);
+        }
     if (IsTransient(player))
         return;
-    if (RefillSavedButtons(player, *state))
-        player->SendActionButtons(1);
-    RetargetButtons(player, *state);
+    RefillSavedButtons(player, *state);
+    PublishBars(player, *state);
     SendState(player, *state);
 }
 
@@ -2223,13 +2305,14 @@ void HandlePickRequest(Player* player, std::string_view argument)
         {
             uint32 const first = state->SpellToChain.at(*spellId);
             bool const firstUnlock = ++state->Unlocked[first] == 1;
-            // The client's spellbook learns the spell before any button holds
-            // it: the buttons used to go out first, for a spell it did not know
-            // yet, and the picks after the first never showed on the bars.
-            SyncClientSpellbook(player, *state);
+            // A talent's trained rank the match reset put aside (disabled with
+            // the talent) is learned again now, alone.
+            auto const known = player->GetSpellMap().find(*spellId);
+            if (known != player->GetSpellMap().end() && known->second.disabled)
+                player->LearnSpell(*spellId, false);
             if (firstUnlock)
                 PlaceUnlockedSpell(player, *state, first, *spellId);
-            RetargetButtons(player, *state);
+            PublishBars(player, *state);
             --state->PendingPicks;
         }
     }

@@ -4604,7 +4604,8 @@ void Player::LearnSpell(uint32 spell_id, bool dependent, uint32 fromSkill /*= 0*
     // learn all disabled higher ranks and required spells (recursive)
     if (disabled)
     {
-        if (uint32 nextSpell = sSpellMgr->GetNextSpellInChain(spell_id))
+        uint32 const nextSpell = RiftProgression::LearnsHigherRanks(this) ? sSpellMgr->GetNextSpellInChain(spell_id) : 0;
+        if (nextSpell)
         {
             PlayerSpellMap::iterator iter = m_spells.find(nextSpell);
             if (iter != m_spells.end() && iter->second.disabled)

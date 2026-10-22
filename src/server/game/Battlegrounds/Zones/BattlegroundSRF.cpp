@@ -205,9 +205,11 @@ int32 constexpr SRF_DRAGON_AP_PER_STACK   = 30;
 int32 constexpr SRF_BARON_STATS_PCT       = 15;
 uint32 constexpr SRF_GOLD_BARON_TEAM      = 300;     // to every player of the team
 float constexpr SRF_BARON_MINION_HEALTH   = 1.5f;
-// Long enough that the core never brings a jungle corpse back on its own: the
-// battleground respawns its camps itself.
-uint32 constexpr SRF_JUNGLE_CORE_RESPAWN  = DAY;
+// Long enough that the core never brings a corpse back on its own: the
+// battleground respawns its camps and inhibitors itself. A fallen turret came
+// back five minutes after it was despawned (the core's default delay) - standing,
+// at full health, with its slot already counted as destroyed.
+uint32 constexpr SRF_CORE_RESPAWN         = DAY;
 
 uint8 constexpr SRF_SLOT_NEXUS_TURRET_1 = 12;
 uint8 constexpr SRF_SLOT_NEXUS_TURRET_2 = 13;
@@ -677,7 +679,7 @@ bool BattlegroundSRF::IsAtBase(Player const* player) const
 bool BattlegroundSRF::SpawnStructure(uint8 slot)
 {
     DelCreature(slot);
-    if (!AddCreature(StructureEntry(slot), slot, StructurePos(slot), SlotTeam(slot)))
+    if (!AddCreature(StructureEntry(slot), slot, StructurePos(slot), SlotTeam(slot), SRF_CORE_RESPAWN))
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundSRF: failed to spawn structure slot {} (entry {}).", slot, StructureEntry(slot));
         return false;
@@ -2815,7 +2817,7 @@ void BattlegroundSRF::SpawnCamp(uint8 camp)
             if (ground > INVALID_HEIGHT)
                 pos.Relocate(pos.GetPositionX(), pos.GetPositionY(), ground);
         }
-        Creature* creature = AddCreature(m.entry, slot, pos, TEAM_NEUTRAL, SRF_JUNGLE_CORE_RESPAWN);
+        Creature* creature = AddCreature(m.entry, slot, pos, TEAM_NEUTRAL, SRF_CORE_RESPAWN);
         if (!creature)
         {
             TC_LOG_ERROR("bg.battleground", "BattlegroundSRF: failed to spawn jungle monster {} (entry {}).", i, m.entry);

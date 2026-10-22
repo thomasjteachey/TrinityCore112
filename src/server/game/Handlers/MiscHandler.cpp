@@ -50,6 +50,7 @@
 #include "Opcodes.h"
 #include "OutdoorPvP.h"
 #include "Player.h"
+#include "RiftProgression.h"
 #include "T2SpellHooks.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
@@ -1036,7 +1037,10 @@ void WorldSession::HandleSetActionButtonOpcode(WorldPacket& recvData)
     TC_LOG_DEBUG("network", "CMSG_SET_ACTION_BUTTON Button: {} Data: {}", button, packetData);
 
     if (!packetData)
-        GetPlayer()->removeActionButton(button);
+    {
+        if (!RiftProgression::KeepsButton(GetPlayer(), button))
+            GetPlayer()->removeActionButton(button);
+    }
     else
         GetPlayer()->addActionButton(button, ACTION_BUTTON_ACTION(packetData), ACTION_BUTTON_TYPE(packetData));
 }

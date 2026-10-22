@@ -105,6 +105,15 @@ namespace RiftProgression
     TC_GAME_API bool IsItemLocked(Player const* player, uint32 entry);
     // A talent learned in a match puts its old action button back.
     TC_GAME_API void OnTalentLearned(Player* player);
+    // CMSG_SET_ACTION_BUTTON emptying `button`: false when the client's "empty"
+    // answers bars sent before the server filled the button, moments ago - the
+    // client clears every empty and unknown button of each SMSG_ACTION_BUTTONS
+    // and says so (PublishBars).
+    TC_GAME_API bool KeepsButton(Player* player, uint8 button);
+    // Player::LearnSpell: whether learning a spell the talent reset put aside
+    // learns its disabled higher ranks back too. Not in a match: Trueshot
+    // Aura's talent handed back ranks 2 and 3 there, which are skill picks.
+    TC_GAME_API bool LearnsHigherRanks(Player const* player);
 
     // League's inventory: shop items are not worn but held (six item slots and a
     // trinket slot, drawn by CENTURION_Rift); what the held ones give is put on
