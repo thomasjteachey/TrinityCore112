@@ -45,6 +45,7 @@
 
 #include <array>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 enum BG_SRF_Graveyards
@@ -232,11 +233,19 @@ public:
     // League's brush: a champion in a brush patch is unseen by every enemy - player,
     // minion, turret - outside that patch, until it attacks.
     bool HidesFrom(Player const* target, WorldObject const* seer) const override;
+    // League's kill credit and assists: an enemy champion's damage or ability on
+    // `victim` (custom_rift_progression.cpp's hooks). Within 10 s of a death it
+    // makes an assist, and the latest one takes the kill a turret, a minion or a
+    // monster finished.
+    void RecordChampionContribution(Player* attacker, Player* victim);
+
     // Minions, turrets and camps hit bots and players alike, and take the same from both.
     bool UsesBotCreatureScaling() const override { return false; }
     // League's combat (Battleground::UsesLeagueCombat), armour read at the
     // champions' average level - the one their League armour is converted at.
     bool UsesLeagueCombat() const override { return true; }
+    // League's death timers (DeathTimer, UpdateRespawns): no spirit-guide waves.
+    bool UsesSpiritGuideWaves() const override { return false; }
     uint8 GetLeagueCombatLevel() const override { return _combatLevel; }
     void EndBattleground(uint32 winner) override;
 
@@ -293,6 +302,7 @@ private:
         ObjectGuid Eye;
         uint8 WarmStacks = 0;          // League's heat: champion hits in a row (SRF_TURRET_HEAT)
         ObjectGuid LastChampion;       // the champion it last shot
+        ObjectGuid Warned;             // the champion told it is the target (RIFTTURRET)
         uint32 SinceChampionShot = 0;  // ms since the last shot at a champion
         uint32 Cooldown = 0;           // ms before it may fire: its last bolt lands first
     };
@@ -410,6 +420,8 @@ private:
         uint32 LastKillMs = 0;     // _matchClock at its last kill
     };
     std::unordered_map<ObjectGuid, ChampionStats> _stats;
+    // victim -> enemy champion -> _matchClock of its last damage or ability on it
+    std::unordered_map<ObjectGuid, std::unordered_map<ObjectGuid, uint32>> _contributions;
     bool _firstBlood = false;
     uint32 _scoreTimer = 0;
     uint32 _mapTimer = 0;
@@ -418,6 +430,11 @@ private:
     void CheckAce(TeamId deadTeam);
     void SendScores();
     void SendMap();
+    // League's turret range rings: each turret's reach as a ring of ground heights,
+    // sent to each champion every minute (a /reload loses them; RIFTRING lines,
+    // CENTURION_Rift draws the dots).
+    void SendRings(Player* player);
+    std::unordered_map<ObjectGuid, uint32> _ringsSentAt;   // _matchClock of the last send
     bool SeenBy(TeamId team, Player* enemy);
     // League's gold for a champion kill, before first blood's extra: the
     // victim's bounty for its streak, less for a champion that keeps dying.

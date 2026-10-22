@@ -205,6 +205,10 @@ namespace
         uint8 CombatLevel = 0;
         // The Bloodthirster's stacks: a unit kill each, up to 30, half lost on death.
         uint8 BloodthirsterStacks = 0;
+        // League's own numbers for CENTURION_Rift's pane (RIFTSTATS): the line as
+        // SetChampionCarriers last made it, and as the client was last sent it.
+        std::string StatsLine;
+        std::string SentStatsLine;
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -906,7 +910,7 @@ namespace
     // the character on its own - its class's base health and stamina, the field
     // kit's armour and weapon, its base attack power and agility crit - and
     // League's number, so talents and buffs still add on top of League's.
-    void SetChampionCarriers(Player* player, State const& state, ItemEffects const& items, RiftLeague::Tables const& tables)
+    void SetChampionCarriers(Player* player, State& state, ItemEffects const& items, RiftLeague::Tables const& tables)
     {
         RiftLeague::ChampionStats const* cs = RiftLeague::FindChampion(tables, player->GetClass());
         if (!cs || state.MatchScale <= 0.0f || !state.CombatLevel)
@@ -978,6 +982,11 @@ namespace
         }
         int32 const healthRegen = Round(s * it.HealthRegen);
         int32 const penetration = -Round((cs->RuneMagicPen + it.MagicPen) * MAGIC_PEN_PER_POINT);
+
+        // League's numbers as League's stat panel shows them; WoW's attack power
+        // is only the dial that makes a basic attack hit for League's damage.
+        state.StatsLine = Trinity::StringFormat("RIFTSTATS:{}:{}:{}:{}:{:.1f}", Round(damage), Round(abilityPower),
+            Round(armor), Round(resist), it.LifeSteal);
 
         // A champion keeps its share of health as its maximum moves.
         float const healthPct = player->GetHealthPct();
@@ -1631,6 +1640,11 @@ void SyncItems(Player* player)
     if (!state)
         return;
     SyncItemsFor(player, *state);
+    if (!state->StatsLine.empty() && state->StatsLine != state->SentStatsLine)
+    {
+        state->SentStatsLine = state->StatsLine;
+        SendLine(player, state->StatsLine);
+    }
     // The run speed CENTURION_Rift shows on its inventory pane, as a share of the
     // normal run (WoW's addon API has only the speed of the moment): sent when it changes.
     uint32 const speed = uint32(player->GetSpeedRate(MOVE_RUN) * 100.0f + 0.5f);
@@ -2232,6 +2246,8 @@ void HandleStateRequest(Player* player, std::string_view /*argument*/)
         SendState(player, *state);
         SendBase(player, CanSpendPoints(player, false));
         SendLine(player, Trinity::StringFormat("RIFTSPEED:{}", uint32(player->GetSpeedRate(MOVE_RUN) * 100.0f + 0.5f)));
+        if (!state->StatsLine.empty())
+            SendLine(player, state->StatsLine);
     }
 }
 

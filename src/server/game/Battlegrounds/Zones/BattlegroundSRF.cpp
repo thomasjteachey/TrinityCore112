@@ -301,6 +301,7 @@ uint32 constexpr SRF_MAP_TICK           = 1000;    // the map feed (RIFTSTR, RIF
 float constexpr SRF_VISION_CHAMPION    = 30.0f;
 float constexpr SRF_VISION_MINION      = 25.0f;
 float constexpr SRF_VISION_TURRET      = 30.0f;
+uint32 constexpr SRF_ASSIST_WINDOW_MS   = 10000;   // League: damage or an ability in the victim's last 10 s
 uint32 constexpr SRF_MULTIKILL_MS       = 10000;   // League: each kill of a multikill within 10 s of the last...
 uint32 constexpr SRF_PENTAKILL_MS       = 30000;   // ...and the pentakill within 30 s of the quadra
 
@@ -604,6 +605,8 @@ void BattlegroundSRF::Reset()
     _combatLevel = SRF_UNIT_BASE_LEVEL;
     _unitScale = 0.0f;
     _respawnAt.clear();
+    _ringsSentAt.clear();
+    _contributions.clear();
     _stats.clear();
     _firstBlood = false;
     _scoreTimer = 0;
@@ -1934,11 +1937,42 @@ void BattlegroundSRF::HandleKillUnit(Creature* creature, Player* killer)
         RiftProgression::AddGold(killer, SRF_MINION_GOLD[it->Kind], true);
 }
 
+void BattlegroundSRF::RecordChampionContribution(Player* attacker, Player* victim)
+{
+    if (!attacker || !victim || attacker == victim || GetStatus() != STATUS_IN_PROGRESS)
+        return;
+    if (GetPlayerTeam(attacker->GetGUID()) == GetPlayerTeam(victim->GetGUID()))
+        return;
+    _contributions[victim->GetGUID()][attacker->GetGUID()] = _matchClock;
+}
+
 void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
 {
     Battleground::HandleKillPlayer(victim, killer);
     if (!victim || GetStatus() != STATUS_IN_PROGRESS)
         return;
+    // League's kill credit: the enemy champions who damaged the victim or used an
+    // ability on it in its last 10 s. A death a turret, a minion or a monster
+    // dealt goes to the latest of them; only with none is it "Executed".
+    std::vector<std::pair<uint32, ObjectGuid>> recent;
+    if (auto const hits = _contributions.find(victim->GetGUID()); hits != _contributions.end())
+    {
+        for (auto const& [guid, at] : hits->second)
+            if (_matchClock - at <= SRF_ASSIST_WINDOW_MS)
+                recent.emplace_back(at, guid);
+        _contributions.erase(hits);
+    }
+    std::sort(recent.begin(), recent.end(), [](auto const& a, auto const& b) { return a.first > b.first; });
+    if (!killer || killer == victim || GetPlayerTeam(killer->GetGUID()) == GetPlayerTeam(victim->GetGUID()))
+    {
+        killer = nullptr;
+        for (auto const& [at, guid] : recent)
+            if (Player* credited = ObjectAccessor::FindPlayer(guid); credited && credited->GetBattleground() == this)
+            {
+                killer = credited;
+                break;
+            }
+    }
     RiftProgression::OnDeath(victim);
     if (killer && killer != victim)
         RiftProgression::OnUnitKill(killer);
@@ -1976,13 +2010,14 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
     ks.Multi = ks.Multi && _matchClock - ks.LastKillMs <= window ? ks.Multi + 1 : 1;
     ks.LastKillMs = _matchClock;
 
-    // Assists: League's are the allies who damaged the victim in its last 10 s;
-    // here, the allies fighting next to the killer when it fell (the experience
-    // range). They share half the kill's gold, as in League.
+    // Assists: League's - every other champion of the killer's side who damaged
+    // the victim or used an ability on it in its last 10 s. They share half the
+    // kill's gold, as in League.
     std::vector<Player*> assists;
-    for (Player* ally : TeamPlayers(killerTeam))
-        if (ally != killer && ally->IsAlive() && ally->IsInCombat() && ally->GetExactDist2d(victim) <= SRF_XP_RANGE)
-            assists.push_back(ally);
+    for (auto const& [at, guid] : recent)
+        if (guid != killer->GetGUID())
+            if (Player* ally = ObjectAccessor::FindPlayer(guid); ally && ally->GetBattleground() == this)
+                assists.push_back(ally);
     for (Player* ally : assists)
     {
         ++_stats[ally->GetGUID()].Assists;
@@ -2138,6 +2173,42 @@ void BattlegroundSRF::SendScores()
 // second: every structure with its health - RIFTSTR:<slot>,<kind>,<x>,<y>,<health
 // %>;... in chunks under the 255-character addon line - and the enemy champions
 // the player's team can see, RIFTSEEN:<guid>,<class>,<x>,<y>;...
+// RIFTRING:<slot>:<enemy 0/1>:<x>,<y>,<z>:<dz1>,...,<dz36> - a turret's reach
+// (SRF_TURRET_RANGE) as 36 ground heights round it, in tenths of a yard off the
+// turret's own: the dots CENTURION_Rift draws follow the ground.
+void BattlegroundSRF::SendRings(Player* player)
+{
+    Map* map = FindBgMap();
+    if (!map)
+        return;
+    uint32 const team = GetPlayerTeam(player->GetGUID()) ? GetPlayerTeam(player->GetGUID()) : player->GetTeam();
+    TeamId const own = GetTeamIndexByTeamId(team);
+    uint8 constexpr POINTS = 36;
+    for (uint8 slot = 0; slot < _structures.size(); ++slot)
+    {
+        if (StructureAt(slot).kind != BG_SRF_KIND_TURRET)
+            continue;
+        Creature* turret = GetBGCreature(slot, false);
+        if (!turret)
+            continue;
+        float const cx = turret->GetPositionX(), cy = turret->GetPositionY(), cz = turret->GetPositionZ();
+        std::string heights;
+        for (uint8 i = 0; i < POINTS; ++i)
+        {
+            float const a = 2.0f * float(M_PI) * float(i) / float(POINTS);
+            float const x = cx + std::cos(a) * SRF_TURRET_RANGE, y = cy + std::sin(a) * SRF_TURRET_RANGE;
+            float z = map->GetHeight(turret->GetPhaseMask(), x, y, cz + 15.0f, true, 60.0f);
+            if (z <= INVALID_HEIGHT)
+                z = cz;
+            if (i)
+                heights += ',';
+            heights += std::to_string(std::lround((z - cz) * 10.0f));
+        }
+        RiftProgression::Tell(player, Trinity::StringFormat("RIFTRING:{}:{}:{},{},{}:{}", slot, SlotTeam(slot) != own ? 1 : 0,
+            std::lround(cx), std::lround(cy), std::lround(cz), heights));
+    }
+}
+
 void BattlegroundSRF::SendMap()
 {
     std::vector<std::string> structures;
@@ -2175,6 +2246,12 @@ void BattlegroundSRF::SendMap()
             for (std::string const& line : structures)
                 RiftProgression::Tell(player, line);
             RiftProgression::Tell(player, "RIFTSEEN:" + seen);
+            auto const sent = _ringsSentAt.find(player->GetGUID());
+            if (sent == _ringsSentAt.end() || _matchClock - sent->second >= MINUTE * IN_MILLISECONDS)
+            {
+                SendRings(player);
+                _ringsSentAt[player->GetGUID()] = _matchClock;
+            }
         }
     }
 }
@@ -2546,7 +2623,23 @@ void BattlegroundSRF::UpdateTurrets(uint32 elapsed)
             }
 
         if (!target)
+        {
+            ts.Warned.Clear();
             continue;
+        }
+
+        // League's warning: a champion hears it the moment a turret turns on it
+        // (CENTURION_Rift plays the sound), once for each time it does.
+        if (target->GetTypeId() == TYPEID_PLAYER)
+        {
+            if (ts.Warned != target->GetGUID())
+            {
+                ts.Warned = target->GetGUID();
+                RiftProgression::Tell(target->ToPlayer(), "RIFTTURRET:1");
+            }
+        }
+        else
+            ts.Warned.Clear();
 
         RiftLeague::UnitStats const* stats = RiftLeague::FindUnit(*tables, StructureKind(slot));
         if (!stats)

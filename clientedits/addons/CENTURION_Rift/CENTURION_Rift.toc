@@ -18,3 +18,4 @@ RiftScoreboard.lua
 RiftPerf.lua
 RiftDeathTimer.lua
 RiftMap.lua
+RiftTurret.lua

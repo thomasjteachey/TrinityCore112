@@ -956,6 +956,12 @@ class TC_GAME_API Battleground
         virtual bool UsesLeagueCombat() const { return false; }
         virtual uint8 GetLeagueCombatLevel() const { return 0; }
 
+        // False where champions come back on their own timers, not on the spirit
+        // guides' waves (Summoner's Rift): a released ghost is not queued at a
+        // spirit guide, and the client is never sent the guide's "resurrect in"
+        // time (Player::RepopAtGraveyard, the area spirit healer handlers).
+        virtual bool UsesSpiritGuideWaves() const { return true; }
+
         // True while THIS battleground owns `player`'s preparation state: it
         // applied the aura/flag itself and takes it back when it is ready.
         // Violet Hold does that per WAVE, mid-match - and the playerbot

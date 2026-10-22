@@ -38,6 +38,7 @@
 
 #include "AddonRequestRoutes.h"
 #include "Battleground.h"
+#include "BattlegroundSRF.h"
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "MotionMaster.h"
@@ -47,6 +48,7 @@
 #include "RiftLeague.h"
 #include "RiftProgression.h"
 #include "ScriptMgr.h"
+#include "Spell.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellScript.h"
@@ -200,8 +202,55 @@ class spell_rift_recall_league : public SpellScript
     }
 };
 
+// League's kill credit and assists (BattlegroundSRF::RecordChampionContribution):
+// a champion's damage on an enemy champion - its pet's and totems' too - and any
+// harmful ability it casts at one.
+namespace
+{
+    BattlegroundSRF* RiftOfVictim(Unit* victim)
+    {
+        Player* player = victim ? victim->ToPlayer() : nullptr;
+        Battleground* bg = player ? player->GetBattleground() : nullptr;
+        return bg && bg->GetTypeID(true) == BATTLEGROUND_SRF && player->GetMapId() == bg->GetMapId() ? static_cast<BattlegroundSRF*>(bg) : nullptr;
+    }
+}
+
+class custom_rift_contribution_unit : public UnitScript
+{
+public:
+    custom_rift_contribution_unit() : UnitScript("custom_rift_contribution_unit") { }
+
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
+    {
+        if (!damage || !attacker || !victim || victim->GetTypeId() != TYPEID_PLAYER)
+            return;
+        Player* champion = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!champion || champion == victim)
+            return;
+        if (BattlegroundSRF* bg = RiftOfVictim(victim))
+            bg->RecordChampionContribution(champion, victim->ToPlayer());
+    }
+};
+
+class custom_rift_contribution_player : public PlayerScript
+{
+public:
+    custom_rift_contribution_player() : PlayerScript("custom_rift_contribution_player") { }
+
+    void OnSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
+    {
+        Unit* target = spell ? spell->m_targets.GetUnitTarget() : nullptr;
+        if (!target || target == player || target->GetTypeId() != TYPEID_PLAYER || !player->IsHostileTo(target))
+            return;
+        if (BattlegroundSRF* bg = RiftOfVictim(target))
+            bg->RecordChampionContribution(player, target->ToPlayer());
+    }
+};
+
 void AddSC_custom_rift_progression()
 {
+    new custom_rift_contribution_unit();
+    new custom_rift_contribution_player();
     AddonRequestRoutes::Register("RIFTPICK", &RiftProgression::HandlePickRequest);
     AddonRequestRoutes::Register("RIFTSTATE", &RiftProgression::HandleStateRequest);
     RegisterSpellScript(spell_rift_recall);

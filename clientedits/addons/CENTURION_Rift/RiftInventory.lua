@@ -44,7 +44,7 @@ end
 local inv = CreateFrame("Frame", "CENTURION_RiftInventory", UIParent);
 inv:SetFrameStrata("HIGH");
 inv:SetWidth(PAD + STATS_W + PAD + 3 * SLOT + 2 * GAP + PAD + SLOT + PAD);
-inv:SetHeight(HEADER + PAD + 2 * SLOT + GAP + PAD + 34);
+inv:SetHeight(HEADER + PAD + 2 * SLOT + GAP + PAD + 34 + 14);
 inv:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -90, 120);
 inv:SetBackdrop({
 	bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -95,21 +95,39 @@ hint:SetText("Right-click: use, or sell at the shop");
 
 -- ------------------------------------------------------------------ stats
 
-local STATS = {
-	{ "Attack Power", function()
-		local base, pos, neg = UnitAttackPower("player");
-		local rbase, rpos, rneg = UnitRangedAttackPower("player");
-		return math.max(base + pos + neg, (rbase or 0) + (rpos or 0) + (rneg or 0));
-	end },
-	{ "Spell Power", function()
-		local best = 0;
-		for school = 2, 7 do
-			best = math.max(best, GetSpellBonusDamage(school) or 0);
+-- League's own numbers, from the server (RIFTSTATS:<AD>:<AP>:<armor>:<MR>:<life
+-- steal>): the Rift plays League's stats converted, and WoW's attack power, armour
+-- and resistances are only the dials that convert them.
+-- Until the server sends them (a realm without the League conversion), WoW's own.
+local league;
+local function League(i, suffix, wow)
+	return function()
+		if ( league and league[i] ) then
+			return league[i] .. (suffix or "");
 		end
-		return best;
-	end },
-	{ "Armor", function() return select(2, UnitArmor("player")); end },
-	{ "Magic Resist", function() return select(2, UnitResistance("player", 2)); end },
+		return wow and wow() or "-";
+	end
+end
+
+local function WowAttackPower()
+	local base, pos, neg = UnitAttackPower("player");
+	local rbase, rpos, rneg = UnitRangedAttackPower("player");
+	return math.max(base + pos + neg, (rbase or 0) + (rpos or 0) + (rneg or 0));
+end
+
+local function WowSpellPower()
+	local best = 0;
+	for school = 2, 7 do
+		best = math.max(best, GetSpellBonusDamage(school) or 0);
+	end
+	return best;
+end
+
+local STATS = {
+	{ "Attack Damage", League(1, nil, WowAttackPower) },
+	{ "Ability Power", League(2, nil, WowSpellPower) },
+	{ "Armor", League(3, nil, function() return select(2, UnitArmor("player")); end) },
+	{ "Magic Resist", League(4, nil, function() return select(2, UnitResistance("player", 2)); end) },
 	{ "Attack Speed", function()
 		local speed = UnitAttackSpeed("player");
 		if ( (UnitRangedDamage("player") or 0) > 0 and select(2, UnitClass("player")) == "HUNTER" ) then
@@ -120,6 +138,7 @@ local STATS = {
 	{ "Critical Strike", function()
 		return string.format("%.1f%%", math.max(GetCritChance() or 0, GetSpellCritChance(2) or 0, GetRangedCritChance() or 0));
 	end },
+	{ "Life Steal", League(5, "%") },
 	-- From the server (RIFTSPEED, a share of the normal run): the addon API only
 	-- has the speed of the moment, nothing at a standstill.
 	{ "Move Speed", function() return CENTURION_RiftMoveSpeed and (CENTURION_RiftMoveSpeed .. "%") or "-"; end },
@@ -260,9 +279,18 @@ inv:SetScript("OnShow", Refresh);
 local speedWatch = CreateFrame("Frame");
 speedWatch:RegisterEvent("CHAT_MSG_ADDON");
 speedWatch:SetScript("OnEvent", function(self, event, prefix, message)
-	local speed = prefix == "CCGAME" and type(message) == "string" and string.match(message, "^RIFTSPEED:(%d+)$");
+	if ( prefix ~= "CCGAME" or type(message) ~= "string" ) then
+		return;
+	end
+	local speed = string.match(message, "^RIFTSPEED:(%d+)$");
 	if ( speed ) then
 		CENTURION_RiftMoveSpeed = tonumber(speed);
+		Refresh();
+		return;
+	end
+	local ad, ap, armor, mr, ls = string.match(message, "^RIFTSTATS:(%-?%d+):(%-?%d+):(%-?%d+):(%-?%d+):([%d%.]+)$");
+	if ( ad ) then
+		league = { ad, ap, armor, mr, ls };
 		Refresh();
 	end
 end);

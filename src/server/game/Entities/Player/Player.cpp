@@ -6145,7 +6145,7 @@ void Player::RepopAtGraveyard()
                     return;
 
                 Battleground* bg = GetBattleground();
-                if (!bg)
+                if (!bg || !bg->UsesSpiritGuideWaves())
                     return;
 
                 if (bg->IsPlayerInResurrectQueue(GetGUID()))
