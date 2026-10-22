@@ -4052,15 +4052,17 @@ void Unit::_UpdateAutoRepeatSpell()
         return;
     }
 
-    //hunter autoshot change
-    if ((m_currentSpells[CURRENT_GENERIC_SPELL] || m_currentSpells[CURRENT_CHANNELED_SPELL]) && getAttackTimer(RANGED_ATTACK) < 434)
-    {
-        setAttackTimer(RANGED_ATTACK, 434);
-    }
+    // The shot's aim after another cast, or when auto-repeat starts: half a
+    // second at base ranged speed, scaled by ranged haste like every other
+    // ranged cast time (a quiver's 15% makes it 435 ms, a slow lengthens it).
+    // It was a flat 434 ms whatever the attack speed (owner, 2026-10-22: "need
+    // to be based on attack speed").
+    uint32 const aim = uint32(500.0f * m_modAttackSpeedPct[RANGED_ATTACK]);
+    if ((m_currentSpells[CURRENT_GENERIC_SPELL] || m_currentSpells[CURRENT_CHANNELED_SPELL]) && getAttackTimer(RANGED_ATTACK) < aim)
+        setAttackTimer(RANGED_ATTACK, aim);
 
-    // apply delay (Auto Shot (spellID 75) not affected) (just kidding lol)
-    if (m_AutoRepeatFirstCast && getAttackTimer(RANGED_ATTACK) < 434)
-        setAttackTimer(RANGED_ATTACK, 434);
+    if (m_AutoRepeatFirstCast && getAttackTimer(RANGED_ATTACK) < aim)
+        setAttackTimer(RANGED_ATTACK, aim);
     m_AutoRepeatFirstCast = false;
 
     // castroutine
