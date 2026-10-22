@@ -29820,7 +29820,7 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
         VioletHoldBoons::OnTalentLearnedInRun(this, spellid, curtalent_maxrank ? talentInfo->SpellRank[curtalent_maxrank - 1] : 0);
 
     // Summoner's Rift: the talent's spell goes back on the button it had.
-    RiftProgression::OnTalentLearned(this);
+    RiftProgression::OnTalentLearned(this, spellid);
 }
 
 // The activatable ranks and dependent spells a talent brings with it - what

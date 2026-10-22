@@ -358,14 +358,36 @@ namespace
         return slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND || slot == EQUIPMENT_SLOT_RANGED;
     }
 
-    // The first kit piece for this slot the character can actually put on, or 0:
-    // the best for its level, or for `levelCap` when one is given (the Rift
-    // dresses a character for the level its match starts at). `swap`: the slot
-    // may be occupied - the piece would replace what is there.
-    uint32 PickKitPiece(Player* player, uint8 slot, uint8 levelCap = 0, bool swap = false)
+    // A hand's inventory types for a chosen weapon shape (the Rift's armsmaster).
+    std::vector<uint32> HandTypes(uint8 slot, RiftWeaponShape shape)
     {
-        uint32 const maxLevel = levelCap ? std::min<uint32>(levelCap, player->GetLevel()) : player->GetLevel();
-        for (uint32 invType : InventoryTypesForSlot(slot))
+        bool const main = slot == EQUIPMENT_SLOT_MAINHAND;
+        switch (shape)
+        {
+            case RiftWeaponShape::OneHandShield: return main ? std::vector<uint32>{ INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND } : std::vector<uint32>{ INVTYPE_SHIELD };
+            case RiftWeaponShape::DualWield:     return main ? std::vector<uint32>{ INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND } : std::vector<uint32>{ INVTYPE_WEAPON, INVTYPE_WEAPONOFFHAND };
+            case RiftWeaponShape::TwoHand:       return main ? std::vector<uint32>{ INVTYPE_2HWEAPON } : std::vector<uint32>{};
+            case RiftWeaponShape::DualTwoHand:   return { INVTYPE_2HWEAPON };
+            case RiftWeaponShape::OneHand:       return main ? std::vector<uint32>{ INVTYPE_WEAPON, INVTYPE_WEAPONMAINHAND } : std::vector<uint32>{};
+            default:                             return InventoryTypesForSlot(slot);
+        }
+    }
+
+    // A kit piece the character could hold at `maxLevel`: its class, race and
+    // level, and the weapon or shield skill (CanUseItem leaves that to equipping).
+    bool CanHoldKitPiece(Player* player, ItemTemplate const* proto, uint32 maxLevel)
+    {
+        if (!proto || proto->RequiredLevel > maxLevel || player->CanUseItem(proto) != EQUIP_ERR_OK)
+            return false;
+        uint32 const skill = proto->GetSkill();
+        return !skill || player->GetSkillValue(skill) > 0;
+    }
+
+    // The first kit piece of these inventory types for this slot the character
+    // can actually put on (of `subClass`, a weapon type, unless -1).
+    uint32 PickKitPieceOf(Player* player, uint8 slot, uint32 maxLevel, bool swap, std::vector<uint32> const& types, int32 subClass)
+    {
+        for (uint32 invType : types)
         {
             auto itr = KitPieces.find(invType);
             if (itr == KitPieces.end())
@@ -380,6 +402,8 @@ namespace
             {
                 ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
                 if (!proto || proto->RequiredLevel > maxLevel)
+                    continue;
+                if (subClass >= 0 && proto->Class == ITEM_CLASS_WEAPON && int32(proto->SubClass) != subClass)
                     continue;
                 if (bestProto && proto->RequiredLevel + 5 <= bestProto->RequiredLevel)
                     break;
@@ -398,6 +422,29 @@ namespace
         }
 
         return 0;
+    }
+
+    // The first kit piece for this slot the character can actually put on, or 0:
+    // the best for its level, or for `levelCap` when one is given (the Rift
+    // dresses a character for the level its match starts at). `swap`: the slot
+    // may be occupied - the piece would replace what is there. `weapons`: the
+    // hands as the Rift's armsmaster was asked for - that shape and type, that
+    // shape of any type, and for the main hand the kit's own pick after that.
+    uint32 PickKitPiece(Player* player, uint8 slot, uint8 levelCap = 0, bool swap = false, RiftWeapons const* weapons = nullptr)
+    {
+        uint32 const maxLevel = levelCap ? std::min<uint32>(levelCap, player->GetLevel()) : player->GetLevel();
+        if (weapons && weapons->Shape != RiftWeaponShape::Any && (slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND))
+        {
+            std::vector<uint32> const types = HandTypes(slot, weapons->Shape);
+            if (weapons->SubClass >= 0)
+                if (uint32 const piece = PickKitPieceOf(player, slot, maxLevel, swap, types, weapons->SubClass))
+                    return piece;
+            if (uint32 const piece = PickKitPieceOf(player, slot, maxLevel, swap, types, -1))
+                return piece;
+            if (slot == EQUIPMENT_SLOT_OFFHAND)
+                return 0;
+        }
+        return PickKitPieceOf(player, slot, maxLevel, swap, InventoryTypesForSlot(slot), -1);
     }
 
     // An enchant, gem or bonus read off an original before it is put away, to
@@ -1356,7 +1403,7 @@ void ApplyBattlegroundLoadout(Player* player)
 // template pieces, no weapon of the same shape - the kit, and nothing for a slot
 // it has no piece for. The originals go aside exactly as a tournament match puts
 // them aside, so the way back is the tournament's own.
-void ApplyRiftLoadout(Player* player, uint8 kitLevel)
+void ApplyRiftLoadout(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
 {
     if (!player || player->IsGameMaster() || HasBattlegroundLoadout(player))
         return;
@@ -1414,7 +1461,7 @@ void ApplyRiftLoadout(Player* player, uint8 kitLevel)
     {
         if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD || player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
             continue;
-        uint32 const kit = PickKitPiece(player, slot, kitLevel);
+        uint32 const kit = PickKitPiece(player, slot, kitLevel, false, &weapons);
         uint16 dest = 0;
         if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
             continue;
@@ -1438,7 +1485,7 @@ void ApplyRiftLoadout(Player* player, uint8 kitLevel)
     TC_LOG_DEBUG("bg.battleground", "Rift loadout: dressed {} in the field set: {} issued, {} put away.", player->GetName(), issued, putAway);
 }
 
-void UpgradeRiftKit(Player* player, uint8 kitLevel)
+void UpgradeRiftKit(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
 {
     if (!player || player->IsGameMaster())
         return;
@@ -1466,7 +1513,7 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel)
         // and a slot that then took nothing (a hunter's bow, refused mid-fight)
         // was left empty.
         uint32 const oldEntry = worn ? worn->GetEntry() : 0;
-        uint32 kit = PickKitPiece(player, slot, kitLevel, worn != nullptr);
+        uint32 kit = PickKitPiece(player, slot, kitLevel, worn != nullptr, &weapons);
         if (kit == oldEntry)
             continue;
         if (!kit && !(worn && worn->GetTemplate()->InventoryType == INVTYPE_HOLDABLE))
@@ -1513,7 +1560,7 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel)
 
 // Every kit slot left empty gets its piece: a champion once came back from the
 // dead with nothing on. Asked on revive and after an upgrade (RiftProgression).
-void FillRiftKit(Player* player, uint8 kitLevel)
+void FillRiftKit(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
 {
     if (!player || player->IsGameMaster() || !player->IsAlive())
         return;
@@ -1535,7 +1582,7 @@ void FillRiftKit(Player* player, uint8 kitLevel)
     uint32 issued = 0;
     for (uint8 slot : empty)
     {
-        uint32 const kit = PickKitPiece(player, slot, kitLevel);
+        uint32 const kit = PickKitPiece(player, slot, kitLevel, false, &weapons);
         uint16 dest = 0;
         if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
             continue;
@@ -1555,6 +1602,120 @@ void FillRiftKit(Player* player, uint8 kitLevel)
     }
     if (issued)
         TC_LOG_DEBUG("bg.battleground", "Rift loadout: {} was missing {} level-{} kit piece(s); put on.", player->GetName(), issued, uint32(kitLevel));
+}
+
+std::vector<uint32> RiftWeaponTypes(Player* player, RiftWeaponShape shape, uint8 kitLevel)
+{
+    std::vector<uint32> types;
+    if (!player)
+        return types;
+    uint32 const maxLevel = std::min<uint32>(kitLevel, player->GetLevel());
+    for (uint32 invType : HandTypes(EQUIPMENT_SLOT_MAINHAND, shape))
+    {
+        auto const pieces = KitPieces.find(invType);
+        if (pieces == KitPieces.end())
+            continue;
+        for (uint32 entry : pieces->second)
+        {
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+            if (!proto || proto->Class != ITEM_CLASS_WEAPON || !CanHoldKitPiece(player, proto, maxLevel))
+                continue;
+            uint32 const sub = proto->SubClass;
+            if (sub == ITEM_SUBCLASS_WEAPON_MISC || sub == ITEM_SUBCLASS_WEAPON_FISHING_POLE)
+                continue;
+            // Titan's Grip takes two-handed axes, maces and swords, no staff or polearm
+            if (shape == RiftWeaponShape::DualTwoHand && sub != ITEM_SUBCLASS_WEAPON_AXE2
+                && sub != ITEM_SUBCLASS_WEAPON_MACE2 && sub != ITEM_SUBCLASS_WEAPON_SWORD2)
+                continue;
+            if (std::find(types.begin(), types.end(), sub) == types.end())
+                types.push_back(sub);
+        }
+    }
+    std::sort(types.begin(), types.end());
+    return types;
+}
+
+std::vector<RiftWeaponShape> RiftWeaponShapes(Player* player, uint8 kitLevel)
+{
+    std::vector<RiftWeaponShape> shapes;
+    if (!player)
+        return shapes;
+    uint32 const maxLevel = std::min<uint32>(kitLevel, player->GetLevel());
+    bool shield = false;
+    if (auto const shields = KitPieces.find(INVTYPE_SHIELD); shields != KitPieces.end())
+        for (uint32 entry : shields->second)
+            if (CanHoldKitPiece(player, sObjectMgr->GetItemTemplate(entry), maxLevel))
+            {
+                shield = true;
+                break;
+            }
+    bool const oneHand = !RiftWeaponTypes(player, RiftWeaponShape::OneHand, kitLevel).empty();
+    bool const dual = oneHand && player->CanDualWield();
+    if (oneHand && shield)
+        shapes.push_back(RiftWeaponShape::OneHandShield);
+    if (dual)
+        shapes.push_back(RiftWeaponShape::DualWield);
+    if (!RiftWeaponTypes(player, RiftWeaponShape::TwoHand, kitLevel).empty())
+        shapes.push_back(RiftWeaponShape::TwoHand);
+    if (player->CanTitanGrip() && !RiftWeaponTypes(player, RiftWeaponShape::DualTwoHand, kitLevel).empty())
+        shapes.push_back(RiftWeaponShape::DualTwoHand);
+    if (oneHand && !shield && !dual)
+        shapes.push_back(RiftWeaponShape::OneHand);
+    return shapes;
+}
+
+void SwapRiftWeapons(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
+{
+    if (!player || player->IsGameMaster())
+        return;
+
+    WorldSession const* session = player->GetSession();
+    bool const transient = !session || session->IsTransientPlayerSession();
+    if (!transient && !StashTablePresent)
+        return;
+
+    SwapGuard guard(player);
+    CharacterDatabaseTransaction trans = transient ? CharacterDatabaseTransaction(nullptr) : CharacterDatabase.BeginTransaction();
+    ObjectGuid::LowType const guid = player->GetGUID().GetCounter();
+
+    // The kit's own pieces come off, the off-hand first; anything else in a hand
+    // stays where it is.
+    for (uint8 slot : { uint8(EQUIPMENT_SLOT_OFFHAND), uint8(EQUIPMENT_SLOT_MAINHAND) })
+    {
+        Item* worn = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!worn || !IsFieldKitDuplicateEntry(worn->GetEntry()))
+            continue;
+        if (!transient)
+            trans->Append(Trinity::StringFormat("DELETE FROM character_tournament_loadout WHERE guid = {} AND kind = {} AND id = {}",
+                guid, uint32(LOADOUT_ROW_SUBSTITUTE), worn->GetGUID().GetCounter()).c_str());
+        player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+    }
+
+    uint32 issued = 0;
+    for (uint8 slot : { uint8(EQUIPMENT_SLOT_MAINHAND), uint8(EQUIPMENT_SLOT_OFFHAND) })
+    {
+        if (player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            continue;
+        uint32 const kit = PickKitPiece(player, slot, kitLevel, false, &weapons);
+        uint16 dest = 0;
+        if (!kit || player->CanEquipNewItem(slot, dest, kit, false) != EQUIP_ERR_OK)
+            continue;
+        Item* item = player->EquipNewItem(dest, kit, true);
+        if (!item)
+            continue;
+        ApplyStatsIfDead(player, item);
+        if (!transient)
+            InsertRow(trans, guid, LOADOUT_ROW_SUBSTITUTE, item->GetGUID().GetCounter(), PackPosition(item->GetBagSlot(), item->GetSlot()));
+        ++issued;
+    }
+
+    if (!transient)
+    {
+        player->SaveInventoryAndGoldToDB(trans);
+        CharacterDatabase.CommitTransaction(trans);
+    }
+    TC_LOG_DEBUG("bg.battleground", "Rift loadout: {} took weapon shape {} (type {}): {} piece(s).", player->GetName(),
+        uint32(weapons.Shape), weapons.SubClass, issued);
 }
 
 void RestoreBattlegroundLoadout(Player* player)

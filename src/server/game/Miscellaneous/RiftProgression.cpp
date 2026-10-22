@@ -184,6 +184,10 @@ namespace
         std::vector<LearnedTalent> RealTalents;   // the active spec's build, put back on the way out
         std::vector<SavedButton> RealButtons;     // the action bars it walked in with
         std::unordered_set<uint8> Returned;       // its buttons standing again (RefillSavedButtons)
+        Tournament::RiftWeapons Weapons;          // the armsmaster's choice for the kit's hands
+        // Every spell it knew at the door, by lower-case name: what a macro on its
+        // bars casts (MacroReady), read before the talents are put aside.
+        std::unordered_map<std::string, std::vector<uint32>> SpellsByName;
         // The bars as PublishBars last sent them, and when it last filled each
         // button (KeepsButton).
         std::map<uint8, uint32> SentBars;
@@ -226,6 +230,7 @@ namespace
     // be protected while it loads.
     std::unordered_set<ObjectGuid::LowType> Stashed;
     bool StoragePresent = false;
+    bool WeaponTablePresent = false;   // `custom_rift_weapons`: the armsmaster's choice, kept
 
     // The core abilities (world `rift_ability_whitelist`): per class, the class
     // spells a skill pick can learn, by Spell.dbc name. A class with no rows keeps
@@ -562,11 +567,11 @@ namespace
     }
 
     // Every bar is cleared of what the match refuses: spells as above, any item
-    // but the shop's, and every macro and equipment set. The server cannot read
-    // a macro (it lives client side), and a #showtooltip macro draws the spell
-    // it casts - a level-60 hunter's Aspect of the Hawk macro stood on the bar
-    // of a level-10 match, refused on every click. RestoreButtons puts them all
-    // back.
+    // but the shop's, and every macro and equipment set. A #showtooltip macro
+    // draws the spell it casts - a level-60 hunter's Aspect of the Hawk macro
+    // stood on the bar of a level-10 match, refused on every click - so a macro
+    // comes back once every spell it casts is unlocked (RefillSavedButtons,
+    // MacroReady). RestoreButtons puts them all back.
     void HideLockedButtons(Player* player, State const& state)
     {
         for (SavedButton const& b : state.RealButtons)
@@ -1185,20 +1190,122 @@ namespace
             player->GetGUID().GetCounter(), SPELL_RIFT_RECALL);
     }
 
+    std::string_view Trimmed(std::string_view text)
+    {
+        while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\r'))
+            text.remove_prefix(1);
+        while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r'))
+            text.remove_suffix(1);
+        return text;
+    }
+
+    // The spells a macro on the bars casts, by lower-case name, read from the
+    // macros the client keeps in its account data (settings sync): the account's
+    // (GLOBAL_MACROS_CACHE) behind a MACRO button, the character's
+    // (PER_CHARACTER_MACROS_CACHE, ids 0x01000000 + the button's action) behind a
+    // CMACRO one. Each is "MACRO <id> "<name>" <icon>", its lines, "END"; the
+    // names are what /cast, /use, /castsequence and /castrandom take, with the
+    // [conditions], "!", "reset=" and "(Rank n)" off and slot numbers skipped.
+    // False when the client keeps no such macro.
+    bool MacroSpellNames(Player* player, uint8 type, uint32 action, std::vector<std::string>& names)
+    {
+        WorldSession* session = player->GetSession();
+        if (!session)
+            return false;
+        bool const own = type == ACTION_BUTTON_CMACRO;
+        AccountData const* data = session->GetAccountData(own ? PER_CHARACTER_MACROS_CACHE : GLOBAL_MACROS_CACHE);
+        std::string const wanted = std::to_string(own ? 0x01000000u + action : action);
+        bool inside = false;
+        for (std::string_view line : Trinity::Tokenize(data->Data, '\n', false))
+        {
+            line = Trimmed(line);
+            if (!inside)
+            {
+                if (line.substr(0, 6) == "MACRO ")
+                {
+                    std::string_view const rest = line.substr(6);
+                    inside = rest.substr(0, rest.find(' ')) == wanted;
+                }
+                continue;
+            }
+            if (line == "END")
+                return true;
+            if (line.empty() || line.front() != '/')
+                continue;
+            size_t const space = line.find(' ');
+            if (space == std::string_view::npos)
+                continue;
+            std::string const command = Normalised(std::string(line.substr(0, space)));
+            if (command != "/cast" && command != "/use" && command != "/castsequence" && command != "/castrandom")
+                continue;
+            std::string plain;
+            int32 depth = 0;
+            for (char c : line.substr(space + 1))
+            {
+                if (c == '[')
+                    ++depth;
+                else if (c == ']')
+                    depth = std::max(0, depth - 1);
+                else if (!depth)
+                    plain += (c == ';' ? ',' : c);
+            }
+            for (std::string_view piece : Trinity::Tokenize(plain, ',', false))
+            {
+                piece = Trimmed(piece);
+                if (piece.substr(0, 6) == "reset=")
+                    piece = Trimmed(piece.find(' ') == std::string_view::npos ? std::string_view() : piece.substr(piece.find(' ')));
+                if (!piece.empty() && piece.front() == '!')
+                    piece.remove_prefix(1);
+                piece = Trimmed(piece.substr(0, piece.find('(')));
+                if (piece.empty() || piece.find_first_not_of("0123456789 ") == std::string_view::npos)
+                    continue;
+                names.push_back(Normalised(std::string(piece)));
+            }
+        }
+        return false;
+    }
+
+    // A macro whose spells are all unlocked (a name that is none of the
+    // character's spells - an item, a pet's ability - holds nothing back).
+    bool MacroReady(Player* player, State const& state, uint8 type, uint32 action)
+    {
+        std::vector<std::string> names;
+        if (!MacroSpellNames(player, type, action, names))
+            return false;
+        for (std::string const& name : names)
+        {
+            auto const spells = state.SpellsByName.find(name);
+            if (spells == state.SpellsByName.end())
+                continue;
+            if (std::none_of(spells->second.begin(), spells->second.end(),
+                [&](uint32 spell) { return !HiddenInMatch(player, state, spell); }))
+                return false;
+        }
+        return true;
+    }
+
     // Every button the character walked in with whose spell the match has
-    // given back - a pick, a talent re-learned - returns to where it was. A
-    // button the player clears afterwards stays cleared (Returned).
+    // given back - a pick, a talent re-learned - returns to where it was, and a
+    // macro once every spell it casts has. A button the player clears afterwards
+    // stays cleared (Returned).
     bool RefillSavedButtons(Player* player, State& state)
     {
         bool changed = false;
         for (SavedButton const& b : state.RealButtons)
-            if (b.Type == ACTION_BUTTON_SPELL && !state.Returned.count(b.Button)
-                && !player->GetActionButton(b.Button) && !HiddenInMatch(player, state, b.Action)
-                && player->addActionButton(b.Button, b.Action, ACTION_BUTTON_SPELL))
+        {
+            if (state.Returned.count(b.Button) || player->GetActionButton(b.Button))
+                continue;
+            bool ready = false;
+            if (b.Type == ACTION_BUTTON_SPELL)
+                ready = !HiddenInMatch(player, state, b.Action);
+            else if (b.Type == ACTION_BUTTON_MACRO || b.Type == ACTION_BUTTON_CMACRO)
+                ready = MacroReady(player, state, b.Type, b.Action);
+            if (ready && player->addActionButton(b.Button, b.Action, b.Type))
             {
                 state.Returned.insert(b.Button);
                 changed = true;
             }
+        }
         return changed;
     }
 
@@ -1418,6 +1525,7 @@ void ProbeStorage()
     RiftLeague::Load();
 
     StoragePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash'") != nullptr;
+    WeaponTablePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_weapons'") != nullptr;
     if (!StoragePresent)
     {
         TC_LOG_INFO("server.loading", ">> Summoner's Rift progression off: `custom_rift_stash` is absent.");
@@ -1479,7 +1587,18 @@ void Enter(Player* player)
     state.RealMoney = player->GetMoney();
     state.Persistent = !IsTransient(player);
     BuildState(player, state);
+    for (auto const& [spell, known] : player->GetSpellMap())
+        if (known.state != PLAYERSPELL_REMOVED && !known.disabled)
+            if (SpellInfo const* info = sSpellMgr->GetSpellInfo(spell); info && info->SpellName[LOCALE_enUS])
+                state.SpellsByName[Normalised(info->SpellName[LOCALE_enUS])].push_back(spell);
     state.RealButtons = SnapshotButtons(player);
+    if (state.Persistent && WeaponTablePresent)
+        if (QueryResult row = CharacterDatabase.PQuery("SELECT shape, subclass FROM custom_rift_weapons WHERE guid = {}", player->GetGUID().GetCounter()))
+        {
+            Field* f = row->Fetch();
+            if (f[0].GetUInt8() <= uint8(Tournament::RiftWeaponShape::OneHand))
+                state.Weapons = { Tournament::RiftWeaponShape(f[0].GetUInt8()), f[1].GetInt32() };
+        }
 
     // Written down before anything changes: from here on every way out restores.
     if (state.Persistent)
@@ -1492,7 +1611,7 @@ void Enter(Player* player)
 
     // The temporal gear - the field set issued for the level the match starts at
     // - goes on while the character still has its real level to equip it with.
-    Tournament::ApplyRiftLoadout(player, std::min<uint8>(START_LEVEL, state.RealLevel));
+    Tournament::ApplyRiftLoadout(player, std::min<uint8>(START_LEVEL, state.RealLevel), state.Weapons);
     player->SetMoney(START_GOLD * COPPER_PER_LEAGUE_GOLD);
     player->ResetTalents(true);
 
@@ -1739,6 +1858,87 @@ float CooldownReduction(Player const* player, SpellInfo const* spellInfo)
     return std::min(float(crest->GetAmount()), COOLDOWN_REDUCTION_CAP) / 100.0f;
 }
 
+std::vector<uint8> WeaponShapes(Player* player)
+{
+    std::vector<uint8> out;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    if (State const* state = player ? Find(player) : nullptr)
+        for (Tournament::RiftWeaponShape shape : Tournament::RiftWeaponShapes(player, state->KitApplied))
+            out.push_back(uint8(shape));
+    return out;
+}
+
+std::vector<uint32> WeaponTypes(Player* player, uint8 shape)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = player ? Find(player) : nullptr;
+    return state ? Tournament::RiftWeaponTypes(player, Tournament::RiftWeaponShape(shape), state->KitApplied) : std::vector<uint32>();
+}
+
+std::pair<uint8, int32> CurrentWeapons(Player* player)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = player ? Find(player) : nullptr;
+    return state ? std::make_pair(uint8(state->Weapons.Shape), state->Weapons.SubClass) : std::make_pair(uint8(0), int32(-1));
+}
+
+bool ChooseWeapons(Player* player, uint8 shape, int32 subClass)
+{
+    if (!player)
+        return false;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State* state = Find(player);
+    if (!state)
+        return false;
+    std::vector<Tournament::RiftWeaponShape> const shapes = Tournament::RiftWeaponShapes(player, state->KitApplied);
+    if (std::find(shapes.begin(), shapes.end(), Tournament::RiftWeaponShape(shape)) == shapes.end())
+        return false;
+    if (subClass >= 0)
+    {
+        std::vector<uint32> const types = Tournament::RiftWeaponTypes(player, Tournament::RiftWeaponShape(shape), state->KitApplied);
+        if (std::find(types.begin(), types.end(), uint32(subClass)) == types.end())
+            return false;
+    }
+    state->Weapons = { Tournament::RiftWeaponShape(shape), subClass };
+    if (state->Persistent && WeaponTablePresent)
+        CharacterDatabase.PExecute("REPLACE INTO custom_rift_weapons (guid, shape, subclass) VALUES ({}, {}, {})",
+            player->GetGUID().GetCounter(), uint32(shape), subClass);
+    Tournament::SwapRiftWeapons(player, state->KitApplied, state->Weapons);
+    SyncItemsFor(player, *state);
+    return true;
+}
+
+char const* WeaponShapeName(uint8 shape)
+{
+    switch (Tournament::RiftWeaponShape(shape))
+    {
+        case Tournament::RiftWeaponShape::OneHandShield: return "A one-hander and a shield";
+        case Tournament::RiftWeaponShape::DualWield:     return "Two one-handers";
+        case Tournament::RiftWeaponShape::TwoHand:       return "A two-hander";
+        case Tournament::RiftWeaponShape::DualTwoHand:   return "Two two-handers";
+        case Tournament::RiftWeaponShape::OneHand:       return "A one-hander alone";
+        default:                                         return "Whatever the armory hands out";
+    }
+}
+
+char const* WeaponTypeName(uint32 subClass)
+{
+    switch (subClass)
+    {
+        case ITEM_SUBCLASS_WEAPON_AXE:    return "Axes";
+        case ITEM_SUBCLASS_WEAPON_AXE2:   return "Two-handed axes";
+        case ITEM_SUBCLASS_WEAPON_MACE:   return "Maces";
+        case ITEM_SUBCLASS_WEAPON_MACE2:  return "Two-handed maces";
+        case ITEM_SUBCLASS_WEAPON_POLEARM: return "Polearms";
+        case ITEM_SUBCLASS_WEAPON_SWORD:  return "Swords";
+        case ITEM_SUBCLASS_WEAPON_SWORD2: return "Two-handed swords";
+        case ITEM_SUBCLASS_WEAPON_STAFF:  return "Staves";
+        case ITEM_SUBCLASS_WEAPON_FIST:   return "Fist weapons";
+        case ITEM_SUBCLASS_WEAPON_DAGGER: return "Daggers";
+        default:                          return "Weapons";
+    }
+}
+
 bool KeepsButton(Player* player, uint8 button)
 {
     if (!player)
@@ -1757,8 +1957,10 @@ bool LearnsHigherRanks(Player const* player)
     return !IsInMatch(player);
 }
 
-// A talent learned in the match: its old button comes back too.
-void OnTalentLearned(Player* player)
+// A talent learned in the match: its old button comes back too, and a spell it
+// gives that is on no button yet - the talent's own, or what it teaches when it
+// is a passive - goes on the first free one, as a pick's does.
+void OnTalentLearned(Player* player, uint32 talentSpell)
 {
     if (!player)
         return;
@@ -1778,6 +1980,29 @@ void OnTalentLearned(Player* player)
     if (IsTransient(player))
         return;
     RefillSavedButtons(player, *state);
+    std::vector<uint32> given;
+    if (SpellInfo const* info = sSpellMgr->GetSpellInfo(talentSpell))
+    {
+        if (!info->IsPassive())
+            given.push_back(talentSpell);
+        else
+            for (SpellEffectInfo const& effect : info->GetEffects())
+                if (effect.Effect == SPELL_EFFECT_LEARN_SPELL && effect.TriggerSpell)
+                    if (SpellInfo const* taught = sSpellMgr->GetSpellInfo(effect.TriggerSpell); taught && !taught->IsPassive())
+                        given.push_back(effect.TriggerSpell);
+    }
+    for (uint32 spell : given)
+    {
+        if (!player->HasSpell(spell))
+            continue;
+        uint32 const first = sSpellMgr->GetFirstSpellInChain(spell);
+        bool onBars = false;
+        for (uint8 button = 0; button < MAX_ACTION_BUTTONS && !onBars; ++button)
+            if (ActionButton const* ab = player->GetActionButton(button))
+                onBars = ab->GetType() == ACTION_BUTTON_SPELL && sSpellMgr->GetFirstSpellInChain(ab->GetAction()) == first;
+        if (!onBars)
+            PlaceUnlockedSpell(player, *state, 0, spell);
+    }
     PublishBars(player, *state);
     SendState(player, *state);
 }
@@ -1831,12 +2056,12 @@ void SyncItems(Player* player)
     bool fill = alive && !state->WasAlive;   // just revived: is everything on?
     if (kit != state->KitApplied && free)
     {
-        Tournament::UpgradeRiftKit(player, kit);
+        Tournament::UpgradeRiftKit(player, kit, state->Weapons);
         state->KitApplied = kit;
         fill = true;
     }
     if (fill && free)
-        Tournament::FillRiftKit(player, state->KitApplied);
+        Tournament::FillRiftKit(player, state->KitApplied, state->Weapons);
     if (!fill || free)
         state->WasAlive = alive;
 }

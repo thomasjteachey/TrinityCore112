@@ -22,6 +22,7 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 class Player;
@@ -103,8 +104,20 @@ namespace RiftProgression
     TC_GAME_API bool MayEquip(Player const* player, uint32 entry, uint8 slot);
     // In a match only shop items can be used.
     TC_GAME_API bool IsItemLocked(Player const* player, uint32 entry);
-    // A talent learned in a match puts its old action button back.
-    TC_GAME_API void OnTalentLearned(Player* player);
+    // A talent learned in a match puts its old action button back, and a spell it
+    // gives that is on no button goes on a free one.
+    TC_GAME_API void OnTalentLearned(Player* player, uint32 talentSpell);
+    // The armsmaster at each fountain (npc_rift_armsmaster): the field kit's
+    // weapon shapes this champion can take now (Tournament::RiftWeaponShape
+    // values), the weapon types for one (ITEM_SUBCLASS_WEAPON_*), its current
+    // choice, and the choice itself - the hands dressed at once, and kept for its
+    // matches (`custom_rift_weapons`). Names for the menu.
+    TC_GAME_API std::vector<uint8> WeaponShapes(Player* player);
+    TC_GAME_API std::vector<uint32> WeaponTypes(Player* player, uint8 shape);
+    TC_GAME_API std::pair<uint8, int32> CurrentWeapons(Player* player);
+    TC_GAME_API bool ChooseWeapons(Player* player, uint8 shape, int32 subClass);
+    TC_GAME_API char const* WeaponShapeName(uint8 shape);
+    TC_GAME_API char const* WeaponTypeName(uint32 subClass);
     // CMSG_SET_ACTION_BUTTON emptying `button`: false when the client's "empty"
     // answers bars sent before the server filled the button, moments ago - the
     // client clears every empty and unknown button of each SMSG_ACTION_BUTTONS

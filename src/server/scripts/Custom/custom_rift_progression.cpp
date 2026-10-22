@@ -39,6 +39,7 @@
 #include "AddonRequestRoutes.h"
 #include "Battleground.h"
 #include "BattlegroundSRF.h"
+#include "Chat.h"
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "MotionMaster.h"
@@ -48,6 +49,7 @@
 #include "RiftLeague.h"
 #include "RiftProgression.h"
 #include "ScriptMgr.h"
+#include "ScriptedGossip.h"
 #include "Spell.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
@@ -247,6 +249,73 @@ public:
     }
 };
 
+// The armsmaster at each fountain (922152 Order, 922153 Chaos): the field kit's
+// weapons as the champion wants them - a one-hander and a shield, two
+// one-handers, a two-hander, two two-handers (Titan's Grip, which Bloodthirsty
+// Grip teaches), a one-hander alone - and which kind. Only what the character
+// can use now is offered; the kit keeps the choice through its level-ups and
+// for the champion's next matches (RiftProgression::ChooseWeapons).
+struct npc_rift_armsmaster : public CreatureAI
+{
+    explicit npc_rift_armsmaster(Creature* creature) : CreatureAI(creature) { }
+
+    static uint32 constexpr ACTION_SHAPES = 1;
+    static uint32 constexpr ACTION_SHAPE = 100;    // + shape: its weapon types
+    static uint32 constexpr ACTION_CHOOSE = 1000;  // + shape * 100 + type + 1 (0: the best of any)
+
+    void UpdateAI(uint32 /*diff*/) override { }
+
+    void ShowShapes(Player* player)
+    {
+        ClearGossipMenuFor(player);
+        uint8 const current = RiftProgression::CurrentWeapons(player).first;
+        for (uint8 shape : RiftProgression::WeaponShapes(player))
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, std::string(RiftProgression::WeaponShapeName(shape)) + (shape == current ? " (now)" : ""),
+                GOSSIP_SENDER_MAIN, ACTION_SHAPE + shape);
+        SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+    }
+
+    bool OnGossipHello(Player* player) override
+    {
+        ShowShapes(player);
+        return true;
+    }
+
+    bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
+    {
+        uint32 const action = GetGossipActionFor(player, gossipListId);
+        if (action == ACTION_SHAPES)
+        {
+            ShowShapes(player);
+            return true;
+        }
+        if (action >= ACTION_SHAPE && action < ACTION_CHOOSE)
+        {
+            uint8 const shape = uint8(action - ACTION_SHAPE);
+            std::pair<uint8, int32> const current = RiftProgression::CurrentWeapons(player);
+            ClearGossipMenuFor(player);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, std::string("The best I can carry") + (current.first == shape && current.second < 0 ? " (now)" : ""),
+                GOSSIP_SENDER_MAIN, ACTION_CHOOSE + shape * 100);
+            for (uint32 type : RiftProgression::WeaponTypes(player, shape))
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, std::string(RiftProgression::WeaponTypeName(type)) + (current.first == shape && current.second == int32(type) ? " (now)" : ""),
+                    GOSSIP_SENDER_MAIN, ACTION_CHOOSE + shape * 100 + type + 1);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, ACTION_SHAPES);
+            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+            return true;
+        }
+        CloseGossipMenuFor(player);
+        if (action >= ACTION_CHOOSE)
+        {
+            uint8 const shape = uint8((action - ACTION_CHOOSE) / 100);
+            int32 const type = int32((action - ACTION_CHOOSE) % 100) - 1;
+            if (RiftProgression::ChooseWeapons(player, shape, type))
+                ChatHandler(player->GetSession()).PSendSysMessage("Your weapons: %s%s%s.", RiftProgression::WeaponShapeName(shape),
+                    type >= 0 ? ", " : "", type >= 0 ? RiftProgression::WeaponTypeName(uint32(type)) : "");
+        }
+        return true;
+    }
+};
+
 void AddSC_custom_rift_progression()
 {
     new custom_rift_contribution_unit();
@@ -256,4 +325,5 @@ void AddSC_custom_rift_progression()
     RegisterSpellScript(spell_rift_recall);
     RegisterSpellScript(spell_rift_recall_league);
     RegisterCreatureAI(npc_rift_minion);
+    RegisterCreatureAI(npc_rift_armsmaster);
 }

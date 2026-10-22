@@ -10411,6 +10411,16 @@ uint16 GetHighestRidingSkillValue(Player const* player)
     return ridingSkill;
 }
 
+// Every positive amount of an aura type added up (WoW takes the largest).
+int32 SumPositiveAuraModifier(Unit const* unit, AuraType type)
+{
+    int32 sum = 0;
+    for (AuraEffect const* effect : unit->GetAuraEffectsByType(type))
+        if (effect->GetAmount() > 0)
+            sum += effect->GetAmount();
+    return sum;
+}
+
 int32 GetPlainsrunningMountSpeedMod(Player const* player)
 {
     // Summoner's Rift counts the shop steed held, not the character's own riding.
@@ -10444,6 +10454,27 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
             return;
         case MOVE_RUN:
         {
+            // Summoner's Rift (League): every run-speed bonus adds to the others,
+            // the mount's included - boots, items, Aspect of the Cheetah, Sprint,
+            // the steed. Only the fastest boots count: RiftProgression's boots
+            // carrier holds just their speed. Slows stay WoW's, below.
+            if (IsControlledByPlayer() && GetLeagueCombatBattleground(this))
+            {
+                main_speed_mod = SumPositiveAuraModifier(this, SPELL_AURA_MOD_INCREASE_SPEED)
+                    + SumPositiveAuraModifier(this, SPELL_AURA_MOD_SPEED_ALWAYS)
+                    + SumPositiveAuraModifier(this, SPELL_AURA_MOD_SPEED_NOT_STACK);
+                if (IsMounted())
+                {
+                    int32 mount = SumPositiveAuraModifier(this, SPELL_AURA_MOD_INCREASE_MOUNTED_SPEED);
+                    if (Player const* player = ToPlayer())
+                        if (player->HasAura(SPELL_PLAINSRUNNING_MOUNT))
+                            mount = GetPlainsrunningMountSpeedMod(player);
+                    main_speed_mod += mount + SumPositiveAuraModifier(this, SPELL_AURA_MOD_MOUNTED_SPEED_ALWAYS)
+                        + SumPositiveAuraModifier(this, SPELL_AURA_MOD_MOUNTED_SPEED_NOT_STACK);
+                }
+                break;
+            }
+
             if (IsMounted()) // Use on mount auras
             {
                 main_speed_mod  = GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_MOUNTED_SPEED);

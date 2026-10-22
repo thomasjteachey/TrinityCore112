@@ -94,7 +94,9 @@ enum BG_SRF_CreatureEntries
     BG_SRF_ENTRY_BARON_NASHOR      = 922141,
     // The fountain shopkeepers (their stock: import/rift/scripts/rift_shop.py).
     BG_SRF_ENTRY_ORDER_SHOP        = 922150,
-    BG_SRF_ENTRY_CHAOS_SHOP        = 922151
+    BG_SRF_ENTRY_CHAOS_SHOP        = 922151,
+    BG_SRF_ENTRY_ORDER_ARMSMASTER  = 922152,   // npc_rift_armsmaster: the kit's weapons
+    BG_SRF_ENTRY_CHAOS_ARMSMASTER  = 922153
 };
 
 enum BG_SRF_Spells
@@ -158,7 +160,9 @@ enum BG_SRF_StructureSlots
     BG_SRF_JUNGLE_MONSTERS = 2 * 14 + 2 + 1 + 1,
     // per side Blue, wolves, raptors, Red, krugs, Gromp; the two scuttlers, Dragon, Baron
     BG_SRF_JUNGLE_CAMPS = 2 * 6 + 2 + 1 + 1,
-    BG_SRF_CREATURE_MAX = BG_SRF_CREATURE_JUNGLE_FIRST + BG_SRF_JUNGLE_MONSTERS
+    BG_SRF_CREATURE_ARMS_ORDER = BG_SRF_CREATURE_JUNGLE_FIRST + BG_SRF_JUNGLE_MONSTERS,
+    BG_SRF_CREATURE_ARMS_CHAOS,
+    BG_SRF_CREATURE_MAX
 };
 
 enum BG_SRF_Constants
@@ -381,6 +385,7 @@ private:
     uint8 _combatLevel = 10;       // the champions' average level, refreshed with the item tick
     float _unitScale = 0.0f;       // RiftLeague::Scale at the units' League level, likewise
     void UpdateProgression(uint32 diff);
+    void SyncChampions(uint32 diff);
 
     std::array<StructureState, 2 * BG_SRF_STRUCTURES_PER_TEAM> _structures;
     std::array<TurretState, 2 * BG_SRF_STRUCTURES_PER_TEAM> _turrets;

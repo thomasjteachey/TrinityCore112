@@ -340,12 +340,38 @@ namespace Tournament
     bool AreMatchConsumablesBanned();   // Centurion.Tournament.BgBanConsumables
 
     void ApplyBattlegroundLoadout(Player* player);    // Battleground::AddPlayer
+
+    // Summoner's Rift's weapon loadout, chosen at the armsmaster in each fountain
+    // (RiftProgression::ChooseWeapons): the shape of the field kit's hands and
+    // the weapon type (ITEM_SUBCLASS_WEAPON_*, -1 the best of any). Any is the
+    // kit's own pick - the first hand shape the character can take.
+    enum class RiftWeaponShape : uint8
+    {
+        Any           = 0,
+        OneHandShield = 1,   // a one-hander and a shield
+        DualWield     = 2,   // two one-handers (Dual Wield)
+        TwoHand       = 3,   // a two-hander
+        DualTwoHand   = 4,   // two two-handers (Titan's Grip, which Bloodthirsty Grip teaches)
+        OneHand       = 5    // a one-hander, nothing in the off-hand
+    };
+    struct RiftWeapons
+    {
+        RiftWeaponShape Shape = RiftWeaponShape::Any;
+        int32 SubClass = -1;
+    };
+    // The shapes a character can take with the kit of `kitLevel`, the weapon
+    // types for one, and its hands dressed for a choice (the kit's own pieces
+    // only: off-hand first, so a two-hander can go on).
+    std::vector<RiftWeaponShape> RiftWeaponShapes(Player* player, uint8 kitLevel);
+    std::vector<uint32> RiftWeaponTypes(Player* player, RiftWeaponShape shape, uint8 kitLevel);
+    void SwapRiftWeapons(Player* player, uint8 kitLevel, RiftWeapons const& weapons);
+
     // Summoner's Rift: its own rules, not the tournament's. Every worn slot the
     // field kit covers is dressed from it and everything else equippable is put
     // away, in the same rows - so RestoreBattlegroundLoadout and the login route
     // give it all back. RiftProgression::Enter, at the character's real level,
     // dressing it in the kit for `kitLevel` (the level its match starts at).
-    void ApplyRiftLoadout(Player* player, uint8 kitLevel);
+    void ApplyRiftLoadout(Player* player, uint8 kitLevel, RiftWeapons const& weapons = {});
     void RestoreBattlegroundLoadout(Player* player);  // Battleground::RemovePlayerAtLeave
     void RestoreLoadoutAfterLogin(Player* player);    // the crash and logout route
     bool HasBattlegroundLoadout(Player const* player);
@@ -370,9 +396,9 @@ namespace Tournament
     // Summoner's Rift: every worn field kit piece swapped for the kit's piece of
     // `kitLevel` (the match's 5-level bracket), slot by slot, and empty slots the
     // kit can now fill dressed. Nothing the character owns is touched.
-    void UpgradeRiftKit(Player* player, uint8 kitLevel);
+    void UpgradeRiftKit(Player* player, uint8 kitLevel, RiftWeapons const& weapons = {});
     // Puts the kit's piece into every empty slot (a revive, after an upgrade).
-    void FillRiftKit(Player* player, uint8 kitLevel);
+    void FillRiftKit(Player* player, uint8 kitLevel, RiftWeapons const& weapons = {});
     // The starter-template item a class wears in an equipment slot, 0 for none.
     uint32 GetLoadoutTemplateItem(uint8 playerClass, uint8 slot);
 

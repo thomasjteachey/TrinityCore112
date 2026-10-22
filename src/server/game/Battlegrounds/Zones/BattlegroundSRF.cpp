@@ -375,6 +375,7 @@ float constexpr SRF_BASE_RANGE          = Yards(1000.0f);
 // nearest spot 4 yards clear of the navigation grid's walls. Facing the middle.
 SrfPoint constexpr SRF_SHOP_AT[PVP_TEAMS_COUNT] = { { 322.9f, 171.0f, 682.7f }, { 14151.8f, 179.0f, 14454.3f } };
 float constexpr SRF_SHOP_FACING[PVP_TEAMS_COUNT] = { 5.44f, 2.42f };
+float constexpr SRF_ARMSMASTER_OFFSET = 4.0f;   // yards to the shopkeeper's left
 float constexpr SRF_FOUNTAIN_BURN_RANGE = Yards(700.0f);
 // Turret shots are League's (Season 3): the turret's attack damage for its tier
 // and the game time (world rift_league_unit), through 30% of the target's armour.
@@ -669,6 +670,20 @@ bool BattlegroundSRF::SetupBattleground()
         if (!AddCreature(team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_SHOP : BG_SRF_ENTRY_CHAOS_SHOP,
                 team == TEAM_ALLIANCE ? BG_SRF_CREATURE_SHOP_ORDER : BG_SRF_CREATURE_SHOP_CHAOS, pos, team))
             TC_LOG_ERROR("bg.battleground", "BattlegroundSRF: failed to spawn the {} shopkeeper.", TeamName(team));
+
+        // The armsmaster (the kit's weapons) beside the shopkeeper, facing the same way.
+        float const side = pos.GetOrientation() + float(M_PI) / 2.0f;
+        Position arms(pos.GetPositionX() + SRF_ARMSMASTER_OFFSET * std::cos(side), pos.GetPositionY() + SRF_ARMSMASTER_OFFSET * std::sin(side),
+            pos.GetPositionZ(), pos.GetOrientation());
+        if (map)
+        {
+            float const ground = map->GetHeight(arms.GetPositionX(), arms.GetPositionY(), arms.GetPositionZ() + 10.0f, true);
+            if (ground > INVALID_HEIGHT)
+                arms.Relocate(arms.GetPositionX(), arms.GetPositionY(), ground);
+        }
+        if (!AddCreature(team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_ARMSMASTER : BG_SRF_ENTRY_CHAOS_ARMSMASTER,
+                team == TEAM_ALLIANCE ? BG_SRF_CREATURE_ARMS_ORDER : BG_SRF_CREATURE_ARMS_CHAOS, arms, team))
+            TC_LOG_ERROR("bg.battleground", "BattlegroundSRF: failed to spawn the {} armsmaster.", TeamName(team));
     }
 
     RefreshVulnerability();
@@ -715,6 +730,7 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
     // (it only started with the gates: an empty board until then).
     if (GetStatus() == STATUS_WAIT_JOIN || GetStatus() == STATUS_IN_PROGRESS)
     {
+        SyncChampions(diff);
         _scoreTimer += diff;
         if (_scoreTimer >= SRF_SCORE_TICK)
         {
@@ -818,23 +834,31 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
 // pushed to everyone at once (UpdateObjectVisibility both ways), so a champion
 // stepping into a bush vanishes from the enemies outside it - and an enemy
 // stepping into the same bush sees it again.
+// League's inventory works from the bags: what a sale, a drop or a destroyed item
+// changed is picked up here (RiftProgression::SyncItems), at the match's scale and
+// level (RiftLeague). From the moment champions are in, as League's shop: boots
+// bought at the fountain before the gates opened did nothing until they did.
+void BattlegroundSRF::SyncChampions(uint32 diff)
+{
+    _itemSyncTimer += diff;
+    if (_itemSyncTimer < SRF_ITEM_SYNC_MS)
+        return;
+    _itemSyncTimer = 0;
+    _combatLevel = AverageMatchLevel();
+    float const scale = RiftLeague::Scale(AverageLeagueLevel());
+    _unitScale = RiftLeague::Scale(UnitLeagueLevel());
+    if (GetStatus() == STATUS_IN_PROGRESS)
+        UpdateBackdoor();
+    for (auto const& [guid, bgPlayer] : GetPlayers())
+        if (Player* player = ObjectAccessor::FindPlayer(guid); player && player->GetMapId() == GetMapId())
+        {
+            RiftProgression::SetMatchScale(player, scale, _combatLevel);
+            RiftProgression::SyncItems(player);
+        }
+}
+
 void BattlegroundSRF::UpdateBrush(uint32 elapsed)
 {
-    // League's inventory works from the bags: what a sale, a drop or a
-    // destroyed item changed is picked up here (RiftProgression::SyncItems).
-    _itemSyncTimer += elapsed;
-    bool const syncItems = _itemSyncTimer >= SRF_ITEM_SYNC_MS;
-    float scale = 0.0f;
-    if (syncItems)
-    {
-        _itemSyncTimer = 0;
-        // The champions convert at the match's scale and level (RiftLeague).
-        _combatLevel = AverageMatchLevel();
-        scale = RiftLeague::Scale(AverageLeagueLevel());
-        _unitScale = RiftLeague::Scale(UnitLeagueLevel());
-        UpdateBackdoor();
-    }
-
     for (auto const& [guid, bgPlayer] : GetPlayers())
     {
         Player* player = ObjectAccessor::FindPlayer(guid);
@@ -842,11 +866,6 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
         {
             _brush.erase(guid);
             continue;
-        }
-        if (syncItems)
-        {
-            RiftProgression::SetMatchScale(player, scale, _combatLevel);
-            RiftProgression::SyncItems(player);
         }
         if (player->IsAlive() && !player->HasAura(SRF_SPELL_FOCUS))
             player->AddAura(SRF_SPELL_FOCUS, player);
