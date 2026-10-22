@@ -20,10 +20,11 @@
 // worn as the shop items' equip spells (rift_shop.py); this is what they do.
 //
 //   94121 / 94122  Spellblade (Sheen / Trinity Force): an ability charges the next
-//                  basic attack (94123) with 1x / 2x the weapon's average damage
+//                  basic attack (94123) with 100% / 150% of League's base attack
+//                  damage (RiftProgression::BaseAttackDamage); 2 sec cooldown
 //   94124  Thornmail: basic attackers take 30% of what they dealt, as magic
 //   (a basic attack is a melee swing or a ranged one: Auto Shot, Shoot, Throw)
-//   94126  Immolate (Sunfire Cape): 10 + 2/level magic a second, 10 yards round
+//   94126  Immolate (Sunfire Cape): League's 40 magic a second, 10 yards round
 //   94127  Warmog's Heart: 1% of maximum health every 5 sec
 //   94128  Eternity (Rod of Ages): a stack of 94129 a minute, up to 10
 //   94130  Guardian Angel: lethal damage is held off, 4 sec of stasis (94131),
@@ -39,6 +40,7 @@
 #include "GridNotifiersImpl.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "RiftProgression.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
@@ -46,6 +48,8 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -62,7 +66,8 @@ namespace
     uint32 constexpr RIFT_ITEM_SPELL_LAST     = 94141;
 
     float constexpr IMMOLATE_RANGE = 10.0f;
-    Milliseconds constexpr SPELLBLADE_COOLDOWN = 1500ms;
+    Milliseconds constexpr SPELLBLADE_COOLDOWN = 2000ms;
+    float constexpr IMMOLATE_DAMAGE = 40.0f;           // League's, per second
     Seconds constexpr SPELL_SHIELD_RECHARGE = 45s;
     Minutes constexpr GUARDIAN_ANGEL_COOLDOWN = 5min;
 
@@ -137,8 +142,9 @@ private:
 
         if (attacker->HasAura(SPELL_SPELLBLADE_CHARGED))
         {
-            float const times = attacker->HasAura(SPELL_SPELLBLADE_TRINITY) ? 2.0f : 1.0f;
-            damage += uint32(WeaponAverage(attacker, attackType) * times);
+            float const times = attacker->HasAura(SPELL_SPELLBLADE_TRINITY) ? 1.5f : 1.0f;
+            Player const* champion = attacker->ToPlayer();
+            damage += uint32(champion ? RiftProgression::BaseAttackDamage(champion) * times : WeaponAverage(attacker, attackType) * times);
             attacker->RemoveAurasDueToSpell(SPELL_SPELLBLADE_CHARGED);
             attacker->GetSpellHistory()->AddCooldown(SPELL_SPELLBLADE_CHARGED, 0, SPELLBLADE_COOLDOWN);
         }
@@ -194,7 +200,8 @@ class spell_rift_item_immolate : public AuraScript
         Trinity::AnyUnfriendlyUnitInObjectRangeCheck check(owner, owner, IMMOLATE_RANGE);
         Trinity::UnitListSearcher<Trinity::AnyUnfriendlyUnitInObjectRangeCheck> searcher(owner, targets, check);
         Cell::VisitAllObjects(owner, searcher, IMMOLATE_RANGE);
-        uint32 const damage = 10 + 2 * owner->GetLevel();
+        Player const* champion = owner->ToPlayer();
+        uint32 const damage = uint32(std::lround(IMMOLATE_DAMAGE * (champion ? RiftProgression::MatchScale(champion) : 1.0f)));
         for (Unit* unit : targets)
             DealItemDamage(owner, unit, SPELL_IMMOLATE, damage);
     }

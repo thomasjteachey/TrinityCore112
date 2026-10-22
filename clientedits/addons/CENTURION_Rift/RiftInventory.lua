@@ -366,7 +366,9 @@ hooksecurefunc("ToggleCharacter", function(tab)
 	end
 end);
 
--- League words on the shop items' tooltips: they are held, not equipped.
+-- League words on the shop items' tooltips: they are held, not equipped. A stat
+-- line is League's own number ("+70 Attack Damage", rift_shop.py), shown as League
+-- shows it; a passive or an active says so.
 local function Relabel(tooltip)
 	local _, link = tooltip:GetItem();
 	local id = link and tonumber(string.match(link, "item:(%d+)"));
@@ -379,7 +381,10 @@ local function Relabel(tooltip)
 		local text = line and line:GetText();
 		if ( text ) then
 			local rest = string.match(text, "^" .. (ITEM_SPELL_TRIGGER_ONEQUIP or "Equip:") .. "%s*(.*)$");
-			if ( rest ) then
+			if ( rest and string.sub(rest, 1, 1) == "+" ) then
+				line:SetText(rest);
+				line:SetTextColor(1, 1, 1);
+			elseif ( rest ) then
 				line:SetText("Passive: " .. rest);
 			else
 				rest = string.match(text, "^" .. (ITEM_SPELL_TRIGGER_ONUSE or "Use:") .. "%s*(.*)$");

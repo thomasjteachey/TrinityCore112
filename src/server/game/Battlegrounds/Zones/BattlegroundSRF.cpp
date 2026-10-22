@@ -14,6 +14,7 @@
 #include "ObjectAccessor.h"
 #include "Pet.h"
 #include "Player.h"
+#include "RiftLeague.h"
 #include "RiftProgression.h"
 #include "SpellAuras.h"
 #include "SpellDefines.h"
@@ -344,10 +345,15 @@ int32 CreatureSide(Creature const* creature)
         case 1735: return TEAM_HORDE;
         default: break;
     }
-    uint32 const entry = creature->GetEntry();
-    if (entry >= BG_SRF_ENTRY_ORDER_MELEE && entry <= BG_SRF_ENTRY_CHAOS_CASTER)
-        return entry <= BG_SRF_ENTRY_ORDER_CASTER ? TEAM_ALLIANCE : TEAM_HORDE;
-    return -1;
+    switch (creature->GetEntry())
+    {
+        case BG_SRF_ENTRY_ORDER_MELEE: case BG_SRF_ENTRY_ORDER_CASTER: case BG_SRF_ENTRY_ORDER_SIEGE: case BG_SRF_ENTRY_ORDER_SUPER:
+            return TEAM_ALLIANCE;
+        case BG_SRF_ENTRY_CHAOS_MELEE: case BG_SRF_ENTRY_CHAOS_CASTER: case BG_SRF_ENTRY_CHAOS_SIEGE: case BG_SRF_ENTRY_CHAOS_SUPER:
+            return TEAM_HORDE;
+        default:
+            return -1;
+    }
 }
 
 // The base: the fountain and the shop beside it.
@@ -358,31 +364,32 @@ float constexpr SRF_BASE_RANGE          = Yards(1000.0f);
 SrfPoint constexpr SRF_SHOP_AT[PVP_TEAMS_COUNT] = { { 322.9f, 171.0f, 682.7f }, { 14151.8f, 179.0f, 14454.3f } };
 float constexpr SRF_SHOP_FACING[PVP_TEAMS_COUNT] = { 5.44f, 2.42f };
 float constexpr SRF_FOUNTAIN_BURN_RANGE = Yards(700.0f);
-// Turret shots as shares of the target's maximum health: minions die to a few
-// shots, and a player who stays under a turret takes a little more every shot.
-// League's turret shots on minions are shares of their maximum health: a melee
-// minion takes 3 shots (45%), a caster 2 (70%).
-float constexpr SRF_TURRET_MELEE_SHARE  = 0.45f;
-float constexpr SRF_TURRET_CASTER_SHARE = 0.70f;
-// On champions: a base share, and League's Warming Up - +50% per champion hit in
-// a row, up to +150%, gone 5 s after the last champion hit.
-float constexpr SRF_TURRET_PLAYER_SHARE = 0.20f;
-// Every turret shot at a quarter less than the shares above (owner, 2026-10-21).
-float constexpr SRF_TURRET_DAMAGE_SCALE = 0.75f;
+// Turret shots are League's (Season 3): the turret's attack damage for its tier
+// and the game time (world rift_league_unit), through 30% of the target's armour.
+// On champions, League's Warming Up and Heated Up: 105% on the first shot, +25% a
+// shot in a row to 225%; a turret that turns on another champion takes it from at
+// most 175%, a shot at anything else resets it, and so do 5 s without a champion.
+std::array<float, 6> constexpr SRF_TURRET_HEAT = { 1.05f, 1.25f, 1.50f, 1.75f, 2.00f, 2.25f };
+uint8 constexpr SRF_TURRET_SWITCH_HEAT = 3;
+uint32 constexpr SRF_TURRET_WARMUP_RESET = 5 * IN_MILLISECONDS;
 // The pause between one bolt landing and the next leaving the turret.
 uint32 constexpr SRF_TURRET_SHOT_GAP = 400;
-float constexpr SRF_TURRET_WARMUP_STEP  = 0.50f;
-uint8 constexpr SRF_TURRET_WARMUP_MAX   = 3;
-uint32 constexpr SRF_TURRET_WARMUP_RESET = 5 * IN_MILLISECONDS;
 // A champion damaging an allied champion within 1400 of a turret pulls its fire.
 float constexpr SRF_TURRET_CALL_RANGE   = std::max(Yards(1400.0f), SRF_TURRET_RANGE);
 // Minions: League acquires within 500; an allied champion under attack calls
 // for help from up to 1000 away.
 float constexpr SRF_MINION_ACQUIRE_RANGE = Yards(500.0f);
 float constexpr SRF_MINION_CALL_RANGE    = Yards(1000.0f);
-// Caster minions: League's 550 range, a bolt every 1.6 s.
+// Caster minions: League's 550 range, siege minions 450; their attack speed League's (rift_league_unit).
 float constexpr SRF_CASTER_RANGE        = Yards(550.0f);
-uint32 constexpr SRF_CASTER_ATTACK_TIME = 1500;    // League's 0.667 attacks a second
+float constexpr SRF_SIEGE_RANGE         = Yards(450.0f);
+// League's minion kinds (Season 3). Waves are three melee and three casters, a
+// siege minion every third wave until 35:00 and every second after; a lane whose
+// enemy inhibitor is down sends a super minion instead of the siege minion every
+// wave, two when all three are down.
+enum SrfMinionKind : uint8 { SRF_MINION_MELEE, SRF_MINION_CASTER, SRF_MINION_SIEGE, SRF_MINION_SUPER };
+char const* const SRF_MINION_KIND[] = { "melee", "caster", "siege", "super" };
+float constexpr SRF_SIEGE_EVERY_SECOND_WAVE_FROM = 35.0f;   // minutes of League's clock
 // League's rewards, in League gold and experience (wiki "Experience (champion)"
 // and "Minion"): a minion's experience goes to the enemy champions within 1500
 // units of where it died, the killer always among them; one takes it all, two or
@@ -396,23 +403,31 @@ float constexpr SRF_XP_MINION_RANGE     = Yards(1500.0f);
 float constexpr SRF_XP_SHARED_TOTAL     = 1.30f;
 float constexpr SRF_XP_MELEE_MINION     = 58.88f;
 float constexpr SRF_XP_CASTER_MINION    = 29.44f;
+float constexpr SRF_XP_SIEGE_MINION     = 92.0f;
+float constexpr SRF_XP_SUPER_MINION     = 97.0f;
 float constexpr SRF_XP_KILL_SOLO_MIN    = 42.0f;
 float constexpr SRF_XP_KILL_SOLO_MAX    = 990.0f;
 float constexpr SRF_XP_KILL_SHARED_MIN  = 27.97f;
 float constexpr SRF_XP_KILL_SHARED_MAX  = 891.0f;
 uint32 constexpr SRF_GOLD_MELEE_MINION  = 20;
 uint32 constexpr SRF_GOLD_CASTER_MINION = 15;
+uint32 constexpr SRF_GOLD_SIEGE_MINION  = 40;
+uint32 constexpr SRF_GOLD_SUPER_MINION  = 27;      // the 2013 infobox's
+float const SRF_MINION_XP[] = { SRF_XP_MELEE_MINION, SRF_XP_CASTER_MINION, SRF_XP_SIEGE_MINION, SRF_XP_SUPER_MINION };
+uint32 const SRF_MINION_GOLD[] = { SRF_GOLD_MELEE_MINION, SRF_GOLD_CASTER_MINION, SRF_GOLD_SIEGE_MINION, SRF_GOLD_SUPER_MINION };
 uint32 constexpr SRF_GOLD_KILL          = 300;
 uint32 constexpr SRF_GOLD_FIRST_BLOOD   = 100;     // on top of the kill
 uint32 constexpr SRF_GOLD_BOUNTY_MAX    = 1000;    // a shutdown at most
 uint32 constexpr SRF_GOLD_STRUCTURE     = 150;     // to every player of the side that destroys it
-uint32 constexpr SRF_GOLD_PASSIVE       = 10;      // every SRF_PASSIVE_GOLD_TICK: League's ~1.9 a second
+uint32 constexpr SRF_GOLD_PASSIVE       = 8;       // every SRF_PASSIVE_GOLD_TICK: League's 16 per 10 s (Season 3)
 uint32 constexpr SRF_PASSIVE_GOLD_TICK  = 5 * IN_MILLISECONDS;
-// Units follow the players' level: a level-60 minion would miss nobody and be
-// missed by everybody a level-1 match starts with. Minions also grow a little
-// with every wave, League's scaling over the course of a match.
-float constexpr SRF_MINION_GROWTH_PER_WAVE = 0.03f;
+// Units play League's numbers for their kind and League's game time (RiftLeague,
+// world rift_league_unit), restated as the match's scale and League's clock move:
+// League's minions grow every 3 minutes, its turrets by the minute, a camp by the
+// time it came up. They take the players' level for WoW's own level rules.
 uint32 constexpr SRF_STRUCTURE_LEVEL_TICK  = 30 * IN_MILLISECONDS;
+// League's clock: its first wave comes at 1:30.
+uint32 constexpr SRF_LEAGUE_FIRST_WAVE     = 90 * IN_MILLISECONDS;
 uint8 constexpr SRF_UNIT_BASE_LEVEL = 10;          // the match's starting level (RiftProgression)
 uint32 constexpr SRF_MAINTAIN_TICK         = 3 * IN_MILLISECONDS;
 // The denying rule: under this share of its health a minion turns neutral.
@@ -586,6 +601,8 @@ void BattlegroundSRF::Reset()
     _unstuckTargets = 0;
     _unstuckPlaced = 0;
     _matchClock = 0;
+    _combatLevel = SRF_UNIT_BASE_LEVEL;
+    _unitScale = 0.0f;
     _respawnAt.clear();
     _stats.clear();
     _firstBlood = false;
@@ -595,6 +612,8 @@ void BattlegroundSRF::Reset()
 
 bool BattlegroundSRF::SetupBattleground()
 {
+    // League's numbers as the tables hold them now: an edit plays from the next match.
+    RiftLeague::Load();
     for (uint8 slot = 0; slot < 2 * BG_SRF_STRUCTURES_PER_TEAM; ++slot)
         if (!SpawnStructure(slot))
             return false;
@@ -662,7 +681,7 @@ bool BattlegroundSRF::SpawnStructure(uint8 slot)
     }
     _structures[slot] = StructureState();
     _turrets[slot] = TurretState();
-    ApplyUnitLevel(GetBGCreature(slot, false), UnitLevel(), 1.0f);
+    ApplyLeagueStats(GetBGCreature(slot, false), StructureKind(slot), LeagueMinutes(), 1.0f, _structures[slot].Backdoor);
     return true;
 }
 
@@ -793,8 +812,16 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
     // destroyed item changed is picked up here (RiftProgression::SyncItems).
     _itemSyncTimer += elapsed;
     bool const syncItems = _itemSyncTimer >= SRF_ITEM_SYNC_MS;
+    float scale = 0.0f;
     if (syncItems)
+    {
         _itemSyncTimer = 0;
+        // The champions convert at the match's scale and level (RiftLeague).
+        _combatLevel = AverageMatchLevel();
+        scale = RiftLeague::Scale(AverageLeagueLevel());
+        _unitScale = RiftLeague::Scale(UnitLeagueLevel());
+        UpdateBackdoor();
+    }
 
     for (auto const& [guid, bgPlayer] : GetPlayers())
     {
@@ -805,7 +832,10 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
             continue;
         }
         if (syncItems)
+        {
+            RiftProgression::SetMatchScale(player, scale, _combatLevel);
             RiftProgression::SyncItems(player);
+        }
         if (player->IsAlive() && !player->HasAura(SRF_SPELL_FOCUS))
             player->AddAura(SRF_SPELL_FOCUS, player);
         BrushState& st = _brush[guid];
@@ -998,8 +1028,18 @@ void BattlegroundSRF::SpawnWave()
         if (alive >= BG_SRF_MAX_MINIONS_PER_TEAM)
             continue;
 
-        uint32 const melee = team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_MELEE : BG_SRF_ENTRY_CHAOS_MELEE;
-        uint32 const caster = team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_CASTER : BG_SRF_ENTRY_CHAOS_CASTER;
+        uint32 const entries[] = {
+            uint32(team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_MELEE : BG_SRF_ENTRY_CHAOS_MELEE),
+            uint32(team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_CASTER : BG_SRF_ENTRY_CHAOS_CASTER),
+            uint32(team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_SIEGE : BG_SRF_ENTRY_CHAOS_SIEGE),
+            uint32(team == TEAM_ALLIANCE ? BG_SRF_ENTRY_ORDER_SUPER : BG_SRF_ENTRY_CHAOS_SUPER) };
+        // League's wave (SrfMinionKind): supers lead, then the melee, the siege
+        // minion and the casters.
+        bool const siegeWave = (_wavesSpawned + 1) % (LeagueMinutes() >= SRF_SIEGE_EVERY_SECOND_WAVE_FROM ? 2 : 3) == 0;
+        TeamId const enemy = team == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+        uint8 inhibitorsDown = 0;
+        for (uint8 lane = 0; lane < BG_SRF_LANE_COUNT; ++lane)
+            inhibitorsDown += _structures[SlotOf(enemy, lane * 4 + 3)].Destroyed ? 1 : 0;
         for (uint8 lane = 0; lane < BG_SRF_LANE_COUNT; ++lane)
         {
             std::vector<Position> const& path = LanePath(team, lane);
@@ -1007,15 +1047,23 @@ void BattlegroundSRF::SpawnWave()
                 continue;
             Position const gate = path[0];
             float const facing = gate.GetAbsoluteAngle(&path[1]);
-            for (uint8 i = 0; i < BG_SRF_MELEE_PER_WAVE + BG_SRF_CASTERS_PER_WAVE; ++i)
+            std::vector<uint8> wave;
+            uint8 const supers = _structures[SlotOf(enemy, lane * 4 + 3)].Destroyed ? (inhibitorsDown == BG_SRF_LANE_COUNT ? 2 : 1) : 0;
+            wave.insert(wave.end(), supers, SRF_MINION_SUPER);
+            wave.insert(wave.end(), BG_SRF_MELEE_PER_WAVE, SRF_MINION_MELEE);
+            if (!supers && siegeWave)
+                wave.push_back(SRF_MINION_SIEGE);
+            wave.insert(wave.end(), BG_SRF_CASTERS_PER_WAVE, SRF_MINION_CASTER);
+            for (uint8 i = 0; i < wave.size(); ++i)
             {
+                uint8 const kind = wave[i];
                 // In its file across the lane and its rank behind the gate: melee
                 // (slots 0-2) in front, casters (3-5) behind.
                 float const back = facing + float(M_PI);
                 Position const filed = InFile(path, 0, FileOffset(i));
                 Position const pos(filed.GetPositionX() + std::cos(back) * RankOffset(i),
                     filed.GetPositionY() + std::sin(back) * RankOffset(i), gate.GetPositionZ() + 1.0f, facing);
-                TempSummon* minion = nexus->SummonCreature(i < BG_SRF_MELEE_PER_WAVE ? melee : caster, pos,
+                TempSummon* minion = nexus->SummonCreature(entries[kind], pos,
                     TEMPSUMMON_CORPSE_TIMED_DESPAWN, 3s);
                 if (!minion)
                     continue;
@@ -1025,12 +1073,16 @@ void BattlegroundSRF::SpawnWave()
                 minion->SetReactState(REACT_DEFENSIVE);
                 // Baron's empowerment: the team's minions come out tougher while it lasts.
                 float const empowered = _baronTimer[team] ? SRF_BARON_MINION_HEALTH : 1.0f;
-                ApplyUnitLevel(minion, UnitLevel(), (1.0f + SRF_MINION_GROWTH_PER_WAVE * float(_wavesSpawned)) * empowered);
+                float const minutes = LeagueMinutes();
+                ApplyLeagueStats(minion, SRF_MINION_KIND[kind], minutes, empowered, false);
                 Minion m;
+                m.SpawnMinutes = minutes;
+                m.HealthScale = empowered;
                 m.Guid = minion->GetGUID();
                 m.Team = team;
                 m.Lane = lane;
-                m.Caster = i >= BG_SRF_MELEE_PER_WAVE;
+                m.Kind = kind;
+                m.Caster = kind == SRF_MINION_CASTER || kind == SRF_MINION_SIEGE;
                 m.Slot = i;
                 m.StartDelay = uint32(i) * SRF_WAVE_START_STAGGER;
                 _minions.push_back(m);
@@ -1508,13 +1560,9 @@ uint8 BattlegroundSRF::MinionPriority(Creature* minion, TeamId team, Unit* targe
     return 7;
 }
 
-// League's cadence: a wave every 30 s, every 25 s from 14:00, every 20 s from 30:00.
+// League's cadence (Season 3): a wave every 30 s, all match.
 uint32 BattlegroundSRF::WaveInterval() const
 {
-    if (_matchClock >= 30 * MINUTE * IN_MILLISECONDS)
-        return 20 * IN_MILLISECONDS;
-    if (_matchClock >= 14 * MINUTE * IN_MILLISECONDS)
-        return 25 * IN_MILLISECONDS;
     return BG_SRF_WAVE_INTERVAL;
 }
 
@@ -1608,7 +1656,7 @@ void BattlegroundSRF::UpdateMinions()
         else if (!m.StartDelay)
             m.StillMs += BG_SRF_MINION_TICK;
         if (Unit* victim = creature->GetVictim())
-            if (m.Caster ? creature->GetExactDist2d(victim) <= SRF_CASTER_RANGE : creature->IsWithinMeleeRange(victim))
+            if (m.Caster ? creature->GetExactDist2d(victim) <= (m.Kind == SRF_MINION_SIEGE ? SRF_SIEGE_RANGE : SRF_CASTER_RANGE) : creature->IsWithinMeleeRange(victim))
                 m.StillMs = 0;
         if (m.StillMs >= SRF_MINION_STUCK_MS && UnstickMinion(creature, m))
             continue;
@@ -1812,9 +1860,9 @@ void BattlegroundSRF::OnMinionDied(Minion const& minion, Creature const* corpse)
     // Where it stood at the last tick: a minion's corpse can be gone before the
     // tick that notices it died, and the experience was lost with it.
     Position const where = corpse ? corpse->GetPosition() : minion.Pos;
-    AwardMinionExperience(enemy, where, minion.Caster ? SRF_XP_CASTER_MINION : SRF_XP_MELEE_MINION, minion.Killer);
+    AwardMinionExperience(enemy, where, SRF_MINION_XP[minion.Kind], minion.Killer);
     if (!GetCustomRules().RiftLastHitGold && !minion.Paid && corpse)
-        AwardGold(enemy, corpse, minion.Caster ? SRF_GOLD_CASTER_MINION : SRF_GOLD_MELEE_MINION);
+        AwardGold(enemy, corpse, SRF_MINION_GOLD[minion.Kind]);
 }
 
 void BattlegroundSRF::AwardMinionExperience(TeamId team, Position const& where, float leagueXp, ObjectGuid killer)
@@ -1881,8 +1929,9 @@ void BattlegroundSRF::HandleKillUnit(Creature* creature, Player* killer)
         return;
     }
     ++_stats[killer->GetGUID()].Minions;
+    RiftProgression::OnUnitKill(killer);
     if (GetCustomRules().RiftLastHitGold)
-        RiftProgression::AddGold(killer, it->Caster ? SRF_GOLD_CASTER_MINION : SRF_GOLD_MELEE_MINION, true);
+        RiftProgression::AddGold(killer, SRF_MINION_GOLD[it->Kind], true);
 }
 
 void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
@@ -1890,6 +1939,9 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
     Battleground::HandleKillPlayer(victim, killer);
     if (!victim || GetStatus() != STATUS_IN_PROGRESS)
         return;
+    RiftProgression::OnDeath(victim);
+    if (killer && killer != victim)
+        RiftProgression::OnUnitKill(killer);
     TeamId const victimTeam = GetTeamIndexByTeamId(GetPlayerTeam(victim->GetGUID()));
     // League's death timer, the champion's own; CENTURION_Rift counts it down.
     uint32 const respawn = DeathTimer(victim);
@@ -2171,18 +2223,170 @@ uint8 BattlegroundSRF::UnitLevel() const
     return uint8(std::clamp(std::lround(base + (average - base) * rate), 1L, long(DEFAULT_MAX_LEVEL)));
 }
 
-// A unit takes the players' level (and so their hit and miss odds) and keeps
-// the share of its health it had.
-void BattlegroundSRF::ApplyUnitLevel(Creature* creature, uint8 level, float healthScale)
+// League's clock, in minutes: its first wave at 1:30, ours BG_SRF_FIRST_WAVE_TIME
+// after the gates open.
+float BattlegroundSRF::LeagueMinutes() const
+{
+    return float(_matchClock + SRF_LEAGUE_FIRST_WAVE - BG_SRF_FIRST_WAVE_TIME) / float(MINUTE * IN_MILLISECONDS);
+}
+
+// The champions' average League level (RiftProgression), 1..18.
+float BattlegroundSRF::AverageLeagueLevel() const
+{
+    uint32 total = 0, count = 0;
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+        for (Player* player : TeamPlayers(team))
+        {
+            total += RiftProgression::GetLeagueLevel(player);
+            ++count;
+        }
+    return count ? float(total) / float(count) : 1.0f;
+}
+
+// The League level the units are converted at: Centurion.Rift.UnitLevelRate of
+// the way from level 1 to the champions' average (1.0: the champions' own, so a
+// unit's League numbers meet the champions' at the same scale).
+float BattlegroundSRF::UnitLeagueLevel() const
+{
+    float const rate = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.UnitLevelRate", 1.0f));
+    return 1.0f + (AverageLeagueLevel() - 1.0f) * rate;
+}
+
+// The units' scale, kept with the item tick (worked out here before the first).
+float BattlegroundSRF::UnitScale() const
+{
+    return _unitScale > 0.0f ? _unitScale : RiftLeague::Scale(UnitLeagueLevel());
+}
+
+char const* BattlegroundSRF::StructureKind(uint8 slot) const
+{
+    uint8 const index = SlotIndex(slot);
+    if (index == SRF_SLOT_NEXUS)
+        return "nexus";
+    if (index == SRF_SLOT_NEXUS_TURRET_1 || index == SRF_SLOT_NEXUS_TURRET_2)
+        return "turret_nexus";
+    switch (index % 4)
+    {
+        case 0: return "turret_outer";
+        case 1: return "turret_inner";
+        case 2: return "turret_inhibitor";
+        default: return "inhibitor";
+    }
+}
+
+// The jungle's monsters, by the Rift's creature: each plays the Season 3 camp
+// that stood in its place (world rift_league_unit says which).
+char const* BattlegroundSRF::MonsterKind(uint32 entry)
+{
+    switch (entry)
+    {
+        case BG_SRF_ENTRY_BLUE_SENTINEL:     return "blue_sentinel";
+        case BG_SRF_ENTRY_RED_BRAMBLEBACK:   return "red_brambleback";
+        case BG_SRF_ENTRY_GREATER_MURK_WOLF: return "greater_murk_wolf";
+        case BG_SRF_ENTRY_MURK_WOLF:         return "murk_wolf";
+        case BG_SRF_ENTRY_CRIMSON_RAPTOR:    return "crimson_raptor";
+        case BG_SRF_ENTRY_RAPTOR:            return "raptor";
+        case BG_SRF_ENTRY_ANCIENT_KRUG:      return "ancient_krug";
+        case BG_SRF_ENTRY_KRUG:              return "krug";
+        case BG_SRF_ENTRY_GROMP:             return "gromp";
+        case BG_SRF_ENTRY_RIFT_SCUTTLER:     return "rift_scuttler";
+        case BG_SRF_ENTRY_DRAGON:            return "dragon";
+        case BG_SRF_ENTRY_BARON_NASHOR:      return "baron";
+        default:                             return "";
+    }
+}
+
+// A unit takes League's stats for its kind at `minutes` on League's clock, in
+// WoW's numbers at the match's conversion (RiftLeague): health (keeping the share
+// it had, times `healthScale`), armour, resistances, and its attack's damage and
+// speed. And the players' level, for WoW's own level rules. `backdoor`: League's
+// backdoor plating, a structure with no enemy minion near.
+void BattlegroundSRF::ApplyLeagueStats(Creature* creature, char const* kind, float minutes, float healthScale, bool backdoor)
 {
     if (!creature || !creature->IsAlive())
         return;
     float const pct = creature->GetHealthPct();
-    creature->SetLevel(level);
-    creature->UpdateLevelDependantStats();
-    if (healthScale != 1.0f)
-        creature->SetMaxHealth(uint32(float(creature->GetMaxHealth()) * healthScale));
+    uint8 const level = UnitLevel();
+    if (creature->GetLevel() != level)
+        creature->SetLevel(level);
+
+    std::shared_ptr<RiftLeague::Tables const> const tables = RiftLeague::Get();
+    RiftLeague::UnitStats const* unit = RiftLeague::FindUnit(*tables, kind);
+    if (!unit)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundSRF: rift_league_unit has no `{}` (entry {}); it keeps its template stats.",
+            kind, creature->GetEntry());
+        creature->UpdateLevelDependantStats();
+        creature->SetHealth(std::max<uint32>(1, uint32(float(creature->GetMaxHealth()) * pct / 100.0f)));
+        return;
+    }
+    float const scale = UnitScale();
+    RiftLeague::UnitAt const at = RiftLeague::At(*unit, minutes);
+
+    uint32 const health = std::max<uint32>(1, uint32(std::lround(scale * at.Health * healthScale)));
+    creature->SetCreateHealth(health);
+    creature->SetStatFlatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(health));
+    creature->UpdateMaxHealth();
+
+    float const armor = at.Armor + (backdoor ? unit->BackdoorArmor : 0.0f);
+    creature->SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, RiftLeague::ToWowArmor(armor, _combatLevel));
+    creature->UpdateArmor();
+    float const resistance = RiftLeague::ToWowResist(at.Resist + (backdoor ? unit->BackdoorResist : 0.0f));
+    for (uint8 school = SPELL_SCHOOL_HOLY; school < MAX_SPELL_SCHOOL; ++school)
+    {
+        creature->SetStatFlatModifier(UnitMods(UNIT_MOD_RESISTANCE_START + school), BASE_VALUE, resistance);
+        creature->UpdateResistances(school);
+    }
+
+    // Creature::CalculateMinMaxDamage: weapon x DamageModifier x the attack time
+    // in seconds, plus attack power, which a League unit has none of.
+    uint32 const attackTime = uint32(std::lround(1000.0f / unit->AttackSpeed));
+    creature->SetAttackTime(BASE_ATTACK, attackTime);
+    float const modDamage = std::max(0.01f, creature->GetCreatureTemplate()->ModDamage);
+    float const weapon = scale * at.Damage / (modDamage * float(attackTime) / 1000.0f);
+    creature->SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, weapon);
+    creature->SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, weapon);
+    creature->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, 0.0f);
+    creature->UpdateAttackPowerAndDamage();
+
     creature->SetHealth(std::max<uint32>(1, uint32(float(creature->GetMaxHealth()) * pct / 100.0f)));
+}
+
+// League's damage a hit for a unit of `kind` at `minutes`, in WoW's numbers.
+float BattlegroundSRF::LeagueAttackDamage(char const* kind, float minutes) const
+{
+    std::shared_ptr<RiftLeague::Tables const> const tables = RiftLeague::Get();
+    RiftLeague::UnitStats const* unit = RiftLeague::FindUnit(*tables, kind);
+    return unit ? UnitScale() * RiftLeague::At(*unit, minutes).Damage : 0.0f;
+}
+
+// League's backdoor plating: a turret with no enemy minion within its reach
+// takes its bonus armour and magic resist (rift_league_unit backdoor_*), put
+// on as the state changes.
+void BattlegroundSRF::UpdateBackdoor()
+{
+    std::shared_ptr<RiftLeague::Tables const> const tables = RiftLeague::Get();
+    for (uint8 slot = 0; slot < _structures.size(); ++slot)
+    {
+        StructureState& st = _structures[slot];
+        if (st.Destroyed)
+            continue;
+        RiftLeague::UnitStats const* unit = RiftLeague::FindUnit(*tables, StructureKind(slot));
+        if (!unit || (unit->BackdoorArmor <= 0.0f && unit->BackdoorResist <= 0.0f))
+            continue;
+        Creature* creature = GetBGCreature(slot, false);
+        if (!creature || !creature->IsAlive())
+            continue;
+        TeamId const team = SlotTeam(slot);
+        bool const covered = std::any_of(_minions.begin(), _minions.end(), [&](Minion const& m)
+        {
+            return m.Team != team && creature->GetExactDist2d(&m.Pos) <= SRF_TURRET_RANGE;
+        });
+        if (covered == !st.Backdoor)
+            continue;
+        st.Backdoor = !covered;
+        ApplyLeagueStats(creature, StructureKind(slot), LeagueMinutes(), 1.0f, st.Backdoor);
+    }
 }
 
 void BattlegroundSRF::UpdateProgression(uint32 diff)
@@ -2211,12 +2415,23 @@ void BattlegroundSRF::UpdateProgression(uint32 diff)
     if (_structureLevelTimer >= SRF_STRUCTURE_LEVEL_TICK)
     {
         _structureLevelTimer = 0;
-        uint8 const level = UnitLevel();
+        // League's turrets grow with the clock; minions and monsters keep the
+        // League numbers they came out with, restated at the match's scale.
+        float const minutes = LeagueMinutes();
         for (uint8 slot = 0; slot < _structures.size(); ++slot)
             if (!_structures[slot].Destroyed)
-                if (Creature* creature = GetBGCreature(slot, false))
-                    if (creature->GetLevel() != level)
-                        ApplyUnitLevel(creature, level, 1.0f);
+                ApplyLeagueStats(GetBGCreature(slot, false), StructureKind(slot), minutes, 1.0f, _structures[slot].Backdoor);
+        if (Map* map = FindBgMap())
+        {
+            for (Minion const& m : _minions)
+                if (Creature* creature = map->GetCreature(m.Guid))
+                    if (!m.Denied)
+                        ApplyLeagueStats(creature, SRF_MINION_KIND[m.Kind], m.SpawnMinutes, m.HealthScale, false);
+            for (uint8 i = 0; i < BG_SRF_JUNGLE_MONSTERS; ++i)
+                if (_camps[SRF_MONSTERS[i].camp].Up)
+                    if (Creature* creature = GetBGCreature(BG_SRF_CREATURE_JUNGLE_FIRST + i, false))
+                        ApplyLeagueStats(creature, MonsterKind(SRF_MONSTERS[i].entry), _camps[SRF_MONSTERS[i].camp].SpawnMinutes, 1.0f, false);
+        }
     }
 }
 
@@ -2246,9 +2461,12 @@ Unit* BattlegroundSRF::PickTurretTarget(Creature* turret, TeamId team) const
         }
     };
 
+    // League's turret priority: siege and super minions, then melee, then casters
+    // (and champions' pets), then champions.
     for (Minion const& m : _minions)
         if (m.Team != team)
-            consider(map->GetCreature(m.Guid), m.Caster ? 2 : 1);
+            consider(map->GetCreature(m.Guid), m.Kind == SRF_MINION_SIEGE || m.Kind == SRF_MINION_SUPER ? 0
+                : m.Kind == SRF_MINION_CASTER ? 2 : 1);
 
     for (auto const& [guid, bgPlayer] : GetPlayers())
         if (bgPlayer.Team == TeamValue(OtherTeam(team)))
@@ -2289,6 +2507,9 @@ void BattlegroundSRF::UpdateTurrets(uint32 elapsed)
     Map* map = FindBgMap();
     if (!map)
         return;
+    std::shared_ptr<RiftLeague::Tables const> const tables = RiftLeague::Get();
+    float const scale = UnitScale();
+    float const minutes = LeagueMinutes();
 
     for (uint8 slot = 0; slot < _structures.size(); ++slot)
     {
@@ -2327,31 +2548,44 @@ void BattlegroundSRF::UpdateTurrets(uint32 elapsed)
         if (!target)
             continue;
 
-        float share = SRF_TURRET_MELEE_SHARE;
+        RiftLeague::UnitStats const* stats = RiftLeague::FindUnit(*tables, StructureKind(slot));
+        if (!stats)
+            continue;
+        float damage = scale * RiftLeague::At(*stats, minutes).Damage;
         if (target->GetTypeId() == TYPEID_PLAYER)
         {
-            share = SRF_TURRET_PLAYER_SHARE * (1.0f + SRF_TURRET_WARMUP_STEP * float(ts.WarmStacks));
-            ts.WarmStacks = std::min<uint8>(ts.WarmStacks + 1, SRF_TURRET_WARMUP_MAX);
+            if (ts.LastChampion != target->GetGUID() && ts.WarmStacks > SRF_TURRET_SWITCH_HEAT)
+                ts.WarmStacks = SRF_TURRET_SWITCH_HEAT;
+            damage *= SRF_TURRET_HEAT[ts.WarmStacks];
+            ts.WarmStacks = std::min<uint8>(ts.WarmStacks + 1, uint8(SRF_TURRET_HEAT.size() - 1));
+            ts.LastChampion = target->GetGUID();
             ts.SinceChampionShot = 0;
         }
-        else if (IsChampionPet(target))
-            share = SRF_TURRET_PLAYER_SHARE;
         else
+        {
+            ts.WarmStacks = 0;
             for (Minion const& m : _minions)
                 if (m.Guid == target->GetGUID())
                 {
-                    share = m.Caster ? SRF_TURRET_CASTER_SHARE : SRF_TURRET_MELEE_SHARE;
+                    if (RiftLeague::UnitStats const* victim = RiftLeague::FindUnit(*tables, SRF_MINION_KIND[m.Kind]))
+                        damage *= victim->TurretDamageTaken;
                     break;
                 }
+        }
+        damage *= RiftLeague::ArmorMultiplier(float(target->GetArmor()) * (1.0f - stats->ArmorPenPct / 100.0f), _combatLevel);
+
         Creature* eye = TurretEye(slot, turret);
         Unit* source = eye ? static_cast<Unit*>(eye) : turret;
         uint32 const shot = team == TEAM_ALLIANCE ? BG_SRF_SPELL_ORDER_TURRET_SHOT : BG_SRF_SPELL_CHAOS_TURRET_SHOT;
-        FireBolt(source, target, shot, std::max<int32>(1, int32(target->GetMaxHealth() * share * SRF_TURRET_DAMAGE_SCALE)));
         uint32 flight = 0;
         if (SpellInfo const* info = sSpellMgr->GetSpellInfo(shot))
             if (info->Speed > 0.0f)
                 flight = uint32(source->GetDistance(target) / info->Speed * float(IN_MILLISECONDS));
         ts.Cooldown = std::max<uint32>(BG_SRF_TURRET_TICK, flight + SRF_TURRET_SHOT_GAP);
+        // A shot held back so the last one lands first deals the time it waited:
+        // the turret keeps League's damage a second.
+        damage *= std::max(1.0f, float(ts.Cooldown) * stats->AttackSpeed / 1000.0f);
+        FireBolt(source, target, shot, std::max<int32>(1, int32(std::lround(damage))));
     }
 }
 
@@ -2438,13 +2672,15 @@ void BattlegroundSRF::Report(uint32 diff)
 }
 
 // A caster minion fights at range: it holds at League's 550 units and sends a
-// bolt every 1.6 seconds, carrying its own melee damage, instead of walking up.
+// bolt at League's attack speed with League's damage, through the target's
+// armour - a caster minion's attack is physical - instead of walking up.
 void BattlegroundSRF::UpdateCasterAttack(Creature* caster, Minion& minion, Unit* victim)
 {
-    if (caster->GetExactDist2d(victim) > SRF_CASTER_RANGE)
+    float const range = minion.Kind == SRF_MINION_SIEGE ? SRF_SIEGE_RANGE : SRF_CASTER_RANGE;
+    if (caster->GetExactDist2d(victim) > range)
     {
         if (caster->GetMotionMaster()->GetCurrentMovementGeneratorType() != CHASE_MOTION_TYPE)
-            caster->GetMotionMaster()->MoveChase(victim, SRF_CASTER_RANGE * 0.8f);
+            caster->GetMotionMaster()->MoveChase(victim, range * 0.8f);
         return;
     }
     if (caster->isMoving())
@@ -2454,13 +2690,13 @@ void BattlegroundSRF::UpdateCasterAttack(Creature* caster, Minion& minion, Unit*
     minion.AttackTimer = minion.AttackTimer > BG_SRF_MINION_TICK ? minion.AttackTimer - BG_SRF_MINION_TICK : 0;
     if (minion.AttackTimer)
         return;
-    minion.AttackTimer = SRF_CASTER_ATTACK_TIME;
+    minion.AttackTimer = caster->GetAttackTime(BASE_ATTACK);
 
-    float const low = caster->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE);
-    float const high = caster->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE);
+    float const damage = LeagueAttackDamage(SRF_MINION_KIND[minion.Kind], minion.SpawnMinutes)
+        * RiftLeague::ArmorMultiplier(float(victim->GetArmor()), _combatLevel);
     bool const order = minion.Team == TEAM_ALLIANCE;
     FireBolt(caster, victim, order ? BG_SRF_SPELL_ORDER_CASTER_BOLT : BG_SRF_SPELL_CHAOS_CASTER_BOLT,
-        std::max<int32>(1, int32((low + high) / 2.0f)));
+        std::max<int32>(1, int32(std::lround(damage))));
 }
 
 // -------------------------------------------------------------------- jungle
@@ -2470,6 +2706,8 @@ void BattlegroundSRF::SpawnCamp(uint8 camp)
     Map* map = FindBgMap();
     uint32 spawned = 0;
     Position where;
+    // League's camps take their stats from the time they come up.
+    _camps[camp].SpawnMinutes = LeagueMinutes();
     for (uint8 i = 0; i < BG_SRF_JUNGLE_MONSTERS; ++i)
     {
         SrfMonster const& m = SRF_MONSTERS[i];
@@ -2492,7 +2730,7 @@ void BattlegroundSRF::SpawnCamp(uint8 camp)
         }
         // Neutral until struck; the scuttler never fights back.
         creature->SetReactState(SRF_CAMPS[camp].kind == SRF_CAMP_SCUTTLE ? REACT_PASSIVE : REACT_DEFENSIVE);
-        ApplyUnitLevel(creature, UnitLevel(), 1.0f);
+        ApplyLeagueStats(creature, MonsterKind(m.entry), _camps[camp].SpawnMinutes, 1.0f, false);
         where = creature->GetPosition();
         ++spawned;
     }
@@ -2710,6 +2948,7 @@ bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
     TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(killer->GetGUID()));
     RiftProgression::AddGold(killer, m.gold, true);
     ++_stats[killer->GetGUID()].Minions;      // League's CS counts monsters too
+    RiftProgression::OnUnitKill(killer);
     switch (SRF_CAMPS[m.camp].kind)
     {
         case SRF_CAMP_BARON:

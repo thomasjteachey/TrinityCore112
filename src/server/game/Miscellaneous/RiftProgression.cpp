@@ -16,6 +16,7 @@
  */
 
 #include "RiftProgression.h"
+#include "RiftLeague.h"
 
 #include "Battleground.h"
 #include "BattlegroundSRF.h"
@@ -198,6 +199,12 @@ namespace
         uint8 KitApplied = 0;
         // Riding as the match counts it (the steed held), last applied by SyncItems.
         uint16 Riding = 0;
+        // The match's League -> WoW conversion (BattlegroundSRF, SetMatchScale):
+        // its scale, and the level armour is read at.
+        float MatchScale = 0.0f;
+        uint8 CombatLevel = 0;
+        // The Bloodthirster's stacks: a unit kill each, up to 30, half lost on death.
+        uint8 BloodthirsterStacks = 0;
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -655,15 +662,39 @@ namespace
 
     // League's inventory. A shop item is not WoW gear: it sits in the bags (the
     // CENTURION_Rift frame shows it in one of six item slots, or the trinket
-    // slot) and works from there. What the held items give is summed and put on
-    // the champion through two hidden carriers, plus each item's on-equip
-    // spells - stat spells counted once per item that carries them, League's
-    // UNIQUE passives (the Rift's own spells) once.
-    uint32 constexpr SPELL_ITEM_STATS = 94147;    // stamina, intellect, armour
-    uint32 constexpr SPELL_ITEM_RESIST = 94148;   // fire..arcane resistance
+    // slot) and works from there. What the held items give is League's own stats
+    // (world `rift_league_item`), summed and put on the champion together with
+    // its League base stats by six hidden carriers (SetChampionCarriers); the
+    // items' UNIQUE passives (the Rift's own spells) go on once each. The stat
+    // spells on the items (94200-94299) are only their tooltips' lines.
+    uint32 constexpr SPELL_CHAMPION_A = 94147;    // stamina (League's health), armour, resistance
+    uint32 constexpr SPELL_CHAMPION_B = 94148;    // attack power, ranged attack power, crit
+    uint32 constexpr SPELL_CHAMPION_C = 94154;    // melee and ranged attack speed, spell damage
+    uint32 constexpr SPELL_CHAMPION_D = 94155;    // healing, mana, health regeneration
+    uint32 constexpr SPELL_CHAMPION_E = 94156;    // mana regeneration, spell penetration, run speed
+    uint32 constexpr SPELL_CHAMPION_F = 94157;    // the boots' run speed; life steal (tenths of a percent)
+    uint32 constexpr CHAMPION_CARRIERS[] = { SPELL_CHAMPION_A, SPELL_CHAMPION_B, SPELL_CHAMPION_C,
+        SPELL_CHAMPION_D, SPELL_CHAMPION_E, SPELL_CHAMPION_F };
+    uint32 constexpr STAT_SPELL_FIRST = 94200;
+    uint32 constexpr STAT_SPELL_LAST = 94299;
+    uint32 constexpr SPELL_DEATHCAP = 94140;      // Rabadon's: +30% ability power (League S3)
+    uint32 constexpr SPELL_ETERNITY_STACK = 94129; // Rod of Ages: League's +20 health, +20 mana, +2 AP a stack
+    // The Bloodthirster (League S3): +1 attack damage and +0.2% life steal a unit
+    // kill, up to 30; half are lost on death. 94160 shows the stacks.
+    uint32 constexpr ITEM_BLOODTHIRSTER = 991042;
+    uint32 constexpr SPELL_BLOODTHIRSTER_STACK = 94160;
+    uint8 constexpr BLOODTHIRSTER_MAX_STACKS = 30;
+    float constexpr BLOODTHIRSTER_DAMAGE_PER_STACK = 1.0f;
+    float constexpr BLOODTHIRSTER_LIFE_STEAL_PER_STACK = 0.2f;
+    // Rift structures: no life steal from them (League).
+    uint32 constexpr RIFT_STRUCTURE_FIRST = 922100;
+    uint32 constexpr RIFT_STRUCTURE_LAST = 922105;
     uint32 constexpr ITEM_SLOTS = 6;
     uint32 constexpr RIFT_SPELL_FIRST = 94120;
     uint32 constexpr RIFT_SPELL_LAST = 94160;
+    // Spell penetration per point of League magic penetration: the slope of
+    // RiftLeague::ToWowResist at 50 magic resist, where champions mostly sit.
+    float constexpr MAGIC_PEN_PER_POINT = 300.0f * 100.0f / (150.0f * 150.0f);
 
     bool IsShopItem(uint32 entry) { return entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST; }
 
@@ -708,14 +739,12 @@ namespace
 
     struct ItemEffects
     {
-        int32 Stamina = 0;
-        int32 Intellect = 0;
-        int32 Armor = 0;
-        int32 Resist = 0;
+        RiftLeague::ItemStats League;      // summed per copy held; MoveSpeed without the boots
+        float BootsSpeed = 0.0f;           // the fastest boots'
         std::map<uint32, uint32> Spells;
     };
 
-    ItemEffects HeldItemEffects(Player const* player)
+    ItemEffects HeldItemEffects(Player const* player, RiftLeague::Tables const& tables)
     {
         ItemEffects out;
         for (uint32 entry = SHOP_ITEM_FIRST; entry <= SHOP_ITEM_LAST; ++entry)
@@ -724,28 +753,36 @@ namespace
             ItemTemplate const* proto = count ? sObjectMgr->GetItemTemplate(entry) : nullptr;
             if (!proto)
                 continue;
-            for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
+            if (RiftLeague::ItemStats const* stats = RiftLeague::FindItem(tables, entry))
             {
-                if (proto->ItemStat[i].ItemStatType == ITEM_MOD_STAMINA)
-                    out.Stamina += proto->ItemStat[i].ItemStatValue * count;
-                else if (proto->ItemStat[i].ItemStatType == ITEM_MOD_INTELLECT)
-                    out.Intellect += proto->ItemStat[i].ItemStatValue * count;
+                float const n = float(count);
+                RiftLeague::ItemStats& sum = out.League;
+                sum.Health += stats->Health * n;
+                sum.Mana += stats->Mana * n;
+                sum.Damage += stats->Damage * n;
+                sum.AbilityPower += stats->AbilityPower * n;
+                sum.Armor += stats->Armor * n;
+                sum.Resist += stats->Resist * n;
+                sum.AttackSpeed += stats->AttackSpeed * n;
+                sum.Crit += stats->Crit * n;
+                sum.HealthRegen += stats->HealthRegen * n;
+                sum.ManaRegen += stats->ManaRegen * n;
+                sum.MagicPen += stats->MagicPen * n;
+                sum.LifeSteal += stats->LifeSteal * n;
+                if (stats->Boots)
+                    out.BootsSpeed = std::max(out.BootsSpeed, stats->MoveSpeed);
+                else
+                    sum.MoveSpeed += stats->MoveSpeed * n;
             }
-            out.Armor += int32(proto->Armor) * count;
-            out.Resist += int32(proto->FireRes) * count;   // the shop's resistances are all-school
             for (_Spell const& spell : proto->Spells)
-                if (spell.SpellId > 0 && spell.SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
+                if (spell.SpellId > 0 && spell.SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP &&
+                    (uint32(spell.SpellId) < STAT_SPELL_FIRST || uint32(spell.SpellId) > STAT_SPELL_LAST))
                     out.Spells[uint32(spell.SpellId)] += uint32(count);
         }
-        // League's UNIQUE passives count once, and so do boots: their run speed
-        // (SPELL_AURA_MOD_INCREASE_SPEED) is "only the fastest boots count".
+        // League's UNIQUE passives count once.
         for (auto& [spell, count] : out.Spells)
-        {
             if (spell >= RIFT_SPELL_FIRST && spell <= RIFT_SPELL_LAST)
                 count = 1;
-            else if (SpellInfo const* info = sSpellMgr->GetSpellInfo(spell); info && info->HasAura(SPELL_AURA_MOD_INCREASE_SPEED))
-                count = 1;
-        }
         return out;
     }
 
@@ -774,11 +811,206 @@ namespace
         }
     }
 
+    int32 Round(float value) { return int32(std::lround(value)); }
+
+    float HealthFromStamina(float stamina) { return std::min(20.0f, stamina) + std::max(0.0f, stamina - 20.0f) * 10.0f; }
+    float ManaFromIntellect(float intellect) { return std::min(20.0f, intellect) + std::max(0.0f, intellect - 20.0f) * 15.0f; }
+
+    // The attack power WoW gives the character from its level and BASE stats -
+    // StatSystem's formula (Player::UpdateAttackPowerAndDamage) at the create
+    // stats: what buffs and talents add to strength and agility stays on top of
+    // League's number. The formula is read back from its result, so the druid's
+    // forms and Predatory Strikes stay its own.
+    float BaseAttackPower(Player const* player, bool ranged)
+    {
+        float str = 0.0f, agi = 0.0f;    // the formula's weights
+        uint8 const cls = player->GetClass();
+        ShapeshiftForm const form = player->GetShapeshiftForm();
+        if (ranged)
+        {
+            if (cls == CLASS_HUNTER)
+                agi = 2.0f;
+            else if (cls != CLASS_DRUID || (form != FORM_CAT && form != FORM_BEAR && form != FORM_DIREBEAR))
+                agi = 1.0f;
+        }
+        else
+            switch (cls)
+            {
+                case CLASS_ROGUE:
+                case CLASS_HUNTER:
+                    str = 1.0f;
+                    agi = 1.0f;
+                    break;
+                case CLASS_MAGE:
+                case CLASS_PRIEST:
+                case CLASS_WARLOCK:
+                    str = 1.0f;
+                    break;
+                case CLASS_DRUID:
+                    str = 2.0f;
+                    agi = form == FORM_CAT ? 1.0f : 0.0f;
+                    break;
+                default:      // warrior, paladin, death knight, shaman
+                    str = 2.0f;
+                    break;
+            }
+        float const formula = player->GetFlatModifierValue(ranged ? UNIT_MOD_ATTACK_POWER_RANGED : UNIT_MOD_ATTACK_POWER, BASE_VALUE);
+        return formula - str * (player->GetStat(STAT_STRENGTH) - player->GetCreateStat(STAT_STRENGTH))
+            - agi * (player->GetStat(STAT_AGILITY) - player->GetCreateStat(STAT_AGILITY));
+    }
+
+    // A basic attack's damage before attack power (Player::CalculateMinMaxDamage):
+    // the weapon's, a feral form's, plus the ammunition's for a shot.
+    float WeaponPart(Player const* player, WeaponAttackType att)
+    {
+        float const speed = player->GetAPMultiplier(att, false);
+        if (att != RANGED_ATTACK && player->IsInFeralForm())
+            return float(std::min<uint8>(player->GetLevel(), 60)) * 1.05f * speed;
+        float part = (player->GetWeaponDamageRange(att, MINDAMAGE) + player->GetWeaponDamageRange(att, MAXDAMAGE)) / 2.0f;
+        if (att == RANGED_ATTACK)
+            part += player->GetAmmoDPS() * speed;
+        return part;
+    }
+
+    // The attack power that makes a basic attack with `att` hit for `perHit`:
+    // weapon + attack power / 14 x the weapon's speed. With two weapons the main
+    // hand shares the job with the off hand - half damage, at its own speed - so
+    // the pair deals League's damage a second.
+    float AttackPowerFor(Player const* player, WeaponAttackType att, float perHit)
+    {
+        float const speed = player->GetAPMultiplier(att, false);
+        if (speed <= 0.0f)
+            return 0.0f;
+        float const weapon = WeaponPart(player, att);
+        if (att == BASE_ATTACK && player->CanDualWield() && player->haveOffhandWeapon())
+        {
+            float const offSpeed = player->GetAPMultiplier(OFF_ATTACK, false);
+            if (offSpeed > 0.0f)
+                return 14.0f * (perHit - weapon - 0.5f * WeaponPart(player, OFF_ATTACK) * speed / offSpeed) / (1.5f * speed);
+        }
+        return 14.0f * (perHit - weapon) / speed;
+    }
+
+    // League's champions have no crit of their own: WoW's from base agility
+    // (Player::GetMeleeCritFromAgility) comes off.
+    float BaseAgilityCrit(Player const* player)
+    {
+        float const per = player->GetClass() == CLASS_ROGUE ? 29.0f : player->GetClass() == CLASS_HUNTER ? 53.0f : 20.0f;
+        return player->GetCreateStat(STAT_AGILITY) / per;
+    }
+
+    // League's champion, in WoW's numbers: the class's League base stats at its
+    // League level, its rune page and the held items' stats (world
+    // `rift_league_champion`, `rift_league_item`), converted at the match's scale
+    // and level (RiftLeague). Each carrier fills the gap between what WoW gives
+    // the character on its own - its class's base health and stamina, the field
+    // kit's armour and weapon, its base attack power and agility crit - and
+    // League's number, so talents and buffs still add on top of League's.
+    void SetChampionCarriers(Player* player, State const& state, ItemEffects const& items, RiftLeague::Tables const& tables)
+    {
+        RiftLeague::ChampionStats const* cs = RiftLeague::FindChampion(tables, player->GetClass());
+        if (!cs || state.MatchScale <= 0.0f || !state.CombatLevel)
+        {
+            for (uint32 spell : CHAMPION_CARRIERS)
+                player->RemoveAurasDueToSpell(spell);
+            return;
+        }
+        float const s = state.MatchScale;
+        uint8 const level = state.CombatLevel;
+        float const l = float(state.LeagueLevel);
+        RiftLeague::ItemStats it = items.League;
+        if (Aura const* eternity = player->GetAura(SPELL_ETERNITY_STACK))
+        {
+            float const stacks = float(eternity->GetStackAmount());
+            it.Health += 20.0f * stacks;
+            it.Mana += 20.0f * stacks;
+            it.AbilityPower += 2.0f * stacks;
+        }
+
+        // The Bloodthirster's stacks, held only while it is.
+        float const thirst = player->GetItemCount(ITEM_BLOODTHIRSTER, false) ? float(state.BloodthirsterStacks) : 0.0f;
+        it.Damage += BLOODTHIRSTER_DAMAGE_PER_STACK * thirst;
+        it.LifeSteal += BLOODTHIRSTER_LIFE_STEAL_PER_STACK * thirst;
+
+        float const health = cs->Health + cs->HealthPerLevel * l + it.Health;
+        float const armor = cs->Armor + cs->ArmorPerLevel * l + cs->RuneArmor + it.Armor;
+        float const resist = cs->Resist + (cs->ResistPerLevel + cs->RuneResistPerLevel) * l + it.Resist;
+        float const damage = cs->Damage + cs->DamagePerLevel * l + cs->RuneDamage + it.Damage;
+        float abilityPower = cs->RuneAbilityPower + cs->RuneAbilityPowerPerLevel * l + it.AbilityPower;
+        if (items.Spells.count(SPELL_DEATHCAP))
+            abilityPower *= 1.3f;
+        float const attackSpeed = std::min(RiftLeague::ATTACK_SPEED_CAP,
+            cs->AttackSpeed * (1.0f + cs->AttackSpeedPerLevel * (l - 1.0f) + it.AttackSpeed / 100.0f));
+
+        // health: WoW's own is the class's base health and its base stamina's
+        float const naturalHealth = (player->GetFlatModifierValue(UNIT_MOD_HEALTH, BASE_VALUE) + float(player->GetCreateHealth()))
+            * player->GetPctModifierValue(UNIT_MOD_HEALTH, BASE_PCT) + HealthFromStamina(player->GetCreateStat(STAT_STAMINA));
+        // through stamina, 10 health a point: an aura that changes health itself
+        // (SPELL_AURA_MOD_INCREASE_HEALTH) would put health on a dead champion
+        int32 const stamina = Round((s * health - naturalHealth) / 10.0f);
+        // armour: the field kit's and base agility's (Player::UpdateArmor)
+        float const naturalArmor = player->GetFlatModifierValue(UNIT_MOD_ARMOR, BASE_VALUE) * player->GetPctModifierValue(UNIT_MOD_ARMOR, BASE_PCT)
+            + player->GetCreateStat(STAT_AGILITY) * 2.0f;
+        int32 const armorGap = Round(RiftLeague::ToWowArmor(armor, level) - naturalArmor);
+        int32 const resistance = Round(RiftLeague::ToWowResist(resist));
+
+        // basic attacks: League's damage a hit, League's attacks a second
+        float const perHit = s * damage;
+        Item const* ranged = player->GetWeaponForAttack(RANGED_ATTACK, true);
+        bool const shoots = ranged != nullptr;
+        bool const shootsWithPower = shoots && ranged->GetTemplate()->SubClass != ITEM_SUBCLASS_WEAPON_WAND;
+        int32 const meleePower = Round(AttackPowerFor(player, BASE_ATTACK, perHit) - BaseAttackPower(player, false));
+        int32 const rangedPower = shootsWithPower ? Round(AttackPowerFor(player, RANGED_ATTACK, perHit) - BaseAttackPower(player, true)) : 0;
+        int32 const meleeHaste = Round((attackSpeed * player->GetAPMultiplier(BASE_ATTACK, false) - 1.0f) * 100.0f);
+        int32 const rangedHaste = shoots ? Round((attackSpeed * player->GetAPMultiplier(RANGED_ATTACK, false) - 1.0f) * 100.0f) : 0;
+        int32 const crit = Round(it.Crit - BaseAgilityCrit(player));
+        int32 const spellPower = Round(s * abilityPower);
+
+        // mana: League's mana items as the same share of this champion's own pool
+        int32 mana = 0, manaRegen = 0;
+        if (player->GetPowerType() == POWER_MANA)
+        {
+            float const leagueMana = cs->Mana + cs->ManaPerLevel * l;
+            float const natural = float(player->GetCreateMana()) + ManaFromIntellect(player->GetCreateStat(STAT_INTELLECT));
+            float const ratio = leagueMana > 0.0f ? natural / leagueMana : 0.0f;
+            mana = Round(it.Mana * ratio);
+            manaRegen = Round(it.ManaRegen * ratio);
+        }
+        int32 const healthRegen = Round(s * it.HealthRegen);
+        int32 const penetration = -Round((cs->RuneMagicPen + it.MagicPen) * MAGIC_PEN_PER_POINT);
+
+        // A champion keeps its share of health as its maximum moves.
+        float const healthPct = player->GetHealthPct();
+        uint32 const maxBefore = player->GetMaxHealth();
+        SetCarrier(player, SPELL_CHAMPION_A, { stamina, armorGap, resistance });
+        if (player->IsAlive() && player->GetMaxHealth() != maxBefore)
+            player->SetHealth(std::max<uint32>(1, uint32(float(player->GetMaxHealth()) * healthPct / 100.0f)));
+        SetCarrier(player, SPELL_CHAMPION_B, { meleePower, rangedPower, crit });
+        SetCarrier(player, SPELL_CHAMPION_C, { meleeHaste, rangedHaste, spellPower });
+        SetCarrier(player, SPELL_CHAMPION_D, { spellPower, mana, healthRegen });
+        SetCarrier(player, SPELL_CHAMPION_E, { manaRegen, penetration, Round(it.MoveSpeed) });
+        SetCarrier(player, SPELL_CHAMPION_F, { Round(items.BootsSpeed), Round(it.LifeSteal * 10.0f) });
+    }
+
+    void ShowBloodthirster(Player* player, State const& state)
+    {
+        Aura* aura = player->GetAura(SPELL_BLOODTHIRSTER_STACK);
+        if (!state.BloodthirsterStacks)
+        {
+            if (aura)
+                player->RemoveAurasDueToSpell(SPELL_BLOODTHIRSTER_STACK);
+            return;
+        }
+        if (!aura)
+            aura = player->AddAura(SPELL_BLOODTHIRSTER_STACK, player);
+        if (aura && aura->GetStackAmount() != state.BloodthirsterStacks)
+            aura->SetStackAmount(state.BloodthirsterStacks);
+    }
+
     void SyncItemsFor(Player* player, State& state)
     {
-        ItemEffects const want = HeldItemEffects(player);
-        SetCarrier(player, SPELL_ITEM_STATS, { want.Stamina, want.Intellect, want.Armor });
-        SetCarrier(player, SPELL_ITEM_RESIST, { want.Resist });
+        std::shared_ptr<RiftLeague::Tables const> const tables = RiftLeague::Get();
+        ItemEffects const want = HeldItemEffects(player, *tables);
 
         for (auto itr = state.ItemSpells.begin(); itr != state.ItemSpells.end();)
         {
@@ -806,6 +1038,11 @@ namespace
                     effect->ChangeAmount(aura->GetSpellInfo()->GetEffect(SpellEffIndex(i)).CalcValue(player) * int32(count));
         }
 
+        if (!player->GetItemCount(ITEM_BLOODTHIRSTER, false))
+            state.BloodthirsterStacks = 0;
+        ShowBloodthirster(player, state);
+        SetChampionCarriers(player, state, want, *tables);
+
         // The steed held is the champion's riding: Plainsrunning follows it, and a
         // steed no longer held (sold, built into the swift one) stops carrying it.
         uint16 const riding = MatchRiding(player);
@@ -823,8 +1060,10 @@ namespace
 
     void TakeItemAuras(Player* player, State& state)
     {
-        player->RemoveAurasDueToSpell(SPELL_ITEM_STATS);
-        player->RemoveAurasDueToSpell(SPELL_ITEM_RESIST);
+        for (uint32 spell : CHAMPION_CARRIERS)
+            player->RemoveAurasDueToSpell(spell);
+        player->RemoveAurasDueToSpell(SPELL_BLOODTHIRSTER_STACK);
+        state.BloodthirsterStacks = 0;
         player->RemoveAurasDueToSpell(SPELL_STEED);
         player->RemoveAurasDueToSpell(SPELL_SWIFT_STEED);
         player->RemoveAurasDueToSpell(SPELL_RIFT_FOCUS);
@@ -1076,6 +1315,7 @@ void ProbeStorage()
             }
         TC_LOG_INFO("server.loading", ">> Summoner's Rift shop: {} item(s) with a build path.", Recipes.size());
     }
+    RiftLeague::Load();
 
     StoragePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash'") != nullptr;
     if (!StoragePresent)
@@ -1269,8 +1509,9 @@ void OnLogin(Player* player)
     // level first, so the character can wear it again.
     Field* fields = row->Fetch();
     uint8 const realLevel = fields[0].GetUInt8();
-    player->RemoveAurasDueToSpell(SPELL_ITEM_STATS);
-    player->RemoveAurasDueToSpell(SPELL_ITEM_RESIST);
+    for (uint32 spell : CHAMPION_CARRIERS)
+        player->RemoveAurasDueToSpell(spell);
+    player->RemoveAurasDueToSpell(SPELL_BLOODTHIRSTER_STACK);
     player->RemoveAurasDueToSpell(SPELL_RIFT_FOCUS);
     TakeShopItems(player);
     TakeRecall(player);
@@ -1528,6 +1769,99 @@ uint8 GetLeagueLevel(Player const* player)
     return state ? state->LeagueLevel : 1;
 }
 
+void SetMatchScale(Player* player, float scale, uint8 combatLevel)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    if (State* state = player ? Find(player) : nullptr)
+    {
+        state->MatchScale = scale;
+        state->CombatLevel = combatLevel;
+    }
+}
+
+float MatchScale(Player const* player)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = player ? Find(player) : nullptr;
+    return state ? state->MatchScale : 0.0f;
+}
+
+bool IsRangedBasicAttack(SpellInfo const* info)
+{
+    if (!info)
+        return false;
+    if (info->IsAutoRepeatRangedSpell())
+        return true;
+    if (!info->HasAttribute(SPELL_ATTR0_REQ_AMMO) || info->ManaCost || info->ManaCostPercentage)
+        return false;
+    bool weapon = false;
+    for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+    {
+        uint32 const effect = info->GetEffect(SpellEffIndex(i)).Effect;
+        if (effect == SPELL_EFFECT_WEAPON_DAMAGE || effect == SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL)
+            weapon = true;
+        else if (effect)
+            return false;
+    }
+    return weapon;
+}
+
+void OnBasicAttackDamage(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spell)
+{
+    // Cheapest first: this runs after every swing and shot in the world. The
+    // life steal rides on the champion's carrier (SetChampionCarriers).
+    if (!damage || !attacker || !victim || attacker == victim || attacker->GetTypeId() != TYPEID_PLAYER)
+        return;
+    AuraEffect const* lifeSteal = attacker->GetAuraEffect(SPELL_CHAMPION_F, EFFECT_1);
+    if (!lifeSteal || lifeSteal->GetAmount() <= 0 || !attacker->IsAlive())
+        return;
+    if (victim->GetTypeId() == TYPEID_UNIT && victim->GetEntry() >= RIFT_STRUCTURE_FIRST && victim->GetEntry() <= RIFT_STRUCTURE_LAST)
+        return;
+    if (spell && !IsRangedBasicAttack(spell))
+        return;
+    // Healing cuts on the champion (Mortal Strike's) cut it too, as Grievous Wounds does in League.
+    float heal = float(damage) * float(lifeSteal->GetAmount()) / 1000.0f;
+    if (int32 const cut = attacker->GetMaxNegativeAuraModifier(SPELL_AURA_MOD_HEALING_PCT))
+        AddPct(heal, cut);
+    if (heal < 1.0f)
+        return;
+    HealInfo healInfo(attacker, attacker, uint32(heal), nullptr, SPELL_SCHOOL_MASK_NORMAL);
+    Unit::DealHeal(healInfo);
+}
+
+void OnUnitKill(Player* player)
+{
+    if (!player || !player->GetItemCount(ITEM_BLOODTHIRSTER, false))
+        return;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    if (State* state = Find(player); state && state->BloodthirsterStacks < BLOODTHIRSTER_MAX_STACKS)
+    {
+        ++state->BloodthirsterStacks;
+        ShowBloodthirster(player, *state);
+    }
+}
+
+void OnDeath(Player* player)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    if (State* state = player ? Find(player) : nullptr; state && state->BloodthirsterStacks)
+    {
+        state->BloodthirsterStacks = uint8(state->BloodthirsterStacks / 2);
+        ShowBloodthirster(player, *state);
+    }
+}
+
+float BaseAttackDamage(Player const* player)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = player ? Find(player) : nullptr;
+    if (!state)
+        return 0.0f;
+    std::shared_ptr<RiftLeague::Tables const> const tables = RiftLeague::Get();
+    RiftLeague::ChampionStats const* cs = RiftLeague::FindChampion(*tables, player->GetClass());
+    return cs ? state->MatchScale * (cs->Damage + cs->DamagePerLevel * float(state->LeagueLevel)) : 0.0f;
+}
+
 bool CanSpendPoints(Player* player, bool tell)
 {
     if (!player || !IsInMatch(player))
@@ -1557,12 +1891,17 @@ void OnLevelChanged(Player* player)
         ++state->MatchLevel;
         state->PendingPicks += PICKS_PER_LEVEL;
     }
-    // Valor's Reward (Catalyst of the Protector and what builds from it).
+    // Valor's Reward (Catalyst of the Protector and what builds from it): League's
+    // 150 health at the match's scale, and League's 200 mana as the same share of
+    // this champion's pool as of a League champion's at its level.
     if (player->HasAura(SPELL_VALORS_REWARD) && player->IsAlive())
     {
-        player->ModifyHealth(150);
-        if (player->GetMaxPower(POWER_MANA) > 0)
-            player->ModifyPower(POWER_MANA, 200);
+        player->ModifyHealth(std::max<int32>(1, Round(150.0f * (state->MatchScale > 0.0f ? state->MatchScale : 1.0f))));
+        std::shared_ptr<RiftLeague::Tables const> const tables = RiftLeague::Get();
+        RiftLeague::ChampionStats const* cs = RiftLeague::FindChampion(*tables, player->GetClass());
+        float const leagueMana = cs ? cs->Mana + cs->ManaPerLevel * float(state->LeagueLevel) : 0.0f;
+        if (player->GetMaxPower(POWER_MANA) > 0 && leagueMana > 0.0f)
+            player->ModifyPower(POWER_MANA, std::max<int32>(1, Round(float(player->GetMaxPower(POWER_MANA)) * 200.0f / leagueMana)));
     }
     ShowProgress(player, *state);
     SendState(player, *state);

@@ -940,6 +940,22 @@ class TC_GAME_API Battleground
         // do in an arena. Public because that handler is the caller.
         virtual bool AllowsCorpseReclaim() const { return true; }
 
+        // False where the battleground's creatures are combatants on equal terms
+        // with the players (a MOBA's minions, turrets and camps): Unit::DealDamage's
+        // open-world bot-versus-wildlife scaling then stays off between them, so a
+        // bot and a player take and deal the same damage there. Public because
+        // DealDamage is the caller.
+        virtual bool UsesBotCreatureScaling() const { return true; }
+
+        // League's combat (a MOBA's): attacks and spells in the battleground never
+        // miss and are never dodged, parried, blocked, glancing or crushing; only
+        // champions and their pets crit; armor mitigation is read at
+        // GetLeagueCombatLevel whoever attacks, and a resistance takes its average
+        // share every time instead of rolling it. Unit.cpp and Object.cpp read it
+        // through GetLeagueCombatBattleground.
+        virtual bool UsesLeagueCombat() const { return false; }
+        virtual uint8 GetLeagueCombatLevel() const { return 0; }
+
         // True while THIS battleground owns `player`'s preparation state: it
         // applied the aura/flag itself and takes it back when it is ready.
         // Violet Hold does that per WAVE, mid-match - and the playerbot
@@ -1270,4 +1286,8 @@ class TC_GAME_API Battleground
         float m_StartMaxDist;
         uint32 ScriptId;
 };
+
+// The battleground playing League's combat (Battleground::UsesLeagueCombat) where
+// `object` stands, or nullptr.
+TC_GAME_API Battleground const* GetLeagueCombatBattleground(WorldObject const* object);
 #endif

@@ -26,6 +26,7 @@
 
 class Player;
 class SpellInfo;
+class Unit;
 
 // Summoner's Rift progression: every match starts at level 10 - where the first
 // talent point comes - and climbs back to the character's real level, the way a
@@ -134,6 +135,26 @@ namespace RiftProgression
     TC_GAME_API void TakeComponents(Player* player, std::vector<uint32> const& consumed);
     // The League level the character has reached this match (1..18).
     TC_GAME_API uint8 GetLeagueLevel(Player const* player);
+    // BattlegroundSRF, as the champions level: the match's League -> WoW scale and
+    // the level armour is read at (RiftLeague). SyncItems converts the
+    // champion's League stats at these.
+    TC_GAME_API void SetMatchScale(Player* player, float scale, uint8 combatLevel);
+    // That scale: a League number times it is the WoW one (0 outside a match).
+    TC_GAME_API float MatchScale(Player const* player);
+    // A basic attack at range, as League counts one: the repeating shot (Auto
+    // Shot, a wand's Shoot) or a warrior's or rogue's Shoot and Throw.
+    TC_GAME_API bool IsRangedBasicAttack(SpellInfo const* info);
+    // League's life steal (Vampiric Scepter, the Bloodthirster): Unit's melee and
+    // spell damage paths, after a champion's basic attack (`spell` null for a
+    // swing) has dealt `damage`. Nothing from a structure.
+    TC_GAME_API void OnBasicAttackDamage(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spell);
+    // BattlegroundSRF: a champion killed a unit (minion, monster, champion), and a
+    // champion died - the Bloodthirster's stacks.
+    TC_GAME_API void OnUnitKill(Player* player);
+    TC_GAME_API void OnDeath(Player* player);
+    // League's base attack damage at the champion's League level (no runes, no
+    // items) in WoW's numbers: what Sheen's and Trinity Force's Spellblade add.
+    TC_GAME_API float BaseAttackDamage(Player const* player);
 
     // Skill picks and talent points are spent at the character's own base only
     // (Player::LearnTalent, HandlePickRequest). True outside a match. When it is

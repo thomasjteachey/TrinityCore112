@@ -1,0 +1,202 @@
+/*
+ * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "RiftLeague.h"
+#include "Config.h"
+#include "DatabaseEnv.h"
+#include "Log.h"
+#include <algorithm>
+#include <cmath>
+#include <mutex>
+
+namespace
+{
+    std::mutex TablesMutex;
+    std::shared_ptr<RiftLeague::Tables const> Current = std::make_shared<RiftLeague::Tables const>();
+
+    bool HasTable(char const* name)
+    {
+        return WorldDatabase.PQuery("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{}'", name) != nullptr;
+    }
+
+    // Growth steps (or minutes, when the growth is continuous) a unit has had by `minutes`.
+    float Steps(RiftLeague::UnitStats const& u, float minutes)
+    {
+        float const since = std::max(0.0f, minutes - u.GrowthStart);
+        return u.GrowthStep > 0.0f ? std::floor(since / u.GrowthStep) : since;
+    }
+
+    float Capped(float value, float cap)
+    {
+        return cap > 0.0f ? std::min(value, cap) : value;
+    }
+}
+
+namespace RiftLeague
+{
+void Load()
+{
+    if (!HasTable("rift_league_unit") || !HasTable("rift_league_champion") || !HasTable("rift_league_item"))
+    {
+        TC_LOG_INFO("server.loading", ">> Summoner's Rift League numbers: the rift_league_* tables are absent.");
+        return;
+    }
+
+    auto tables = std::make_shared<Tables>();
+    if (QueryResult rows = WorldDatabase.Query("SELECT kind, health, health_growth, damage, damage_growth, damage_cap, attack_speed, "
+        "armor, armor_growth, armor_cap, resist, resist_growth, resist_cap, growth_start, growth_step, "
+        "bonus_armor, bonus_armor_fade_start, bonus_armor_fade_end, backdoor_armor, backdoor_resist, "
+        "damage_vs_champions, damage_vs_structures, turret_damage_taken, armor_pen_pct FROM rift_league_unit"))
+    {
+        do
+        {
+            Field* f = rows->Fetch();
+            UnitStats u;
+            u.Health = f[1].GetFloat();             u.HealthGrowth = f[2].GetFloat();
+            u.Damage = f[3].GetFloat();             u.DamageGrowth = f[4].GetFloat();      u.DamageCap = f[5].GetFloat();
+            u.AttackSpeed = std::max(0.05f, f[6].GetFloat());
+            u.Armor = f[7].GetFloat();              u.ArmorGrowth = f[8].GetFloat();       u.ArmorCap = f[9].GetFloat();
+            u.Resist = f[10].GetFloat();            u.ResistGrowth = f[11].GetFloat();     u.ResistCap = f[12].GetFloat();
+            u.GrowthStart = f[13].GetFloat();       u.GrowthStep = f[14].GetFloat();
+            u.BonusArmor = f[15].GetFloat();        u.BonusArmorFadeStart = f[16].GetFloat(); u.BonusArmorFadeEnd = f[17].GetFloat();
+            u.BackdoorArmor = f[18].GetFloat();     u.BackdoorResist = f[19].GetFloat();
+            u.DamageVsChampions = f[20].GetFloat(); u.DamageVsStructures = f[21].GetFloat();
+            u.TurretDamageTaken = f[22].GetFloat(); u.ArmorPenPct = f[23].GetFloat();
+            tables->Units[f[0].GetString()] = u;
+        } while (rows->NextRow());
+    }
+
+    if (QueryResult rows = WorldDatabase.Query("SELECT class, health, health_per_level, armor, armor_per_level, resist, resist_per_level, "
+        "damage, damage_per_level, attack_speed, attack_speed_per_level, mana, mana_per_level, "
+        "rune_damage, rune_armor, rune_resist_per_level, rune_ability_power, rune_ability_power_per_level, rune_magic_pen "
+        "FROM rift_league_champion"))
+    {
+        do
+        {
+            Field* f = rows->Fetch();
+            ChampionStats c;
+            c.Health = f[1].GetFloat();      c.HealthPerLevel = f[2].GetFloat();
+            c.Armor = f[3].GetFloat();       c.ArmorPerLevel = f[4].GetFloat();
+            c.Resist = f[5].GetFloat();      c.ResistPerLevel = f[6].GetFloat();
+            c.Damage = f[7].GetFloat();      c.DamagePerLevel = f[8].GetFloat();
+            c.AttackSpeed = std::max(0.1f, f[9].GetFloat()); c.AttackSpeedPerLevel = f[10].GetFloat();
+            c.Mana = f[11].GetFloat();       c.ManaPerLevel = f[12].GetFloat();
+            c.RuneDamage = f[13].GetFloat(); c.RuneArmor = f[14].GetFloat(); c.RuneResistPerLevel = f[15].GetFloat();
+            c.RuneAbilityPower = f[16].GetFloat(); c.RuneAbilityPowerPerLevel = f[17].GetFloat(); c.RuneMagicPen = f[18].GetFloat();
+            tables->Champions[f[0].GetUInt8()] = c;
+        } while (rows->NextRow());
+    }
+
+    if (QueryResult rows = WorldDatabase.Query("SELECT entry, health, mana, damage, ability_power, armor, resist, attack_speed, crit, "
+        "move_speed, boots, health_regen, mana_regen, magic_pen, life_steal FROM rift_league_item"))
+    {
+        do
+        {
+            Field* f = rows->Fetch();
+            ItemStats i;
+            i.Health = f[1].GetFloat();       i.Mana = f[2].GetFloat();
+            i.Damage = f[3].GetFloat();       i.AbilityPower = f[4].GetFloat();
+            i.Armor = f[5].GetFloat();        i.Resist = f[6].GetFloat();
+            i.AttackSpeed = f[7].GetFloat();  i.Crit = f[8].GetFloat();
+            i.MoveSpeed = f[9].GetFloat();    i.Boots = f[10].GetUInt8() != 0;
+            i.HealthRegen = f[11].GetFloat(); i.ManaRegen = f[12].GetFloat(); i.MagicPen = f[13].GetFloat();
+            i.LifeSteal = f[14].GetFloat();
+            tables->Items[f[0].GetUInt32()] = i;
+        } while (rows->NextRow());
+    }
+
+    TC_LOG_INFO("server.loading", ">> Summoner's Rift League numbers: {} unit kind(s), {} class(es), {} item(s).",
+        tables->Units.size(), tables->Champions.size(), tables->Items.size());
+    std::lock_guard<std::mutex> lock(TablesMutex);
+    Current = std::move(tables);
+}
+
+std::shared_ptr<Tables const> Get()
+{
+    std::lock_guard<std::mutex> lock(TablesMutex);
+    return Current;
+}
+
+UnitStats const* FindUnit(Tables const& tables, std::string const& kind)
+{
+    auto itr = tables.Units.find(kind);
+    return itr != tables.Units.end() ? &itr->second : nullptr;
+}
+
+ChampionStats const* FindChampion(Tables const& tables, uint8 playerClass)
+{
+    auto itr = tables.Champions.find(playerClass);
+    return itr != tables.Champions.end() ? &itr->second : nullptr;
+}
+
+ItemStats const* FindItem(Tables const& tables, uint32 entry)
+{
+    auto itr = tables.Items.find(entry);
+    return itr != tables.Items.end() ? &itr->second : nullptr;
+}
+
+UnitAt At(UnitStats const& u, float minutes)
+{
+    float const n = Steps(u, minutes);
+    UnitAt at;
+    at.Health = u.Health + u.HealthGrowth * n;
+    at.Damage = Capped(u.Damage + u.DamageGrowth * n, u.DamageCap);
+    at.Armor = Capped(u.Armor + u.ArmorGrowth * n, u.ArmorCap);
+    at.Resist = Capped(u.Resist + u.ResistGrowth * n, u.ResistCap);
+    // An outer turret's early plating: full until the fade starts, gone at its end.
+    if (u.BonusArmor > 0.0f)
+    {
+        float const span = u.BonusArmorFadeEnd - u.BonusArmorFadeStart;
+        float const left = span > 0.0f ? std::clamp((u.BonusArmorFadeEnd - minutes) / span, 0.0f, 1.0f)
+            : (minutes < u.BonusArmorFadeEnd ? 1.0f : 0.0f);
+        at.Armor += u.BonusArmor * left;
+    }
+    return at;
+}
+
+float Scale(float leagueLevel)
+{
+    float const base = sConfigMgr->GetFloatDefault("Centurion.Rift.Scale.Base", 0.365f);
+    float const perLevel = sConfigMgr->GetFloatDefault("Centurion.Rift.Scale.PerLevel", 0.0352f);
+    return std::max(0.01f, base + perLevel * (std::max(1.0f, leagueLevel) - 1.0f));
+}
+
+float ArmorConstant(uint8 level)
+{
+    float l = float(std::max<uint8>(level, 1));
+    if (l > 59.0f)
+        l = l + 4.5f * (l - 59.0f);
+    return 85.0f * l + 400.0f;
+}
+
+float ToWowArmor(float leagueArmor, uint8 level)
+{
+    return std::max(0.0f, leagueArmor) * ArmorConstant(level) / 100.0f;
+}
+
+float ToWowResist(float leagueResist)
+{
+    float const m = std::max(0.0f, leagueResist);
+    return 300.0f * m / (100.0f + m);
+}
+
+float ArmorMultiplier(float wowArmor, uint8 level)
+{
+    float const a = std::max(0.0f, wowArmor);
+    return 1.0f - std::min(0.75f, a / (a + ArmorConstant(level)));
+}
+}

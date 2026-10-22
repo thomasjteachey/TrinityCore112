@@ -68,6 +68,11 @@ enum BG_SRF_CreatureEntries
     BG_SRF_ENTRY_ORDER_CASTER    = 922111,
     BG_SRF_ENTRY_CHAOS_MELEE     = 922112,
     BG_SRF_ENTRY_CHAOS_CASTER    = 922113,
+    // League's siege (cannon) and super minions (Season 3: rift_league_unit)
+    BG_SRF_ENTRY_ORDER_SIEGE     = 922114,
+    BG_SRF_ENTRY_ORDER_SUPER     = 922115,
+    BG_SRF_ENTRY_CHAOS_SIEGE     = 922116,
+    BG_SRF_ENTRY_CHAOS_SUPER     = 922117,
     // A turret's eye: an invisible caster hovering over its crystal. Turret shots
     // leave from it - clear of the turret's own collision shell, which blocks a
     // shot's line of sight from inside, and from where the shot should start.
@@ -227,6 +232,12 @@ public:
     // League's brush: a champion in a brush patch is unseen by every enemy - player,
     // minion, turret - outside that patch, until it attacks.
     bool HidesFrom(Player const* target, WorldObject const* seer) const override;
+    // Minions, turrets and camps hit bots and players alike, and take the same from both.
+    bool UsesBotCreatureScaling() const override { return false; }
+    // League's combat (Battleground::UsesLeagueCombat), armour read at the
+    // champions' average level - the one their League armour is converted at.
+    bool UsesLeagueCombat() const override { return true; }
+    uint8 GetLeagueCombatLevel() const override { return _combatLevel; }
     void EndBattleground(uint32 winner) override;
 
 private:
@@ -235,6 +246,7 @@ private:
         bool Destroyed = false;
         bool Vulnerable = false;
         uint32 RespawnTimer = 0;   // inhibitors only
+        bool Backdoor = false;     // League's backdoor plating on: no enemy minion near
     };
 
     struct Minion
@@ -245,7 +257,8 @@ private:
         uint32 PathIndex = 0;      // how far along its lane path (LanePath) it has come
         uint32 SplineEnd = 0;      // the last path point of the spline it is walking
         bool Walking = false;
-        bool Caster = false;
+        bool Caster = false;       // fights at range: a caster or a siege minion
+        uint8 Kind = 0;            // SRF_MINION_MELEE / CASTER / SIEGE / SUPER
         uint8 Slot = 0;            // its place in the wave: rank (melee first) and file
         uint32 AttackTimer = 0;    // casters: ms until the next bolt
         uint32 StartDelay = 0;     // ms before it leaves the barracks
@@ -258,6 +271,8 @@ private:
         ObjectGuid Target;         // the target the battleground last sent it after
         ObjectGuid Ignore;         // a target it could not get to, left alone for a while
         uint32 IgnoreMs = 0;
+        float SpawnMinutes = 0.0f; // League's clock when it came out: its League numbers
+        float HealthScale = 1.0f;  // Baron's empowerment when it came out
     };
 
     struct CampState
@@ -268,6 +283,7 @@ private:
         float Patience = 100.0f;
         uint32 PauseMs = 0;        // a hit inside the leash stops the drain this long
         std::unordered_map<ObjectGuid, uint32> LastHealth;   // to tell a hit from the last tick
+        float SpawnMinutes = 0.0f; // League's clock when it came up: its League numbers
     };
     void UpdateLeash(uint8 camp, uint32 elapsed);
 
@@ -275,7 +291,8 @@ private:
     {
         ObjectGuid Target;
         ObjectGuid Eye;
-        uint8 WarmStacks = 0;          // League's Warming Up: champion hits in a row
+        uint8 WarmStacks = 0;          // League's heat: champion hits in a row (SRF_TURRET_HEAT)
+        ObjectGuid LastChampion;       // the champion it last shot
         uint32 SinceChampionShot = 0;  // ms since the last shot at a champion
         uint32 Cooldown = 0;           // ms before it may fire: its last bolt lands first
     };
@@ -338,7 +355,19 @@ private:
     void OnMinionDied(Minion const& minion, Creature const* corpse);
     uint8 AverageMatchLevel() const;
     uint8 UnitLevel() const;
-    void ApplyUnitLevel(Creature* creature, uint8 level, float healthScale);
+    // League's numbers (RiftLeague): its clock, the levels the conversion reads,
+    // and a unit's League stats put on it.
+    float LeagueMinutes() const;
+    float AverageLeagueLevel() const;
+    float UnitLeagueLevel() const;
+    float UnitScale() const;
+    char const* StructureKind(uint8 slot) const;
+    static char const* MonsterKind(uint32 entry);
+    void ApplyLeagueStats(Creature* creature, char const* kind, float minutes, float healthScale, bool backdoor);
+    float LeagueAttackDamage(char const* kind, float minutes) const;
+    void UpdateBackdoor();
+    uint8 _combatLevel = 10;       // the champions' average level, refreshed with the item tick
+    float _unitScale = 0.0f;       // RiftLeague::Scale at the units' League level, likewise
     void UpdateProgression(uint32 diff);
 
     std::array<StructureState, 2 * BG_SRF_STRUCTURES_PER_TEAM> _structures;

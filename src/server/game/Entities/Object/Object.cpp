@@ -2822,6 +2822,10 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
 
     RoundToInterval(HitChance, 0, 10000);
 
+    // League's combat: a spell never misses (a resistance or a mechanic's still can).
+    if (GetLeagueCombatBattleground(this))
+        HitChance = 10000;
+
     int32 tmp = 10000 - HitChance;
 
     int32 rand = irand(0, 9999);

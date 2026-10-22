@@ -19,7 +19,7 @@
 //   CCGAMEREQ\tRIFTPICK:<spellId>   learn or rank up that spell with a skill pick
 //   CCGAMEREQ\tRIFTSTATE:           send the match state again (after a /reload)
 //
-// League's lane minions (npc_rift_minion, creature_template 922110-922113) never
+// League's lane minions (npc_rift_minion, creature_template 922110-922117) never
 // evade. The stock AI evades the moment its target dies: it turns immune, walks
 // back to where the fight started and heals to full there - so waves ran back
 // up their lane after every kill, never died, and shrugged off turret shots.
@@ -44,11 +44,13 @@
 #include "ObjectAccessor.h"
 #include "DBCStores.h"
 #include "Player.h"
+#include "RiftLeague.h"
 #include "RiftProgression.h"
 #include "ScriptMgr.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellScript.h"
+#include <cmath>
 
 namespace
 {
@@ -63,8 +65,18 @@ namespace
 // BattlegroundSRF's entries: turrets, inhibitors and nexuses; the lane minions.
 uint32 constexpr RIFT_STRUCTURE_FIRST = 922100;
 uint32 constexpr RIFT_STRUCTURE_LAST = 922105;
-uint32 constexpr RIFT_MINION_FIRST = 922110;
-uint32 constexpr RIFT_MINION_LAST = 922113;
+// League's minion kind by entry (rift_league_unit): Order 922110 melee, 922111
+// caster, 922114 siege, 922115 super; Chaos 922112, 922113, 922116, 922117.
+char const* RiftMinionKind(uint32 entry)
+{
+    switch (entry)
+    {
+        case 922111: case 922113: return "caster";
+        case 922114: case 922116: return "siege";
+        case 922115: case 922117: return "super";
+        default:                  return "melee";
+    }
+}
 
 // SetGUID id: a caster keeps its own distance (BattlegroundSRF moves it).
 int32 constexpr RIFT_MINION_TARGET_MELEE = 0;
@@ -110,15 +122,19 @@ struct npc_rift_minion : public CreatureAI
         DoMeleeAttackIfReady();
     }
 
-    // League's damage: 60% against champions and structures, and 2% of a lane
-    // minion's current health on top against other minions.
+    // League's minion damage (world rift_league_unit): its share against
+    // champions (Season 3: 15% less) and against structures (50% more), full
+    // against minions, monsters and pets. Its melee and its bolt alike.
     void DamageDealt(Unit* victim, uint32& damage, DamageEffectType /*damageType*/) override
     {
         uint32 const entry = victim->GetTypeId() == TYPEID_UNIT ? victim->GetEntry() : 0;
-        if (victim->GetTypeId() == TYPEID_PLAYER || (entry >= RIFT_STRUCTURE_FIRST && entry <= RIFT_STRUCTURE_LAST))
-            damage = damage * 60 / 100;
-        else if (entry >= RIFT_MINION_FIRST && entry <= RIFT_MINION_LAST)
-            damage += victim->GetHealth() * 2 / 100;
+        bool const champion = victim->GetTypeId() == TYPEID_PLAYER;
+        bool const structure = entry >= RIFT_STRUCTURE_FIRST && entry <= RIFT_STRUCTURE_LAST;
+        if (!champion && !structure)
+            return;
+        std::shared_ptr<RiftLeague::Tables const> const tables = RiftLeague::Get();
+        if (RiftLeague::UnitStats const* unit = RiftLeague::FindUnit(*tables, RiftMinionKind(me->GetEntry())))
+            damage = uint32(std::lround(float(damage) * (champion ? unit->DamageVsChampions : unit->DamageVsStructures)));
     }
 
     void EnterEvadeMode(EvadeReason /*why*/) override

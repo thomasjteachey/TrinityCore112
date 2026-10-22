@@ -6214,7 +6214,27 @@ Centurion.Rift.PlayerXpRate = 1.5
 #        Description: Summoner's Rift: how fast minions, jungle monsters and
 #                     structures level with the champions - the share of the way
 #                     from the match's starting level (10) to the champions'
-#                     average level. .reload config applies a change at once.
+#                     average level. Their League numbers are converted at the
+#                     League level that share gives (1.0: the champions' own, so
+#                     units and champions meet as in League). .reload config
+#                     applies a change at once.
 #        Default:     1.0 - (the champions' average level)
 
 Centurion.Rift.UnitLevelRate = 1.0
+
+#
+#    Centurion.Rift.Scale.Base
+#    Centurion.Rift.Scale.PerLevel
+#        Description: Summoner's Rift plays League's numbers (world rift_league_*)
+#                     converted to WoW's by one scale for the whole match: health,
+#                     damage, healing and ability power times
+#                     Base + PerLevel x (the champions' average League level - 1).
+#                     Fitted to the classes' own base health and basic-attack
+#                     damage against League's, so WoW's spells keep their weight.
+#                     Every League ratio (hits and seconds to kill) is the same at
+#                     any scale. .reload config applies a change at once.
+#        Default:     0.365 - (League level 1)
+#                     0.0352 - (0.96 at League level 18)
+
+Centurion.Rift.Scale.Base = 0.365
+Centurion.Rift.Scale.PerLevel = 0.0352

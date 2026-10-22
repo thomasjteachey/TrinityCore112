@@ -51,6 +51,7 @@
 #include "WorldSession.h"
 #include "Item.h"
 #include "Mail.h"
+#include "Map.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
@@ -3711,4 +3712,13 @@ bool Battleground::CheckAchievementCriteriaMeet(uint32 criteriaId, Player const*
 uint8 Battleground::GetUniqueBracketId() const
 {
     return GetMinLevel() / 10;
+}
+
+Battleground const* GetLeagueCombatBattleground(WorldObject const* object)
+{
+    Map* map = object ? object->FindMap() : nullptr;
+    if (!map || !map->IsBattleground())
+        return nullptr;
+    Battleground const* bg = static_cast<BattlegroundMap*>(map)->GetBG();
+    return bg && bg->UsesLeagueCombat() ? bg : nullptr;
 }

@@ -1004,6 +1004,53 @@ namespace
             !unit->GetCharmerOrOwnerPlayerOrPlayerItself();
     }
 
+    // League's combat (Battleground::UsesLeagueCombat) keeps a champion's dodge,
+    // parry and block above the base every character has - its class's base
+    // dodge and its base agility's, the flat 5% parry and 5% block, its defense
+    // skill's - so agility from Mark of the Wild or talents, Evasion, Deterrence,
+    // Shield Block and the like all count, and two equal champions still trade
+    // at League's pace. Nothing but a champion dodges, parries or blocks there.
+    float LeagueDefenseBonus(Player const* champion)
+    {
+        return (int32(champion->GetSkillValue(SKILL_DEFENSE)) - int32(champion->GetMaxSkillValueForLevel())) * 0.04f;
+    }
+
+    float LeagueDodge(Player const* champion)
+    {
+        // Player::GetDodgeFromAgility is linear in agility here: the base agility's share is exact
+        float diminishing = 0.0f, nondiminishing = 0.0f;
+        champion->GetDodgeFromAgility(diminishing, nondiminishing);
+        float const agility = champion->GetStat(STAT_AGILITY);
+        float base = agility > 0.0f ? nondiminishing * champion->GetCreateStat(STAT_AGILITY) / agility : 0.0f;
+        if (!std::isfinite(base))
+            base = 0.0f;
+        return std::max(0.0f, champion->GetFloatValue(PLAYER_DODGE_PERCENTAGE) - base - LeagueDefenseBonus(champion));
+    }
+
+    float LeagueParry(Player const* champion)
+    {
+        float const parry = champion->GetFloatValue(PLAYER_PARRY_PERCENTAGE);
+        return parry > 0.0f ? std::max(0.0f, parry - 5.0f - LeagueDefenseBonus(champion)) : 0.0f;
+    }
+
+    float LeagueBlock(Player const* champion)
+    {
+        float const block = champion->GetFloatValue(PLAYER_BLOCK_PERCENTAGE);
+        return block > 0.0f ? std::max(0.0f, block - 5.0f - LeagueDefenseBonus(champion)) : 0.0f;
+    }
+
+    // Whether the bot-versus-wildlife scaling below applies where `unit` stands.
+    // A battleground whose creatures are combatants (Battleground::
+    // UsesBotCreatureScaling) keeps stock damage between them and bots.
+    bool UsesBotCreatureScaling(Unit const* unit)
+    {
+        Map* map = unit ? unit->FindMap() : nullptr;
+        if (!map || !map->IsBattlegroundOrArena())
+            return true;
+        Battleground const* bg = static_cast<BattlegroundMap*>(map)->GetBG();
+        return !bg || bg->UsesBotCreatureScaling();
+    }
+
     // How many ordinary creatures are on this bot, counting the ones chewing on
     // its pet - which matters most for the class it matters most to, since a
     // hunter whose pet is holding everything would otherwise read as having
@@ -1205,7 +1252,7 @@ namespace
             return 100;
 
         Player const* bot = ManagedPlayerbotBehind(attacker);
-        if (!bot)
+        if (!bot || !UsesBotCreatureScaling(victim))
             return 100;
 
         uint32 bonus = 0;
@@ -1254,7 +1301,8 @@ namespace
             return false;
 
         // Wildlife on one side, a bot or something a bot owns on the other.
-        return IsOwnerlessCreature(attacker) && ManagedPlayerbotBehind(victim) != nullptr;
+        return IsOwnerlessCreature(attacker) && ManagedPlayerbotBehind(victim) != nullptr &&
+            UsesBotCreatureScaling(victim);
     }
 }
 
@@ -1833,6 +1881,8 @@ void Unit::DealSpellDamage(SpellNonMeleeDamage const* damageInfo, bool durabilit
     // Call default DealDamage
     CleanDamage cleanDamage(damageInfo->cleanDamage, damageInfo->absorb, BASE_ATTACK, MELEE_HIT_NORMAL);
     Unit::DealDamage(this, victim, damageInfo->damage, &cleanDamage, SPELL_DIRECT_DAMAGE, SpellSchoolMask(damageInfo->schoolMask), spellProto, durabilityLoss);
+    // League's life steal on a ranged basic attack (Summoner's Rift)
+    RiftProgression::OnBasicAttackDamage(this, victim, damageInfo->damage, spellProto);
 }
 
 /// @todo for melee need create structure as in
@@ -2219,6 +2269,8 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
         // Call default DealDamage
         CleanDamage cleanDamage(damageInfo->CleanDamage, damageInfo->Damages[i].Absorb, damageInfo->AttackType, damageInfo->HitOutCome);
         Unit::DealDamage(this, victim, damageInfo->Damages[i].Damage, &cleanDamage, DIRECT_DAMAGE, SpellSchoolMask(damageInfo->Damages[i].DamageSchoolMask), nullptr, durabilityLoss);
+        // League's life steal on a swing (Summoner's Rift)
+        RiftProgression::OnBasicAttackDamage(this, victim, damageInfo->Damages[i].Damage, nullptr);
     }
 
     if (GetTypeId() == TYPEID_PLAYER)
@@ -2357,6 +2409,7 @@ void Unit::HandleEmoteCommand(Emote emoteId)
 /*static*/ uint32 Unit::CalcArmorReducedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType /*= MAX_ATTACK*/, uint8 attackerLevel /*= 0*/)
 {
     float armor = float(victim->GetArmor());
+    Battleground const* league = GetLeagueCombatBattleground(victim);
 
     // Ignore enemy armor by SPELL_AURA_MOD_TARGET_RESISTANCE aura
     if (attacker)
@@ -2432,23 +2485,31 @@ void Unit::HandleEmoteCommand(Emote emoteId)
             // no more than 100%
             RoundToInterval(arpPct, 0.f, 100.f);
 
-            float maxArmorPen = 0.f;
-            if (victim->GetLevel() < 60)
-                maxArmorPen = float(400 + 85 * victim->GetLevel());
+            // League's armor penetration: that share of the armor, uncapped.
+            if (league)
+                armor -= CalculatePct(armor, arpPct);
             else
-                maxArmorPen = 400 + 85 * victim->GetLevel() + 4.5f * 85 * (victim->GetLevel() - 59);
+            {
+                float maxArmorPen = 0.f;
+                if (victim->GetLevel() < 60)
+                    maxArmorPen = float(400 + 85 * victim->GetLevel());
+                else
+                    maxArmorPen = 400 + 85 * victim->GetLevel() + 4.5f * 85 * (victim->GetLevel() - 59);
 
-            // Cap armor penetration to this number
-            maxArmorPen = std::min((armor + maxArmorPen) / 3.f, armor);
-            // Figure out how much armor do we ignore
-            armor -= CalculatePct(maxArmorPen, arpPct);
+                // Cap armor penetration to this number
+                maxArmorPen = std::min((armor + maxArmorPen) / 3.f, armor);
+                // Figure out how much armor do we ignore
+                armor -= CalculatePct(maxArmorPen, arpPct);
+            }
         }
     }
 
     if (armor < 0.0f)
         armor = 0.0f;
 
-    float levelModifier = attacker ? attacker->GetLevel() : attackerLevel;
+    // League's combat reads every attacker at the match's level, the one its
+    // armor was converted at (RiftLeague::ToWowArmor).
+    float levelModifier = league ? float(league->GetLeagueCombatLevel()) : attacker ? attacker->GetLevel() : attackerLevel;
     if (levelModifier > 59.f)
         levelModifier = levelModifier + 4.5f * (levelModifier - 59.f);
 
@@ -2485,6 +2546,9 @@ void Unit::HandleEmoteCommand(Emote emoteId)
     {
         damageResisted = damage * 0.75f;
     }
+    // League's combat: magic resistance takes its average share every time.
+    else if (GetLeagueCombatBattleground(victim))
+        damageResisted = damage * averageResist;
     else
     {
         constexpr std::array<float, 4> quartiles = { 0.0f, 0.25f, 0.50f, 0.75f };
@@ -3043,6 +3107,11 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     if (victim->GetTypeId() == TYPEID_UNIT && victim->ToCreature()->IsInEvadeMode())
         return MELEE_HIT_EVADE;
 
+    // League's combat: WoW's table with League's chances (MeleeSpellMissChance and
+    // the dodge, parry and block getters), no glancing or crushing blows, and only
+    // a champion or its pet crits.
+    bool const league = GetLeagueCombatBattleground(this) != nullptr;
+
     int32 const attackerMaxSkillValueForLevel = GetMaxSkillValueForLevel(victim);
     int32 const victimMaxSkillValueForLevel = victim->GetMaxSkillValueForLevel(this);
 
@@ -3056,7 +3125,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     die.set(UNIT_COMBAT_DIE_MISS, miss_chance);
 
     // Critical hit chance
-    int32 crit_chance = int32(GetUnitCriticalChanceAgainst(attType, victim) * 100.0f);
+    int32 crit_chance = league && !IsControlledByPlayer() ? 0 : int32(GetUnitCriticalChanceAgainst(attType, victim) * 100.0f);
 
     int32 dodge_chance = int32(GetUnitDodgeChance(attType, victim) * 100.0f);
     int32 block_chance = int32(GetUnitBlockChance(attType, victim) * 100.0f);
@@ -3112,7 +3181,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
 
     // 4. GLANCING
     // Max 40% chance to score a glancing blow against mobs of the same or higher level (only players and pets, not for ranged weapons).
-    if ((GetTypeId() == TYPEID_PLAYER || IsPet()) &&
+    if (!league && (GetTypeId() == TYPEID_PLAYER || IsPet()) &&
         victim->GetTypeId() != TYPEID_PLAYER && !victim->IsPet() &&
         GetLevel() <= victim->GetLevelForTarget(this))
     {
@@ -3145,7 +3214,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
 
     // 7. CRUSHING
     // mobs can score crushing blows if they're 4 or more levels above victim
-    if (GetLevelForTarget(victim) >= victim->GetLevelForTarget(this) + 4 &&
+    if (!league && GetLevelForTarget(victim) >= victim->GetLevelForTarget(this) + 4 &&
         // can be from by creature (if can) or from controlled player that considered as creature
         !IsControlledByPlayer() &&
         !(GetTypeId() == TYPEID_UNIT && ToCreature()->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_NO_CRUSHING_BLOWS))
@@ -3510,7 +3579,14 @@ float Unit::GetUnitDodgeChance(WeaponAttackType attType, Unit const* victim) con
 
     float chance = 0.0f;
     float skillBonus = 0.0f;
-    if (victim->GetTypeId() == TYPEID_PLAYER)
+    if (GetLeagueCombatBattleground(this))
+    {
+        Player const* champion = victim->ToPlayer();
+        if (!champion)
+            return 0.0f;
+        chance = LeagueDodge(champion);
+    }
+    else if (victim->GetTypeId() == TYPEID_PLAYER)
     {
         chance = victim->GetFloatValue(PLAYER_DODGE_PERCENTAGE);
         skillBonus = 0.04f * skillDiff;
@@ -3555,7 +3631,14 @@ float Unit::GetUnitParryChance(WeaponAttackType attType, Unit const* victim) con
 
     float chance = 0.0f;
     float skillBonus = 0.0f;
-    if (Player const* playerVictim = victim->ToPlayer())
+    if (GetLeagueCombatBattleground(this))
+    {
+        Player const* champion = victim->ToPlayer();
+        if (!champion || !champion->CanParry())
+            return 0.0f;
+        chance = LeagueParry(champion);
+    }
+    else if (Player const* playerVictim = victim->ToPlayer())
     {
         if (playerVictim->CanParry())
         {
@@ -3613,6 +3696,12 @@ float Unit::GetUnitBlockChance(WeaponAttackType attType, Unit const* victim) con
 
     float chance = 0.0f;
     float skillBonus = 0.0f;
+    if (GetLeagueCombatBattleground(this))
+    {
+        Player const* champion = victim->ToPlayer();
+        Item* shield = champion && champion->CanBlock() ? champion->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND) : nullptr;
+        return shield && !shield->IsBroken() && shield->GetTemplate()->Block ? LeagueBlock(champion) : 0.0f;
+    }
     if (Player const* playerVictim = victim->ToPlayer())
     {
         if (playerVictim->CanBlock())
@@ -8700,6 +8789,10 @@ float Unit::SpellCritChanceDone(SpellInfo const* spellInfo, SpellSchoolMask scho
 
     // not critting spell
     if (!isPeriodic && !spellInfo->HasAttribute(SPELL_ATTR0_CU_CAN_CRIT))
+        return 0.0f;
+
+    // League's combat: turrets, minions and monsters never crit.
+    if (!IsControlledByPlayer() && GetLeagueCombatBattleground(this))
         return 0.0f;
 
     bool addMeleeCritFromPrimalWisdom = false;
@@ -14399,6 +14492,18 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, i
     SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId) : nullptr;
     if (spellInfo && spellInfo->HasAttribute(SPELL_ATTR7_CANT_MISS))
         return 0.f;
+
+    // League's combat: no base miss; what the victim's auras take off the
+    // attacker's chance to hit it (Evasion's ranged half), and a hit-chance
+    // debuff on the attacker, still make it miss.
+    if (GetLeagueCombatBattleground(this))
+    {
+        float hit = victim->GetTotalAuraModifier(attType == RANGED_ATTACK ? SPELL_AURA_MOD_ATTACKER_RANGED_HIT_CHANCE : SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE);
+        float const own = GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE);
+        if (own < 0.0f)
+            hit += own;
+        return std::max(0.0f, -hit);
+    }
 
     //calculate miss chance
     float missChance = victim->GetUnitMissChance();
