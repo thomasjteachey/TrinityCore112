@@ -355,7 +355,11 @@ struct npc_rift_dragon : public ScriptedAI
         if (!rift || !victim)
             return;
         _attackTimer = _attackTimer > diff ? _attackTimer - diff : 0;
-        if (me->GetExactDist2d(victim) > rift->DragonRange())
+        // Edge to edge, as League measures attack range and as MoveChase stops:
+        // centre to centre, the chase parked the drake (combat reach 9 yd) about
+        // 19 yd from its target while the shot waited for 10.5, so it never fired.
+        float const gap = me->GetExactDist2d(victim) - me->GetCombatReach() - victim->GetCombatReach();
+        if (gap > rift->DragonRange())
         {
             if (me->GetMotionMaster()->GetCurrentMovementGeneratorType() != CHASE_MOTION_TYPE)
                 me->GetMotionMaster()->MoveChase(victim, rift->DragonRange() * 0.8f);

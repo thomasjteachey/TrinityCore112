@@ -155,7 +155,9 @@ struct SrfMonster
     uint8 camp;
     uint32 entry;
     float x, y, z;   // League units
-    float o;         // WoW facing
+    float o;         // WoW facing: the MapLocator's local +X (its matrix's first row) - League's
+                     // forward for these; the third row put every monster 90 deg off (the owner
+                     // measured the Dragon at 5.503074, 2026-10-22)
     uint32 gold;     // League gold, to the killer
     float xp;        // League experience, shared like a minion's
 };
@@ -164,41 +166,41 @@ struct SrfMonster
 // DragonEelCamp, BaronEelCamp, Dragon, Baron1), in BgCreatures slot order.
 SrfMonster constexpr SRF_MONSTERS[BG_SRF_JUNGLE_MONSTERS] =
 {
-    {  0, BG_SRF_ENTRY_BLUE_SENTINEL,      3821.5f,  51.9f,  7901.1f, 5.4978f, 100, 120.0f },
-    {  1, BG_SRF_ENTRY_GREATER_MURK_WOLF,  3780.6f,  45.0f,  6444.0f, 3.9270f,  55,  55.0f },
-    {  1, BG_SRF_ENTRY_MURK_WOLF,          3980.6f,  45.0f,  6444.0f, 3.9270f,  16,  16.0f },
-    {  1, BG_SRF_ENTRY_MURK_WOLF,          3730.6f,  45.0f,  6594.0f, 3.9270f,  16,  16.0f },
-    {  2, BG_SRF_ENTRY_CRIMSON_RAPTOR,     6706.7f,  50.3f,  5521.0f, 1.5708f,  35,  30.0f },
-    {  2, BG_SRF_ENTRY_RAPTOR,             6929.6f,  50.3f,  5647.9f, 3.1416f,   9,   9.0f },
-    {  2, BG_SRF_ENTRY_RAPTOR,             7060.5f,  50.3f,  5499.3f, 4.7124f,   9,   9.0f },
-    {  2, BG_SRF_ENTRY_RAPTOR,             6962.7f,  51.1f,  5354.4f, 1.8200f,   9,   9.0f },
-    {  2, BG_SRF_ENTRY_RAPTOR,             6852.2f,  48.1f,  5227.1f, 2.3562f,   9,   9.0f },
-    {  2, BG_SRF_ENTRY_RAPTOR,             7106.2f,  48.1f,  5266.1f, 3.9270f,   9,   9.0f },
-    {  3, BG_SRF_ENTRY_RED_BRAMBLEBACK,    7765.2f,  50.4f,  4020.2f, 3.9270f, 100, 120.0f },
-    {  4, BG_SRF_ENTRY_ANCIENT_KRUG,       8482.5f,  50.7f,  2705.9f, 3.1416f,  60,  60.0f },
-    {  4, BG_SRF_ENTRY_KRUG,               8275.5f,  50.7f,  2688.9f, 3.1416f,  40,  40.0f },
-    {  5, BG_SRF_ENTRY_GROMP,              2110.6f,  54.0f,  8451.0f, 1.1100f,  80,  90.0f },
-    {  6, BG_SRF_ENTRY_BLUE_SENTINEL,     11031.7f,  51.7f,  6990.8f, 2.3562f, 100, 120.0f },
-    {  7, BG_SRF_ENTRY_GREATER_MURK_WOLF, 11008.2f,  51.2f,  8387.4f, 0.7854f,  55,  55.0f },
-    {  7, BG_SRF_ENTRY_MURK_WOLF,         11058.2f,  51.2f,  8217.4f, 0.7854f,  16,  16.0f },
-    {  7, BG_SRF_ENTRY_MURK_WOLF,         10808.2f,  51.2f,  8387.4f, 0.7854f,  16,  16.0f },
-    {  8, BG_SRF_ENTRY_CRIMSON_RAPTOR,     7987.0f,  48.8f,  9471.4f, 4.7124f,  35,  30.0f },
-    {  8, BG_SRF_ENTRY_RAPTOR,             7887.0f,  48.8f,  9312.4f, 0.0000f,   9,   9.0f },
-    {  8, BG_SRF_ENTRY_RAPTOR,             7757.0f,  48.8f,  9451.4f, 1.5708f,   9,   9.0f },
-    {  8, BG_SRF_ENTRY_RAPTOR,             7854.4f,  52.2f,  9610.5f, 4.9532f,   9,   9.0f },
-    {  8, BG_SRF_ENTRY_RAPTOR,             7997.2f,  52.1f,  9772.1f, 5.4978f,   9,   9.0f },
-    {  8, BG_SRF_ENTRY_RAPTOR,             7724.2f,  52.1f,  9724.1f, 0.7854f,   9,   9.0f },
-    {  9, BG_SRF_ENTRY_RED_BRAMBLEBACK,    7101.9f,  51.3f, 10900.5f, 0.7854f, 100, 120.0f },
-    { 10, BG_SRF_ENTRY_ANCIENT_KRUG,       6317.1f,  47.6f, 12146.5f, 0.0000f,  60,  60.0f },
-    { 10, BG_SRF_ENTRY_KRUG,               6547.1f,  47.6f, 12156.5f, 0.0000f,  40,  40.0f },
-    { 11, BG_SRF_ENTRY_GROMP,             12703.6f,  54.0f,  6444.0f, 4.2500f,  80,  90.0f },
-    { 12, BG_SRF_ENTRY_RIFT_SCUTTLER,     10500.0f, -62.0f,  5170.0f, 5.4978f,  55, 100.0f },
-    { 13, BG_SRF_ENTRY_RIFT_SCUTTLER,      4400.0f, -62.0f,  9600.0f, 2.3562f,  55, 100.0f },
+    {  0, BG_SRF_ENTRY_BLUE_SENTINEL,      3821.5f,  51.9f,  7901.1f, 3.9270f, 100, 120.0f },
+    {  1, BG_SRF_ENTRY_GREATER_MURK_WOLF,  3780.6f,  45.0f,  6444.0f, 2.3562f,  55,  55.0f },
+    {  1, BG_SRF_ENTRY_MURK_WOLF,          3980.6f,  45.0f,  6444.0f, 2.3562f,  16,  16.0f },
+    {  1, BG_SRF_ENTRY_MURK_WOLF,          3730.6f,  45.0f,  6594.0f, 2.3562f,  16,  16.0f },
+    {  2, BG_SRF_ENTRY_CRIMSON_RAPTOR,     6706.7f,  50.3f,  5521.0f, 0.0000f,  35,  30.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             6929.6f,  50.3f,  5647.9f, 1.5708f,   9,   9.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             7060.5f,  50.3f,  5499.3f, 3.1416f,   9,   9.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             6962.7f,  51.1f,  5354.4f, 0.2492f,   9,   9.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             6852.2f,  48.1f,  5227.1f, 0.7854f,   9,   9.0f },
+    {  2, BG_SRF_ENTRY_RAPTOR,             7106.2f,  48.1f,  5266.1f, 2.3562f,   9,   9.0f },
+    {  3, BG_SRF_ENTRY_RED_BRAMBLEBACK,    7765.2f,  50.4f,  4020.2f, 2.3562f, 100, 120.0f },
+    {  4, BG_SRF_ENTRY_ANCIENT_KRUG,       8482.5f,  50.7f,  2705.9f, 1.5708f,  60,  60.0f },
+    {  4, BG_SRF_ENTRY_KRUG,               8275.5f,  50.7f,  2688.9f, 1.5708f,  40,  40.0f },
+    {  5, BG_SRF_ENTRY_GROMP,              2110.6f,  54.0f,  8451.0f, 5.8224f,  80,  90.0f },
+    {  6, BG_SRF_ENTRY_BLUE_SENTINEL,     11031.7f,  51.7f,  6990.8f, 0.7854f, 100, 120.0f },
+    {  7, BG_SRF_ENTRY_GREATER_MURK_WOLF, 11008.2f,  51.2f,  8387.4f, 5.4978f,  55,  55.0f },
+    {  7, BG_SRF_ENTRY_MURK_WOLF,         11058.2f,  51.2f,  8217.4f, 5.4978f,  16,  16.0f },
+    {  7, BG_SRF_ENTRY_MURK_WOLF,         10808.2f,  51.2f,  8387.4f, 5.4978f,  16,  16.0f },
+    {  8, BG_SRF_ENTRY_CRIMSON_RAPTOR,     7987.0f,  48.8f,  9471.4f, 3.1416f,  35,  30.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7887.0f,  48.8f,  9312.4f, 4.7124f,   9,   9.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7757.0f,  48.8f,  9451.4f, 0.0000f,   9,   9.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7854.4f,  52.2f,  9610.5f, 3.3824f,   9,   9.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7997.2f,  52.1f,  9772.1f, 3.9270f,   9,   9.0f },
+    {  8, BG_SRF_ENTRY_RAPTOR,             7724.2f,  52.1f,  9724.1f, 5.4978f,   9,   9.0f },
+    {  9, BG_SRF_ENTRY_RED_BRAMBLEBACK,    7101.9f,  51.3f, 10900.5f, 5.4978f, 100, 120.0f },
+    { 10, BG_SRF_ENTRY_ANCIENT_KRUG,       6317.1f,  47.6f, 12146.5f, 4.7124f,  60,  60.0f },
+    { 10, BG_SRF_ENTRY_KRUG,               6547.1f,  47.6f, 12156.5f, 4.7124f,  40,  40.0f },
+    { 11, BG_SRF_ENTRY_GROMP,             12703.6f,  54.0f,  6444.0f, 2.6792f,  80,  90.0f },
+    { 12, BG_SRF_ENTRY_RIFT_SCUTTLER,     10500.0f, -62.0f,  5170.0f, 3.9270f,  55, 100.0f },
+    { 13, BG_SRF_ENTRY_RIFT_SCUTTLER,      4400.0f, -62.0f,  9600.0f, 0.7854f,  55, 100.0f },
     // Season 3: the Dragon 190 gold to every player of the team and 25 more to
     // its killer, 400 experience shared; Baron 300 gold and 900 experience to
     // every player of the team, nothing more to its killer
-    { 14, BG_SRF_ENTRY_DRAGON,             9866.1f, -69.8f,  4414.0f, 0.7854f,  25, 400.0f },
-    { 15, BG_SRF_ENTRY_BARON_NASHOR,       5007.1f,  24.4f, 10471.4f, 3.9270f,   0, 900.0f }
+    { 14, BG_SRF_ENTRY_DRAGON,             9866.1f, -69.8f,  4414.0f, 5.503074f,  25, 400.0f },
+    { 15, BG_SRF_ENTRY_BARON_NASHOR,       5007.1f,  24.4f, 10471.4f, 2.3562f,   0, 900.0f }
 };
 
 // League Season 3's camp buffs (the mid-2013 wiki): Crest of the Ancient Golem
