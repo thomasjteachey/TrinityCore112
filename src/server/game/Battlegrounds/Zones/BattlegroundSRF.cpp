@@ -22,6 +22,7 @@
 #include "SpellMgr.h"
 #include "TemporarySummon.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
 
 #include <algorithm>
 #include <cmath>
@@ -567,15 +568,19 @@ void BattlegroundSRF::AddPlayer(Player* player)
     }
 
     // Level 1, a fixed purse, spells and talents to earn back; a player coming
-    // back to the match it left picks up where it was.
-    RiftProgression::Enter(player);
+    // back to the match it left picks up where it was. A relog adds the player
+    // from inside Player::LoadFromDB, before its spells, talents and gear have
+    // loaded: that one is RiftProgression::OnLogin's, once the character is whole
+    // (it was dressed in a field kit into slots its own gear then loaded into, and
+    // built a match from an empty spellbook - Forcskin, 2026-10-22).
+    if (!player->GetSession() || !player->GetSession()->PlayerLoading())
+        RiftProgression::Enter(player);
 }
 
 void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
 {
     _brush.erase(guid);
     _bots.erase(guid);
-    // Gone without a Player (logged out) is OnLogin's to restore.
     if (player)
     {
         player->RemoveAurasDueToSpell(SRF_SPELL_BRUSH);
@@ -585,8 +590,17 @@ void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*tea
             player->RemoveByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_AURA_VISION, PLAYER_FIELD_BYTE2_STEALTH);
             player->RemoveVisFlag(UNIT_VIS_FLAGS_CREEP);
         }
-        RiftProgression::Leave(player);
     }
+    // No RiftProgression::Leave here. A real leave runs it from
+    // Battleground::RemovePlayerAtLeave, before this. The other caller is
+    // Battleground::EventPlayerLoggedOut - a logout, a crash - which hands a live
+    // Player while the character stays in the match: leaving here gave the real
+    // level, talents and money back and dropped the match, so a relog moments
+    // later was dressed as a NEW champion, during LoadFromDB, before its spells
+    // and talents had loaded - level 10, nothing to cast, and the stash written
+    // over with an empty build (Forcskin, 2026-10-22). The match now stays as it
+    // was: a relog picks it up (Enter's "back in the match" path), and one that
+    // comes back after the match let it go is OnLogin's to restore.
 }
 
 void BattlegroundSRF::Reset()

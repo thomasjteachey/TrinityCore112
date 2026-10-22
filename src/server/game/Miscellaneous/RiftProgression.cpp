@@ -1706,11 +1706,12 @@ bool IsInMatch(Player const* player)
     return player && Find(player);
 }
 
-// The bots' side (further down, before Maintain).
+// The bots' side (further down, before Maintain), and the stash restore (with OnLogin).
 namespace
 {
     void BotSpendPicks(Player* player, State& state);
     void BotSyncSpellbook(Player* player, State const& state);
+    bool RestoreFromStash(Player* player);
 }
 
 void Enter(Player* player)
@@ -1743,6 +1744,15 @@ void Enter(Player* player)
         PublishBars(player, *existing);
         SendState(player, *existing);
         return;
+    }
+
+    // A stash with no match state: the real character is in that row, not in this
+    // Player (its level, talents and bars are the match's). Back from the row first -
+    // writing this Player into the stash overwrote Forcskin's build with an empty one.
+    if (Stashed.count(player->GetGUID().GetCounter()))
+    {
+        TC_LOG_ERROR("bg.battleground", "Rift: {} enters with a stash but no match state; restoring the stash first.", player->GetName());
+        RestoreFromStash(player);
     }
 
     State& state = States[player->GetGUID().GetCounter()];
@@ -1875,19 +1885,13 @@ void TakeComponents(Player* player, std::vector<uint32> const& consumed)
         player->DestroyItemCount(entry, 1, true, false);
 }
 
-void OnLogin(Player* player)
+namespace
 {
-    if (!player || !StoragePresent)
-        return;
-
+    // The real character back from its `custom_rift_stash` row - level, experience,
+    // money, talents, bars - and the match's things off it. The row is the only
+    // copy of the real build while a match holds the character.
+    bool RestoreFromStash(Player* player)
     {
-        std::lock_guard<std::recursive_mutex> lock(StateMutex);
-        if (!Stashed.count(player->GetGUID().GetCounter()))
-            return;
-        if (Find(player) && IsInRiftBattleground(player))
-            return;   // BattlegroundSRF::AddPlayer re-applies the rules on the way back in
-    }
-
     QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money, talents, actions FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
     {
         std::lock_guard<std::recursive_mutex> lock(StateMutex);
@@ -1895,7 +1899,7 @@ void OnLogin(Player* player)
         Stashed.erase(player->GetGUID().GetCounter());
     }
     if (!row)
-        return;
+        return false;
 
     // Before the tournament script's login hook hands the gear back: the real
     // level first, so the character can wear it again.
@@ -1916,7 +1920,37 @@ void OnLogin(Player* player)
     player->SendActionButtons(1);
     ForgetRecall(player);
     CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
-    TC_LOG_INFO("bg.battleground", "Rift: {} logged in outside the match it left; level {}, experience, money and talents restored.", player->GetName(), realLevel);
+    TC_LOG_INFO("bg.battleground", "Rift: {} restored from the stash of a match it left; level {}, experience, money, talents and bars back.", player->GetName(), realLevel);
+    return true;
+    }
+}
+
+void OnLogin(Player* player)
+{
+    if (!player || !StoragePresent)
+        return;
+
+    bool stashed = false, known = false;
+    bool const inRift = IsInRiftBattleground(player);
+    {
+        std::lock_guard<std::recursive_mutex> lock(StateMutex);
+        stashed = Stashed.count(player->GetGUID().GetCounter()) != 0;
+        known = Find(player) != nullptr;
+    }
+    // Back in the match it left: BattlegroundSRF::AddPlayer left the entry to this,
+    // now that the character has loaded whole.
+    if (stashed && known && inRift)
+    {
+        Enter(player);
+        return;
+    }
+    // A match left without Leave() - a crash, a restart, a logout the match let go.
+    if (stashed)
+        RestoreFromStash(player);
+    // Still in a running match whose state for it is gone: a new champion, from
+    // the real character just restored.
+    if (inRift)
+        Enter(player);
 }
 
 bool SuppressTalentReset(Player const* player)
