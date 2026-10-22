@@ -224,6 +224,9 @@ namespace
         // SetChampionCarriers last made it, and as the client was last sent it.
         std::string StatsLine;
         std::string SentStatsLine;
+        // A rogue's poison coats the match taught (SyncPoisons), as dependent
+        // spells - never written down - and taken back on the way out.
+        std::unordered_set<uint32> MatchPoisons;
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -1423,6 +1426,134 @@ namespace
         SyncClientSpellbook(player, state, false);
     }
 
+    // ------------------------------------------------------------- poisons
+    //
+    // A rogue's poisons (owner, 2026-10-22: "rogues need a way to apply poisons
+    // in summoner's rift", "make the rogues learn it for the same levels they
+    // learned it from the poison trainers", "they should learn the actual apply
+    // poison spells (11202 for example)"). The bags are shut in a match, so the
+    // vials a rogue carries cannot be used; the match teaches the coats the vials
+    // cast instead - the stock apply spells, item-targeted as ever (cast, then
+    // click a weapon on the Character pane) - at the levels the classic poison
+    // trainers taught each rank. Only the best rank of each poison is kept, and
+    // its buttons follow it. Learned dependent, so never written down: a crash
+    // mid-match leaves nothing behind.
+    struct PoisonRank
+    {
+        uint8 Level;
+        uint32 Spell;
+    };
+    std::vector<PoisonRank> const POISON_LADDERS[] =
+    {
+        { { 20, 8679 }, { 28, 8686 }, { 36, 8688 }, { 44, 11338 }, { 52, 11339 }, { 60, 11340 } },  // Instant Poison
+        { { 30, 2823 }, { 38, 2824 }, { 46, 11355 }, { 54, 11356 }, { 60, 25351 } },                // Deadly Poison
+        { { 20, 3408 }, { 50, 11202 } },                                                             // Crippling Poison
+        { { 24, 5761 }, { 38, 8693 }, { 52, 11399 } },                                               // Mind-numbing Poison
+        { { 32, 13219 }, { 40, 13225 }, { 48, 13226 }, { 56, 13227 } },                              // Wound Poison
+    };
+    size_t constexpr POISON_INSTANT = 0;
+    size_t constexpr POISON_DEADLY = 1;
+    uint32 constexpr POISON_COAT_MS = HOUR * IN_MILLISECONDS;    // Spell::EffectEnchantItemTmp's rogue hour
+
+    // The rank of a poison a level has reached; nullptr before its first.
+    PoisonRank const* BestPoison(std::vector<PoisonRank> const& ladder, uint8 level)
+    {
+        PoisonRank const* best = nullptr;
+        for (PoisonRank const& rank : ladder)
+            if (rank.Level <= level)
+                best = &rank;
+        return best;
+    }
+
+    // A bot has no Character pane to click: its weapons are coated for it, with
+    // what the coat spell itself would lay down.
+    void CoatBotWeapon(Player* player, uint8 slot, uint32 coatSpell)
+    {
+        uint32 enchant = 0;
+        if (SpellInfo const* info = sSpellMgr->GetSpellInfo(coatSpell))
+            for (SpellEffectInfo const& effect : info->GetEffects())
+                if (effect.Effect == SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY)
+                    enchant = uint32(effect.MiscValue);
+        Item* weapon = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!enchant || !weapon || weapon->GetTemplate()->Class != ITEM_CLASS_WEAPON
+            || weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT) == enchant)
+            return;
+        player->ApplyEnchantment(weapon, TEMP_ENCHANTMENT_SLOT, false);
+        weapon->SetEnchantment(TEMP_ENCHANTMENT_SLOT, enchant, POISON_COAT_MS, 0, player->GetGUID());
+        player->ApplyEnchantment(weapon, TEMP_ENCHANTMENT_SLOT, true);
+    }
+
+    // Each match level: the poisons and ranks the trainers taught by then. A
+    // new rank replaces the old one on its buttons. The old rank goes first:
+    // RemoveSpell takes the next ranks of a spell_ranks chain with it, and the
+    // new one is learned after. The client's "empty" for the old rank's buttons
+    // arrives after they are filled again, and KeepsButton refuses it.
+    void SyncPoisons(Player* player, State& state)
+    {
+        if (player->GetClass() != CLASS_ROGUE)
+            return;
+        if (!state.Persistent)
+        {
+            if (PoisonRank const* instant = BestPoison(POISON_LADDERS[POISON_INSTANT], state.MatchLevel))
+            {
+                PoisonRank const* deadly = BestPoison(POISON_LADDERS[POISON_DEADLY], state.MatchLevel);
+                CoatBotWeapon(player, EQUIPMENT_SLOT_MAINHAND, instant->Spell);
+                CoatBotWeapon(player, EQUIPMENT_SLOT_OFFHAND, deadly ? deadly->Spell : instant->Spell);
+            }
+            return;
+        }
+
+        std::string learned;
+        bool barsChanged = false;
+        for (std::vector<PoisonRank> const& ladder : POISON_LADDERS)
+        {
+            PoisonRank const* best = BestPoison(ladder, state.MatchLevel);
+            if (!best || player->HasSpell(best->Spell))
+                continue;
+            std::vector<uint8> buttons;
+            for (PoisonRank const& rank : ladder)
+            {
+                if (rank.Spell == best->Spell || !state.MatchPoisons.count(rank.Spell))
+                    continue;
+                for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+                    if (ActionButton const* ab = player->GetActionButton(button))
+                        if (ab->GetType() == ACTION_BUTTON_SPELL && ab->GetAction() == rank.Spell)
+                            buttons.push_back(button);
+                if (player->HasSpell(rank.Spell))
+                    player->RemoveSpell(rank.Spell, false, false);
+                state.MatchPoisons.erase(rank.Spell);
+            }
+            player->LearnSpell(best->Spell, true);
+            state.MatchPoisons.insert(best->Spell);
+            for (uint8 button : buttons)
+                barsChanged |= player->addActionButton(button, best->Spell, ACTION_BUTTON_SPELL) != nullptr;
+            if (SpellInfo const* info = sSpellMgr->GetSpellInfo(best->Spell); info && info->SpellName[LOCALE_enUS])
+                learned += (learned.empty() ? "" : ", ") + std::string(info->SpellName[LOCALE_enUS]);
+        }
+        if (barsChanged)
+            PublishBars(player, state);
+        if (!learned.empty() && player->GetSession())
+            ChatHandler(player->GetSession()).PSendSysMessage("Poisons learned: %s. Cast one, then click a weapon on your Character pane.", learned.c_str());
+    }
+
+    // The way out: the coats' buttons come off before the real bars go back, and
+    // the coats leave the spellbook after them (as the recall does).
+    void TakePoisonButtons(Player* player, State const& state)
+    {
+        for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+            if (ActionButton const* ab = player->GetActionButton(button))
+                if (ab->GetType() == ACTION_BUTTON_SPELL && state.MatchPoisons.count(ab->GetAction()))
+                    player->removeActionButton(button);
+    }
+
+    void ForgetPoisons(Player* player, State& state)
+    {
+        for (uint32 spell : state.MatchPoisons)
+            if (player->HasSpell(spell))
+                player->RemoveSpell(spell, false, false);
+        state.MatchPoisons.clear();
+    }
+
     // An addon whisper from the character to itself, as Mok'gora's are: the
     // client hands CENTURION_Rift its own name as the sender.
     void SendLine(Player* player, std::string const& line)
@@ -1494,6 +1625,7 @@ namespace
         player->SetHealth(std::min(std::max<uint32>(health, 1), player->GetMaxHealth()));
         if (player->GetMaxPower(POWER_MANA))
             player->SetPower(POWER_MANA, std::min<uint32>(mana, player->GetMaxPower(POWER_MANA)));
+        SyncPoisons(player, state);
         ShowProgress(player, state);
         SendState(player, state);
         if (state.PendingPicks && !Offers(state).empty())
@@ -1613,6 +1745,10 @@ void Enter(Player* player)
                 existing->ClientExtra.insert(spell);
         }
         PublishBars(player, *existing);
+        // The coats were learned dependent, so a relog lost them: taught again.
+        for (auto itr = existing->MatchPoisons.begin(); itr != existing->MatchPoisons.end();)
+            itr = player->HasSpell(*itr) ? std::next(itr) : existing->MatchPoisons.erase(itr);
+        SyncPoisons(player, *existing);
         SendState(player, *existing);
         return;
     }
@@ -1674,6 +1810,7 @@ void Enter(Player* player)
         player->LearnSpell(SPELL_RIFT_RECALL, false);
     PlaceUnlockedSpell(player, state, 0, SPELL_RIFT_RECALL);
     PublishBars(player, state);
+    SyncPoisons(player, state);
     SyncItemsFor(player, state);
     player->SetFullHealth();
     player->SetFullPower(player->GetPowerType());
@@ -1705,6 +1842,7 @@ void Leave(Player* player)
         player->RemoveAurasDueToSpell(spell);
     TakeShopItems(player);
     TakeRecallButtons(player);
+    TakePoisonButtons(player, state);
     TakeNoAmmo(player);
     player->GiveLevel(state.RealLevel, true);
     player->SetUInt32Value(PLAYER_XP, state.RealXp);
@@ -1717,6 +1855,7 @@ void Leave(Player* player)
     player->SendActionButtons(1);
     ResetClientSpellbook(player, state, false);
     ForgetRecall(player);
+    ForgetPoisons(player, state);
 
     if (state.Persistent)
         CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
@@ -2512,6 +2651,7 @@ void OnLevelChanged(Player* player)
         if (player->GetMaxPower(POWER_MANA) > 0 && leagueMana > 0.0f)
             player->ModifyPower(POWER_MANA, std::max<int32>(1, Round(float(player->GetMaxPower(POWER_MANA)) * 200.0f / leagueMana)));
     }
+    SyncPoisons(player, *state);
     ShowProgress(player, *state);
     SendState(player, *state);
     if (state->PendingPicks)

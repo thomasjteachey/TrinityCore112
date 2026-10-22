@@ -1545,6 +1545,17 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
             continue;
         if (!kit && !(worn && worn->GetTemplate()->InventoryType == INVTYPE_HOLDABLE))
             continue;   // nothing for this slot: what is on stays on (a held piece from before the pool lost them comes off)
+        // A coat on the old weapon - a rogue's poison - goes onto the new one with
+        // the time it had left (RemoveEnchantmentDurations writes that time back
+        // to the item first). Every five match levels took it off before.
+        uint32 coat = 0, coatLeft = 0, coatCharges = 0;
+        if (worn && worn->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+        {
+            player->RemoveEnchantmentDurations(worn);
+            coat = worn->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+            coatLeft = worn->GetEnchantmentDuration(TEMP_ENCHANTMENT_SLOT);
+            coatCharges = worn->GetEnchantmentCharges(TEMP_ENCHANTMENT_SLOT);
+        }
         if (worn)
         {
             if (!transient)
@@ -1570,6 +1581,11 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
         if (!item)
             continue;
         ApplyStatsIfDead(player, item);
+        if (coat && coatLeft && item->GetTemplate()->Class == ITEM_CLASS_WEAPON)
+        {
+            item->SetEnchantment(TEMP_ENCHANTMENT_SLOT, coat, coatLeft, coatCharges);
+            player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, true);
+        }
         if (!transient)
             InsertRow(trans, guid, LOADOUT_ROW_SUBSTITUTE, item->GetGUID().GetCounter(), PackPosition(item->GetBagSlot(), item->GetSlot()));
         if (kit != oldEntry)
