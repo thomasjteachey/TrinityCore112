@@ -2851,8 +2851,13 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
         if (hasAura)
             resist_chance += victim->GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_DEBUFF_RESISTANCE, static_cast<int32>(spellInfo->Dispel)) * 100;
 
-        // resistance chance for binary spells, equals to average damage reduction of non-binary spell
-        if (spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL) && (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_MAGIC))
+        // resistance chance for binary spells, equals to average damage reduction of non-binary spell.
+        // Not under League's rules (Summoner's Rift): there magic resist only ever reduces magic
+        // damage and never makes a spell miss, and a champion's League MR - a third of the damage
+        // off by late game - had become a third of every Polymorph and Fear resisted outright
+        // (owner, 2026-10-22).
+        if (spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL) && (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_MAGIC)
+            && !GetLeagueCombatBattleground(victim))
             resist_chance += int32(Unit::CalculateAverageResistReduction(this, spellInfo->GetSchoolMask(), victim, spellInfo) * 10000.f);
     }
 
