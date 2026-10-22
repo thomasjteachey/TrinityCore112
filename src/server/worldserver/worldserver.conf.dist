@@ -2978,7 +2978,7 @@ Centurion.Battleground.ArenaExperienceMultiplier = 0.4
 #    Centurion.Battleground.HourlyHonor.Enable
 #        Description: Even out honor per hour across every kind of battleground and
 #                     arena match. A kind is the battleground played (for an arena,
-#                     the format queued: All Arenas, Solo Shuffle) by team size and
+#                     the format queued: All Arenas, Buffle Shuffle) by team size and
 #                     level bracket. Paid matches with a real player in them are
 #                     recorded in characters.centurion_pvp_match_duration whether or
 #                     not this is on: their length and the median honor winners and
@@ -3072,7 +3072,7 @@ Centurion.Battleground.Spoils.MinPresencePercent = 50
 
 #
 #    Centurion.SoloShuffle.BalanceHealers
-#        Description: Whether Solo Shuffle cares about roles.
+#        Description: Whether Buffle Shuffle cares about roles.
 #                     1 - a match starts at once only when two healers (and the
 #                         others to fill it) are queued, anyone else waiting up to a
 #                         minute for them, and the two healers never share a team -

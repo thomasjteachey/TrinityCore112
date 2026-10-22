@@ -1257,7 +1257,7 @@ void BattlegroundQueue::OfferPreparationSeats(BattlegroundTypeId bgTypeId, Battl
     // of them is moved to the other side's list. That includes the "Arena bot
     // matches" box: a group is offered a clone's seat only when every real
     // member has it ticked (re-checked at Enter Battle, since it can change).
-    // A Solo Shuffle party, queued as one entry per member, is taken the same
+    // A Buffle Shuffle party, queued as one entry per member, is taken the same
     // way - all of it or none, so one member who has not waited the wait or
     // has the box off keeps the whole party in the queue.
     struct Waiting
@@ -1708,7 +1708,7 @@ void BattlegroundQueue::StartSquadMatch(BattlegroundTypeId bgTypeId, PvPDifficul
     bg->RemoveFromBGFreeSlotQueue();
 }
 
-// Solo Shuffle's queues, one per size: people queued alone, made into one match
+// Buffle Shuffle's queues, one per size: people queued alone, made into one match
 // of four (2v2) or six (3v3), two or three a side for the first round; the
 // match deals the rest. A party of up to a whole match can queue too - one
 // queue entry per member, all with the same ShuffleParty - and is only ever
@@ -1731,7 +1731,7 @@ void BattlegroundQueue::StartSquadMatch(BattlegroundTypeId bgTypeId, PvPDifficul
 //      longest-waiting has waited kShuffleAnyLobbyMs, any full match: two
 //      healers at most while others are there to take the seats.
 //
-// Rated Solo Shuffle does not exist: the window only offers the skirmish.
+// Rated Buffle Shuffle does not exist: the window only offers the skirmish.
 namespace
 {
     constexpr uint32 kShuffleAnyLobbyMs = 60 * IN_MILLISECONDS;

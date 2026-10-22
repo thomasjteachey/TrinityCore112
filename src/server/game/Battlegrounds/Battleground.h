@@ -823,7 +823,7 @@ class TC_GAME_API Battleground
         virtual void SendSquadFeedTo(Player* player);
         static void SendSquadFeedLine(Player* player, std::string const& line);
 
-        // Solo Shuffle (BATTLEGROUND_SSH): one arena, several rounds, the teams
+        // Buffle Shuffle (BATTLEGROUND_SSH): one arena, several rounds, the teams
         // dealt again before each (Arena.h has the rounds). A shuffle stays
         // STATUS_IN_PROGRESS from the first gates to the end; between rounds
         // it shuts the gates and counts down again on its own.

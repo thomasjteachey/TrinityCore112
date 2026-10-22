@@ -174,7 +174,7 @@ void Arena::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& pa
     // only by the leave-world teardown, 0x548B20). Baradin Hold Arena and Four
     // Corners share map 1401 and its WorldStateUI rows, so without this anyone
     // who had played Four Corners saw its squad lines under the gold/green pair
-    // of every later match there - Solo Shuffle included - until they relogged.
+    // of every later match there - Buffle Shuffle included - until they relogged.
     for (uint8 squad = 0; squad < MAX_BATTLEGROUND_SQUADS; ++squad)
     {
         bool const inMatch = squad < GetSquadCount() && IsSquadInMatch(squad);
@@ -1036,7 +1036,7 @@ void Arena::EndBattleground(uint32 winner)
     Battleground::EndBattleground(winner);
 }
 
-// ---------------------------------------------------------------- solo shuffle
+// ---------------------------------------------------------------- buffle shuffle
 //
 // See SOLO_SHUFFLE_MAX_ROUNDS in Arena.h for the shape of the match. The rounds are
 // driven from Battleground::Update through UpdateRounds, and a round is decided
@@ -1558,11 +1558,11 @@ void Arena::BeginSoloShuffle()
     _shufflePhase = ShufflePhase::Fighting;
     _shuffleTimer = 0;
 
-    TC_LOG_DEBUG("bg.arena", "Solo Shuffle: instance {} on map {} ({}v{}) begins with {} players ({} healers), {} rounds.",
+    TC_LOG_DEBUG("bg.arena", "Buffle Shuffle: instance {} on map {} ({}v{}) begins with {} players ({} healers), {} rounds.",
         GetInstanceID(), GetMapId(), uint32(GetArenaType()), uint32(GetArenaType()), uint32(_shuffleRoster.size()),
         uint32(_shuffleHealers.size()), uint32(_shuffleRoundCount));
 
-    AnnounceToArena(this, Trinity::StringFormat("Solo Shuffle: {} rounds, and new teams before each one. Win more rounds than you lose.",
+    AnnounceToArena(this, Trinity::StringFormat("Buffle Shuffle: {} rounds, and new teams before each one. Win more rounds than you lose.",
         uint32(_shuffleSchedule.size())));
     AnnounceToArena(this, Trinity::StringFormat("Round 1 - Gold: {}. Green: {}.", GetShuffleTeams(ALLIANCE), GetShuffleTeams(HORDE)));
 }
@@ -1582,7 +1582,7 @@ void Arena::EndShuffleRound(uint32 winner, std::string const& why)
     else
         AnnounceToArena(this, Trinity::StringFormat("{}Round {} of {} is a draw.", why, uint32(_shuffleRound), rounds));
 
-    TC_LOG_DEBUG("bg.arena", "Solo Shuffle: instance {} round {} -> {}.", GetInstanceID(), uint32(_shuffleRound),
+    TC_LOG_DEBUG("bg.arena", "Buffle Shuffle: instance {} round {} -> {}.", GetInstanceID(), uint32(_shuffleRound),
         winner == ALLIANCE ? "gold" : (winner == HORDE ? "green" : "draw"));
 
     if (_shuffleRound >= rounds || _shuffleRoster.size() < 2)
@@ -1786,7 +1786,7 @@ void Arena::FinishSoloShuffle()
         ? std::string("Nobody won more rounds than they lost.")
         : Trinity::StringFormat("Won more rounds than they lost: {}.", JoinNames(winners)));
 
-    TC_LOG_DEBUG("bg.arena", "Solo Shuffle: instance {} finished after {} rounds, {} winner(s).",
+    TC_LOG_DEBUG("bg.arena", "Buffle Shuffle: instance {} finished after {} rounds, {} winner(s).",
         GetInstanceID(), _shuffleRoundsPlayed, uint32(winners.size()));
 
     EndBattleground(winners.empty() ? 0 : ALLIANCE);

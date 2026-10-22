@@ -55,7 +55,7 @@ struct GroupQueueInfo                                       // stores informatio
     uint32  OpponentsTeamRating;                            // for rated arena matches
     uint32  OpponentsMatchmakerRating;                      // for rated arena matches
     uint32  PreviousOpponentsTeamId;                        // excluded from the current queue until the timer is met
-    uint32  ShuffleParty;                                   // CENTURION: Solo Shuffle party queued together (one entry each), 0 = alone
+    uint32  ShuffleParty;                                   // CENTURION: Buffle Shuffle party queued together (one entry each), 0 = alone
 };
 
 enum BattlegroundQueueGroupTypes
@@ -89,7 +89,7 @@ class TC_GAME_API BattlegroundQueue
         bool CheckNormalMatch(Battleground* bg_template, BattlegroundBracketId bracket_id, uint32 minPlayers, uint32 maxPlayers);
         bool CheckSkirmishForSameFaction(BattlegroundBracketId bracket_id, uint32 minPlayersPerTeam);
         GroupQueueInfo* AddGroup(Player* leader, Group* group, BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, uint8 ArenaType, bool isRated, bool isPremade, uint32 ArenaRating, uint32 MatchmakerRating, uint32 ArenaTeamId = 0, uint32 OpponentsArenaTeamId = 0);
-        // Solo Shuffle takes a party as one queue entry per member, each tagged
+        // Buffle Shuffle takes a party as one queue entry per member, each tagged
         // with the same GroupQueueInfo::ShuffleParty: a shuffle deals its sides
         // per person, so a party only has to arrive in the same match.
         uint32 NewShuffleParty() { return ++m_LastShuffleParty; }
@@ -178,7 +178,7 @@ class TC_GAME_API BattlegroundQueue
         // Arena teams queued rated for a squad match: one team is one squad.
         void UpdateRatedSquadPool(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, BattlegroundBracketId bracket_id,
             uint8 squadCount, uint8 arenaType);
-        // Solo Shuffle (Arena.h) is made from people queuing alone, four or six
+        // Buffle Shuffle (Arena.h) is made from people queuing alone, four or six
         // to a match, by role - see the comment on the definition.
         void UpdateSoloShufflePool(BattlegroundTypeId bgTypeId, BattlegroundBracketId bracket_id, uint8 arenaType);
         void StartSoloShuffle(BattlegroundTypeId bgTypeId, PvPDifficultyEntry const* bracketEntry, BattlegroundBracketId bracket_id,

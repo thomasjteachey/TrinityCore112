@@ -28,7 +28,7 @@ BattlegroundTTP::BattlegroundTTP()
 
 void BattlegroundTTP::StartingEventCloseDoors()
 {
-    // DoorClose as well as the respawn: a Solo Shuffle shuts the gates again
+    // DoorClose as well as the respawn: a Buffle Shuffle shuts the gates again
     // between rounds, when they are standing open, not despawned.
     for (uint32 i = BG_TTP_OBJECT_DOOR_1; i <= BG_TTP_OBJECT_DOOR_2; ++i)
     {

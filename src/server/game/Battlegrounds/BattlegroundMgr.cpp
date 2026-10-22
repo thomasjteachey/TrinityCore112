@@ -380,7 +380,7 @@ void BattlegroundMgr::Update(uint32 diff)
         m_SquadFeedTimer = 0;
         for (auto const& [bgTypeId, data] : bgDataStore)
         {
-            // Solo Shuffle feeds the same frames: its two sides change every
+            // Buffle Shuffle feeds the same frames: its two sides change every
             // round, which the stock arena frames cannot follow.
             if (!IsSquadBattleground(bgTypeId) && bgTypeId != BATTLEGROUND_SSH)
                 continue;
@@ -435,7 +435,7 @@ void BattlegroundMgr::Update(uint32 diff)
         {
             BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(qtype));
             // A squad match's queue waits for squads to form (UpdateSquadPool),
-            // and Solo Shuffle's for a lobby to form (UpdateSoloShufflePool),
+            // and Buffle Shuffle's for a lobby to form (UpdateSoloShufflePool),
             // so both need the sweep, as battlegrounds do, to notice the wait
             // running out when nobody else joins.
             if (bgTypeId == BATTLEGROUND_TYPE_NONE ||
@@ -1896,7 +1896,7 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId, boo
     // is editable live: change a row and `.reload battleground_template` picks it
     // up without a restart or a DBC rebuild.
     //
-    // Solo Shuffle rolls from rows of its own (pool 889): its later rounds shut
+    // Buffle Shuffle rolls from rows of its own (pool 889): its later rounds shut
     // the gates again, which not every arena can do. With none it rolls All
     // Arenas'.
     bool const arenaRoll = bgTypeId == BATTLEGROUND_AA || bgTypeId == BATTLEGROUND_SSH;

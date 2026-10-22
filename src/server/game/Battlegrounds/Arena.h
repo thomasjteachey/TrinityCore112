@@ -56,7 +56,7 @@ enum ArenaWorldStates
     ARENA_WORLD_STATE_SQUAD_ALIVE_FIRST     = 9441
 };
 
-// Solo Shuffle (BATTLEGROUND_SSH). People queue alone and are put in one arena,
+// Buffle Shuffle (BATTLEGROUND_SSH). People queue alone and are put in one arena,
 // four to a 2v2 or six to a 3v3, for a series of rounds. Before every round the
 // teams are dealt again, so over the match everyone fights beside and against
 // everyone else, and each player is scored by the rounds they won: more won
@@ -80,7 +80,7 @@ uint8 constexpr SOLO_SHUFFLE_MAX_ROUNDS = 6;
 class TC_GAME_API Arena : public Battleground
 {
     public:
-        // Whether a player plays Solo Shuffle as a healer: most talent points in
+        // Whether a player plays Buffle Shuffle as a healer: most talent points in
         // a healing tree (Discipline, Holy, Restoration).
         static bool IsSoloShuffleHealer(Player const* player);
 
@@ -101,7 +101,7 @@ class TC_GAME_API Arena : public Battleground
         void UpdateSquadFeed() override;
         void SendSquadFeedTo(Player* player) override;
 
-        // Solo Shuffle's rounds; see SOLO_SHUFFLE_MAX_ROUNDS.
+        // Buffle Shuffle's rounds; see SOLO_SHUFFLE_MAX_ROUNDS.
         void UpdateRounds(uint32 diff) override;
         bool IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const override;
 
@@ -143,7 +143,7 @@ class TC_GAME_API Arena : public Battleground
         std::vector<uint8> _eliminatedSquads;
         uint32 _squadsAtStart = 0;
 
-        // Solo Shuffle.
+        // Buffle Shuffle.
         enum class ShufflePhase : uint8
         {
             NotStarted,     // round 1's gates have not opened yet

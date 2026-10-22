@@ -183,7 +183,7 @@ class TC_GAME_API BattlegroundMgr
         // Battleground and arena honor per hour, evened out between kinds of
         // match (Centurion.Battleground.HourlyHonor). A kind is the
         // battleground actually played - or for an arena the format queued for
-        // (All Arenas, Solo Shuffle) - by team size and level bracket. Every
+        // (All Arenas, Buffle Shuffle) - by team size and level bracket. Every
         // match that pays out with a real person in it is recorded in
         // `centurion_pvp_match_duration`: its length and the median honor its
         // winners and its losers earned during play. The last Window of each

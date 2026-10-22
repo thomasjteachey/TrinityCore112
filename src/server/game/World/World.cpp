@@ -1566,7 +1566,7 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_CENTURION_BG_SPOILS_FIRST_ITEM] = sConfigMgr->GetIntDefault("Centurion.Battleground.Spoils.FirstItem", 13642);
     m_int_configs[CONFIG_CENTURION_BG_SPOILS_LOSER_CHANCE] = std::min(100, std::max(0, sConfigMgr->GetIntDefault("Centurion.Battleground.Spoils.LoserChancePercent", 50)));
     m_int_configs[CONFIG_CENTURION_BG_SPOILS_MIN_PRESENCE] = std::min(100, std::max(0, sConfigMgr->GetIntDefault("Centurion.Battleground.Spoils.MinPresencePercent", 50)));
-    // Whether Solo Shuffle cares about roles (Arena.h): on, the queue waits for
+    // Whether Buffle Shuffle cares about roles (Arena.h): on, the queue waits for
     // two healers and the rounds keep them apart; off, roles are ignored.
     m_bool_configs[CONFIG_CENTURION_SOLO_SHUFFLE_BALANCE_HEALERS] = sConfigMgr->GetBoolDefault("Centurion.SoloShuffle.BalanceHealers", false);
     // Percent chance a Violet Hold wave mirrors the party itself rather than

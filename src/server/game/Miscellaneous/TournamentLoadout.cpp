@@ -980,6 +980,32 @@ namespace
             WhisperAsChromie(player, "No potions, flasks, scrolls or grenades out of your bags work in here. Only our special PvP Consumables.");
     }
 
+    // A worn slot the loadout put away can have the hardcore realm's white
+    // field kit standing in it by the time the character's own piece comes
+    // back: the kit dresses every kit slot it finds empty - at the login after
+    // a restart cut a match off (its login hook runs before the tournament's),
+    // and on the resurrection a character that leaves a match dead gets first.
+    // Kit is free and handed out again on every death, so it makes way, as it
+    // does for anyone equipping over it (Player::SwapItem); otherwise the
+    // character's own piece went into the bags (Stonedsoul, 2026-10-22, 11
+    // pieces). A two-hander also needs the off hand, and an off hand a kit
+    // two-hander.
+    void MakeWayForStashedItem(Player* player, uint8 slot, ItemTemplate const* proto)
+    {
+        auto clear = [player](uint8 worn)
+        {
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, worn))
+                if (IsFieldKitDuplicateEntry(item->GetEntry()))
+                    player->DestroyItem(INVENTORY_SLOT_BAG_0, worn, true);
+        };
+
+        clear(slot);
+        if (slot == EQUIPMENT_SLOT_MAINHAND && proto->InventoryType == INVTYPE_2HWEAPON)
+            clear(EQUIPMENT_SLOT_OFFHAND);
+        else if (slot == EQUIPMENT_SLOT_OFFHAND && player->IsTwoHandUsed())
+            clear(EQUIPMENT_SLOT_MAINHAND);
+    }
+
     // Puts one stashed item back: where it came from when that is free, anywhere
     // in the bags when it is not, and in the post when the bags are full - the
     // same last resort Player::_LoadInventory uses for gear it cannot place.
@@ -1018,6 +1044,7 @@ namespace
         // lock have no say in it.
         if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
         {
+            MakeWayForStashedItem(player, slot, proto);
             uint16 dest = 0;
             if (player->CanEquipItem(slot, dest, item, false, false) == EQUIP_ERR_OK)
             {

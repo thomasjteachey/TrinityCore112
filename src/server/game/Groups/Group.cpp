@@ -562,7 +562,7 @@ bool Group::RemoveMember(ObjectGuid guid, RemoveMethod const& method /*= GROUP_R
                     continue;
 
                 // Keep solo queues intact; only remove entries that still represent a grouped queue
-                // (a Solo Shuffle party is one entry per member, tied by ShuffleParty).
+                // (a Buffle Shuffle party is one entry per member, tied by ShuffleParty).
                 if (ginfo.Players.size() <= 1 && !ginfo.ShuffleParty)
                     continue;
 
@@ -2158,7 +2158,7 @@ GroupJoinBattlegroundResult Group::CanJoinBattlegroundQueue(Battleground const* 
     // where the realm fills skirmishes - exactly as it already does for the lone
     // player who queues with no party at all. Only an oversized party is still
     // refused: no side has room for it, so the queue would hold it forever
-    // without ever saying why. (Solo Shuffle passes a whole match's size: it
+    // without ever saying why. (Buffle Shuffle passes a whole match's size: it
     // seats a party over both sides.)
     if (bgOrTemplate->isArena() && (isRated ? memberscount != MinPlayerCount : memberscount > MinPlayerCount))
         return ERR_ARENA_TEAM_PARTY_SIZE;

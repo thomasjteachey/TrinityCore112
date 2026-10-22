@@ -1033,7 +1033,7 @@ bool ConsumeBattlegroundFastTickCadence(Player const* player)
 }
 
 // TEMPORARY (2026-10-16), remove once answered: where a clone's tick goes while
-// a Solo Shuffle has its gates shut between rounds. A warlock clone summoned its
+// a Buffle Shuffle has its gates shut between rounds. A warlock clone summoned its
 // demon before round 1 and never between rounds; each line names the step that
 // ended the tick, or what the bot decided and what came of it. Clones only,
 // between rounds only, one line per bot and step every two seconds.
