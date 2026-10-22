@@ -29,11 +29,15 @@
 //   94128  Eternity (Rod of Ages): a stack of 94129 a minute, up to 10
 //   94130  Guardian Angel: lethal damage is held off, 4 sec of stasis (94131),
 //          back with 30% health and mana; 5 min cooldown
+//   94136  Icy (Phage / Trinity Force, League S3): basic attacks roll the 94166
+//          slow (custom_rift_items_unit::BasicAttack)
 //   94134  Spell Shield (Banshee's Veil): keeps 94135 up, which eats the next
 //          damaging enemy spell; 45 sec to come back
 //   94136  Rage (Phage / Trinity Force): DBC proc, nothing here
 //   94133  Stasis (Zhonya's Hourglass), 94138-94140: DBC auras, nothing here
 //   94141  Valor's Reward: RiftProgression::OnLevelChanged
+//   94161  Crest of the Ancient Golem: its cooldown reduction, a modifier
+//          RiftProgression::CrestCooldownMod builds
 
 #include "CellImpl.h"
 #include "GridNotifiers.h"
@@ -62,13 +66,28 @@ namespace
     uint32 constexpr SPELL_GUARDIAN_ANGEL     = 94130;
     uint32 constexpr SPELL_GUARDIAN_STASIS    = 94131;
     uint32 constexpr SPELL_SPELL_SHIELD       = 94135;
+    uint32 constexpr SPELL_BANSHEE            = 94134;
+    uint32 constexpr SPELL_BANSHEE_REGEN      = 94167;
+    uint32 constexpr SPELL_ICY_SLOW           = 94166;
+    uint32 constexpr ITEM_PHAGE               = 991021;
+    uint32 constexpr ITEM_TRINITY_FORCE       = 991035;
     uint32 constexpr RIFT_ITEM_SPELL_FIRST    = 94120;
     uint32 constexpr RIFT_ITEM_SPELL_LAST     = 94141;
 
     float constexpr IMMOLATE_RANGE = 10.0f;
     Milliseconds constexpr SPELLBLADE_COOLDOWN = 2000ms;
     float constexpr IMMOLATE_DAMAGE = 40.0f;           // League's, per second
-    Seconds constexpr SPELL_SHIELD_RECHARGE = 45s;
+    // Banshee's Veil, League S3 (mid-2013 wiki): the shield returns after 25 sec
+    // with no damage from an enemy champion, and that damage gives 45 health
+    // regeneration (League's, per 5 sec) for 10 sec.
+    Seconds constexpr SPELL_SHIELD_RECHARGE = 25s;
+    float constexpr BANSHEE_REGEN_PER_5 = 45.0f;
+    // Icy, League S3: a 25% chance a basic attack slows by 30% for 2 sec, 20% at
+    // range. The slow does not stack; each Phage or Trinity Force held rolls its own
+    // chance (two: 44%).
+    float constexpr ICY_MISS_CHANCE = 0.75f;
+    int32 constexpr ICY_SLOW = 30;
+    int32 constexpr ICY_SLOW_RANGED = 20;
     Minutes constexpr GUARDIAN_ANGEL_COOLDOWN = 5min;
 
     // Damage from an item, named in the combat log by the item's spell.
@@ -140,6 +159,32 @@ public:
         BasicAttack(target, attacker, damage, BASE_ATTACK);
     }
 
+    // Banshee's Veil: damage from an enemy champion (or its pet) holds the spell
+    // shield back for another 25 sec and starts the regeneration.
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
+    {
+        if (!damage || !attacker || !victim || attacker == victim || victim->GetTypeId() != TYPEID_PLAYER || !victim->HasAura(SPELL_BANSHEE))
+            return;
+        Player* champion = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!champion || champion == victim || !champion->IsHostileTo(victim))
+            return;
+        if (!victim->HasAura(SPELL_SPELL_SHIELD))
+            victim->GetSpellHistory()->AddCooldown(SPELL_SPELL_SHIELD, 0, SPELL_SHIELD_RECHARGE);
+        float const scale = RiftProgression::MatchScale(victim->ToPlayer());
+        // League's health per 5 sec, as the champion carriers convert it: aura 161
+        // adds its amount at every 2 sec tick (RiftProgression::SetChampionCarriers)
+        int32 const regen = std::max(1, int32(std::lround(0.4f * (scale > 0.0f ? scale : 1.0f) * BANSHEE_REGEN_PER_5)));
+        ObjectGuid const guid = victim->GetGUID();
+        victim->m_Events.AddEventAtOffset([victim, guid, regen]()
+        {
+            if (!victim->IsAlive() || victim->GetGUID() != guid)
+                return;
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.AddSpellMod(SPELLVALUE_BASE_POINT0, regen - 1);   // the row's die adds 1
+            victim->CastSpell(victim, SPELL_BANSHEE_REGEN, args);
+        }, 1ms);
+    }
+
     void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo) override
     {
         if (!spellInfo || damage <= 0 || !IsRangedBasicAttack(spellInfo))
@@ -163,6 +208,24 @@ private:
             attacker->RemoveAurasDueToSpell(SPELL_SPELLBLADE_CHARGED);
             attacker->GetSpellHistory()->AddCooldown(SPELL_SPELLBLADE_CHARGED, 0, SPELLBLADE_COOLDOWN);
         }
+
+        // Icy: put on a moment later too.
+        if (Player* champion = attacker->ToPlayer(); champion && damage && target->IsAlive())
+            if (uint32 const icy = champion->GetItemCount(ITEM_PHAGE, false) + champion->GetItemCount(ITEM_TRINITY_FORCE, false))
+                if (roll_chance_f(100.0f * (1.0f - std::pow(ICY_MISS_CHANCE, float(icy)))))
+                {
+                    int32 const slow = attackType == RANGED_ATTACK ? ICY_SLOW_RANGED : ICY_SLOW;
+                    ObjectGuid const targetGuid = target->GetGUID();
+                    champion->m_Events.AddEventAtOffset([champion, targetGuid, slow]()
+                    {
+                        Unit* struck = ObjectAccessor::GetUnit(*champion, targetGuid);
+                        if (!struck || !struck->IsAlive() || !champion->IsValidAttackTarget(struck))
+                            return;
+                        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+                        args.AddSpellMod(SPELLVALUE_BASE_POINT0, -slow - 1);   // the row's die adds 1
+                        champion->CastSpell(struck, SPELL_ICY_SLOW, args);
+                    }, 1ms);
+                }
 
         // Dealt a moment later: this runs inside the attacker's swing.
         if (damage && target->HasAura(SPELL_THORNMAIL))
@@ -227,6 +290,26 @@ class spell_rift_item_immolate : public AuraScript
     }
 };
 
+// 94168 the Season 3 Dragon's burn: its third effect's amount in true damage a
+// second, 4 sec (BattlegroundSRF::DragonAttack puts it on and keeps it going).
+class spell_rift_dragon_burn : public AuraScript
+{
+    PrepareAuraScript(spell_rift_dragon_burn);
+
+    void Tick(AuraEffect const* aurEff)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || aurEff->GetAmount() <= 0)
+            return;
+        DealTrueDamage(caster, GetTarget(), GetSpellInfo(), uint32(aurEff->GetAmount()));
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_rift_dragon_burn::Tick, EFFECT_2, SPELL_AURA_PERIODIC_DUMMY);
+    }
+};
+
 // 94163 Blessing of the Lizard Elder, on the one struck: its second effect's
 // amount in true damage each 1.5 sec (RiftProgression::LizardBurn keeps it going).
 class spell_rift_lizard_burn : public AuraScript
@@ -244,6 +327,24 @@ class spell_rift_lizard_burn : public AuraScript
     void Register() override
     {
         OnEffectPeriodic += AuraEffectPeriodicFn(spell_rift_lizard_burn::Tick, EFFECT_1, SPELL_AURA_PERIODIC_DUMMY);
+    }
+};
+
+// 94161 Crest of the Ancient Golem: the cooldown reduction (its first effect's
+// amount) is a SPELLMOD_COOLDOWN pct modifier on the holder's class spells, so
+// the client shows and times the shorter cooldowns itself.
+class spell_rift_crest : public AuraScript
+{
+    PrepareAuraScript(spell_rift_crest);
+
+    void CalcSpellMod(AuraEffect const* aurEff, SpellModifier*& spellMod)
+    {
+        RiftProgression::CrestCooldownMod(aurEff, spellMod);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcSpellMod += AuraEffectCalcSpellModFn(spell_rift_crest::CalcSpellMod, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -370,7 +471,8 @@ class spell_rift_item_banshee : public AuraScript
 };
 
 // 94135 Spell Shield (the buff): eats one damaging spell from an enemy player
-// or their pet, then is gone for 45 sec.
+// or their pet, then is gone until 25 sec pass with no champion damage (OnDamage
+// above restarts the wait).
 class spell_rift_item_spell_shield : public AuraScript
 {
     PrepareAuraScript(spell_rift_item_spell_shield);
@@ -408,6 +510,8 @@ void AddSC_custom_rift_items()
     new custom_rift_items_player();
     RegisterSpellScript(spell_rift_item_immolate);
     RegisterSpellScript(spell_rift_lizard_burn);
+    RegisterSpellScript(spell_rift_dragon_burn);
+    RegisterSpellScript(spell_rift_crest);
     RegisterSpellScript(spell_rift_item_warmog);
     RegisterSpellScript(spell_rift_item_rod_of_ages);
     RegisterSpellScript(spell_rift_item_guardian_angel);

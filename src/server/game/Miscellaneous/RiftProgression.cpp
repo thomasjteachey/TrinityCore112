@@ -42,6 +42,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <map>
@@ -214,6 +215,8 @@ namespace
         uint8 CombatLevel = 0;
         // The Bloodthirster's stacks: a unit kill each, up to 30, half lost on death.
         uint8 BloodthirsterStacks = 0;
+        // League's flat magic penetration, League's points (SetChampionCarriers).
+        float MagicPen = 0.0f;
         // League's own numbers for CENTURION_Rift's pane (RIFTSTATS): the line as
         // SetChampionCarriers last made it, and as the client was last sent it.
         std::string StatsLine;
@@ -694,7 +697,7 @@ namespace
     uint32 constexpr SPELL_CHAMPION_B = 94148;    // attack power, ranged attack power, crit
     uint32 constexpr SPELL_CHAMPION_C = 94154;    // melee and ranged attack speed, spell damage
     uint32 constexpr SPELL_CHAMPION_D = 94155;    // healing, mana, health regeneration
-    uint32 constexpr SPELL_CHAMPION_E = 94156;    // mana regeneration, spell penetration, run speed
+    uint32 constexpr SPELL_CHAMPION_E = 94156;    // mana regeneration, (0: magic penetration is MagicPenetration), run speed
     uint32 constexpr SPELL_CHAMPION_F = 94157;    // the boots' run speed; life steal (tenths of a percent)
     uint32 constexpr CHAMPION_CARRIERS[] = { SPELL_CHAMPION_A, SPELL_CHAMPION_B, SPELL_CHAMPION_C,
         SPELL_CHAMPION_D, SPELL_CHAMPION_E, SPELL_CHAMPION_F };
@@ -730,9 +733,6 @@ namespace
     uint32 constexpr ITEM_SLOTS = 6;
     uint32 constexpr RIFT_SPELL_FIRST = 94120;
     uint32 constexpr RIFT_SPELL_LAST = 94160;
-    // Spell penetration per point of League magic penetration: the slope of
-    // RiftLeague::ToWowResist at 50 magic resist, where champions mostly sit.
-    float constexpr MAGIC_PEN_PER_POINT = 300.0f * 100.0f / (150.0f * 150.0f);
 
     bool IsShopItem(uint32 entry) { return entry >= SHOP_ITEM_FIRST && entry <= SHOP_ITEM_LAST; }
 
@@ -1037,7 +1037,10 @@ namespace
             if (energy->GetAmount() != want)
                 energy->ChangeAmount(want);
         }
-        int32 const penetration = -Round((cs->RuneMagicPen + it.MagicPen) * MAGIC_PEN_PER_POINT);
+        // magic penetration stays in League's points: no WoW spell penetration
+        // on the carrier, Unit::CalculateAverageResistReduction takes it off the
+        // target's League magic resist (MagicPenetration)
+        state.MagicPen = cs->RuneMagicPen + it.MagicPen;
 
         // League's numbers as League's stat panel shows them; WoW's attack power
         // is only the dial that makes a basic attack hit for League's damage.
@@ -1053,7 +1056,7 @@ namespace
         SetCarrier(player, SPELL_CHAMPION_B, { meleePower, rangedPower, crit });
         SetCarrier(player, SPELL_CHAMPION_C, { meleeHaste, rangedHaste, spellPower });
         SetCarrier(player, SPELL_CHAMPION_D, { spellPower, mana, healthRegen });
-        SetCarrier(player, SPELL_CHAMPION_E, { manaRegen, penetration, Round(it.MoveSpeed) });
+        SetCarrier(player, SPELL_CHAMPION_E, { manaRegen, 0, Round(it.MoveSpeed) });
         SetCarrier(player, SPELL_CHAMPION_F, { Round(items.BootsSpeed), Round(it.LifeSteal * 10.0f) });
     }
 
@@ -1325,14 +1328,36 @@ namespace
     }
 
     // A chain's first unlock puts the spell on the bars: back on its own button,
-    // otherwise on the first free button of the usual bars that no spell still
-    // to come back held - the recall and earlier picks took the first free
+    // or not at all when a macro on the bars casts it, otherwise on the first free
+    // button of the usual bars that no spell still to come back held - the recall and earlier picks took the first free
     // buttons, which were often another ability's, and that one then landed
     // somewhere new.
+    // A macro on the bars that casts this spell (by name): it stands in for the
+    // spell's own button.
+    bool MacroOnBarsCasts(Player* player, uint32 spell)
+    {
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
+        if (!info || !info->SpellName[LOCALE_enUS])
+            return false;
+        std::string const name = Normalised(info->SpellName[LOCALE_enUS]);
+        for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+        {
+            ActionButton const* ab = player->GetActionButton(button);
+            if (!ab || (ab->GetType() != ACTION_BUTTON_MACRO && ab->GetType() != ACTION_BUTTON_CMACRO))
+                continue;
+            std::vector<std::string> names;
+            if (MacroSpellNames(player, uint8(ab->GetType()), ab->GetAction(), names)
+                && std::find(names.begin(), names.end(), name) != names.end())
+                return true;
+        }
+        return false;
+    }
+
     void PlaceUnlockedSpell(Player* player, State& state, uint32 first, uint32 spell)
     {
         RefillSavedButtons(player, state);
-        if (!OnBars(player, state, first, spell))
+        // a macro that casts it, put back just now or already there, is its button
+        if (!OnBars(player, state, first, spell) && !MacroOnBarsCasts(player, spell))
         {
             std::unordered_set<uint8> reserved;
             for (SavedButton const& b : state.RealButtons)
@@ -1486,6 +1511,12 @@ namespace
 
 namespace RiftProgression
 {
+namespace
+{
+    struct CrestCover;
+    CrestCover const& CrestCoverOf(uint8 classId);
+}
+
 void ProbeStorage()
 {
     {
@@ -1523,6 +1554,7 @@ void ProbeStorage()
         TC_LOG_INFO("server.loading", ">> Summoner's Rift shop: {} item(s) with a build path.", Recipes.size());
     }
     RiftLeague::Load();
+    CrestCoverOf(CLASS_WARRIOR);   // the Crest's cooldown modifiers, worked out once (CrestCooldownMod)
 
     StoragePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash'") != nullptr;
     WeaponTablePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_weapons'") != nullptr;
@@ -1834,9 +1866,11 @@ void LizardBurn(Player* attacker, Unit* victim, bool ranged)
             burning->ChangeAmount(tick);
         return;
     }
+    // Base points, not amounts: the row's die adds 1 (SpellEffectInfo::CalcValue),
+    // which had the slow at 7% for League's 8% and every first tick 1 too high.
     CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-    args.AddSpellMod(SPELLVALUE_BASE_POINT0, -slow);
-    args.AddSpellMod(SPELLVALUE_BASE_POINT1, tick);
+    args.AddSpellMod(SPELLVALUE_BASE_POINT0, -slow - 1);
+    args.AddSpellMod(SPELLVALUE_BASE_POINT1, tick - 1);
     attacker->CastSpell(victim, BG_SRF_SPELL_RED_BURN, args);
     if (Aura* burn = victim->GetAura(BG_SRF_SPELL_RED_BURN, attacker->GetGUID()))
     {
@@ -1845,17 +1879,171 @@ void LizardBurn(Player* attacker, Unit* victim, bool ranged)
     }
 }
 
-float CooldownReduction(Player const* player, SpellInfo const* spellInfo)
+namespace
 {
-    if (!player || !spellInfo)
-        return 0.0f;
-    AuraEffect const* crest = player->GetAuraEffect(BG_SRF_SPELL_BLUE_BUFF, EFFECT_0);
-    if (!crest || crest->GetAmount() <= 0)
-        return 0.0f;
-    ChrClassesEntry const* playerClass = sChrClassesStore.LookupEntry(player->GetClass());
-    if (!playerClass || !spellInfo->SpellFamilyName || spellInfo->SpellFamilyName != playerClass->SpellClassSet || !IsInMatch(player))
-        return 0.0f;
-    return std::min(float(crest->GetAmount()), COOLDOWN_REDUCTION_CAP) / 100.0f;
+    // The Crest's cooldown modifier for one class: SpellId is a spell of the
+    // class's family (SpellInfo::IsAffectedBySpellMod matches a modifier to a
+    // family by its spell), Mask the class-mask bits it is on.
+    struct CrestCover
+    {
+        uint32 SpellId = 0;
+        flag96 Mask;
+    };
+
+    uint32 MaskBits(flag96 const& mask)
+    {
+        uint32 n = 0;
+        for (uint8 i = 0; i < 3; ++i)
+            for (uint32 part = mask[i]; part; part &= part - 1)
+                ++n;
+        return n;
+    }
+
+    // The client adds a pct modifier once for every bit of a spell's class mask
+    // that carries it (Spell_C_GetSpellModifiers 0x7FD970), the server once, so
+    // the Crest's mask gives each class spell with a cooldown exactly one bit.
+    // Spells share bits, so it is a cover: the spells with the fewest bits
+    // choose first, each taking the first bit of its own that no spell already
+    // reached carries, then single-bit flips are kept while they reach more.
+    // On 3.3.5's spells that misses Heroic Throw, Inner Focus, Fire Nova and
+    // Ice Block (their bits are second bits of spells already reached); those
+    // StartCooldown shortens itself (CooldownReduction).
+    std::array<CrestCover, MAX_CLASSES> BuildCrestCovers()
+    {
+        std::array<CrestCover, MAX_CLASSES> covers{};
+        std::array<std::vector<flag96>, MAX_CLASSES> spells;
+        for (uint32 id = 1; id < sSpellMgr->GetSpellInfoStoreSize(); ++id)
+        {
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(id);
+            if (!info || !info->SpellFamilyName || !info->SpellFamilyFlags || (!info->RecoveryTime && !info->CategoryRecoveryTime))
+                continue;
+            // the classes that learn it: a trainer's or a talent's
+            uint32 classMask = 0;
+            SkillLineAbilityMapBounds const bounds = sSpellMgr->GetSkillLineAbilityMapBounds(id);
+            for (auto itr = bounds.first; itr != bounds.second; ++itr)
+                classMask |= itr->second->ClassMask;
+            if (TalentSpellPos const* pos = GetTalentSpellPos(id))
+                if (TalentEntry const* talent = sTalentStore.LookupEntry(pos->talent_id))
+                    if (TalentTabEntry const* tab = sTalentTabStore.LookupEntry(talent->TabID))
+                        classMask |= tab->ClassMask;
+            for (uint8 classId = CLASS_WARRIOR; classId < MAX_CLASSES; ++classId)
+            {
+                ChrClassesEntry const* entry = sChrClassesStore.LookupEntry(classId);
+                if (!entry || entry->SpellClassSet != info->SpellFamilyName || !(classMask & (1u << (classId - 1))))
+                    continue;
+                if (!covers[classId].SpellId)
+                    covers[classId].SpellId = id;
+                spells[classId].push_back(info->SpellFamilyFlags);
+            }
+        }
+
+        for (uint8 classId = CLASS_WARRIOR; classId < MAX_CLASSES; ++classId)
+        {
+            std::vector<flag96>& own = spells[classId];
+            flag96& mask = covers[classId].Mask;
+            auto reached = [&own](flag96 const& m)
+            {
+                return std::count_if(own.begin(), own.end(), [&m](flag96 const& s) { return MaskBits(s & m) == 1; });
+            };
+            std::stable_sort(own.begin(), own.end(), [](flag96 const& a, flag96 const& b) { return MaskBits(a) < MaskBits(b); });
+            for (flag96 const& spell : own)
+            {
+                if (spell & mask)
+                    continue;
+                for (uint8 bit = 0; bit < 96; ++bit)
+                {
+                    flag96 const one(bit < 32 ? 1u << bit : 0, bit >= 32 && bit < 64 ? 1u << (bit - 32) : 0, bit >= 64 ? 1u << (bit - 64) : 0);
+                    if (!(spell & one))
+                        continue;
+                    if (std::none_of(own.begin(), own.end(), [&](flag96 const& s) { return (s & one) && (s & mask); }))
+                    {
+                        mask |= one;
+                        break;
+                    }
+                }
+            }
+            for (bool improved = true; improved; )
+            {
+                improved = false;
+                for (uint8 bit = 0; bit < 96; ++bit)
+                {
+                    flag96 const one(bit < 32 ? 1u << bit : 0, bit >= 32 && bit < 64 ? 1u << (bit - 32) : 0, bit >= 64 ? 1u << (bit - 64) : 0);
+                    if (reached(mask ^ one) > reached(mask))
+                    {
+                        mask ^= one;
+                        improved = true;
+                    }
+                }
+            }
+            TC_LOG_INFO("server.loading", "RiftProgression: the Crest's cooldown modifier for class {} reaches {} of its {} class spells with a cooldown.",
+                classId, reached(mask), own.size());
+        }
+        return covers;
+    }
+
+    CrestCover const& CrestCoverOf(uint8 classId)
+    {
+        static std::array<CrestCover, MAX_CLASSES> const covers = BuildCrestCovers();
+        static CrestCover const none;
+        return classId < MAX_CLASSES ? covers[classId] : none;
+    }
+
+    // The Crest's share off one of the champion's class spells, and how many of
+    // its class-mask bits the Crest's modifier is on (0 when the modifier cannot
+    // reach it at all).
+    float CrestShare(Player const* player, SpellInfo const* spellInfo, uint32* bits)
+    {
+        if (bits)
+            *bits = 0;
+        if (!player || !spellInfo)
+            return 0.0f;
+        AuraEffect const* crest = player->GetAuraEffect(BG_SRF_SPELL_BLUE_BUFF, EFFECT_0);
+        if (!crest || crest->GetAmount() <= 0)
+            return 0.0f;
+        ChrClassesEntry const* playerClass = sChrClassesStore.LookupEntry(player->GetClass());
+        if (!playerClass || !spellInfo->SpellFamilyName || spellInfo->SpellFamilyName != playerClass->SpellClassSet || !IsInMatch(player))
+            return 0.0f;
+        if (bits)
+            *bits = MaskBits(spellInfo->SpellFamilyFlags & CrestCoverOf(player->GetClass()).Mask);
+        return std::min(float(crest->GetAmount()), COOLDOWN_REDUCTION_CAP) / 100.0f;
+    }
+}
+
+float MagicPenetration(Player const* player)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = player ? Find(player) : nullptr;
+    return state ? state->MagicPen : 0.0f;
+}
+
+void CrestCooldownMod(AuraEffect const* crest, SpellModifier*& mod)
+{
+    Player* player = crest ? crest->GetBase()->GetUnitOwner()->ToPlayer() : nullptr;
+    if (!player)
+        return;
+    if (!mod)
+    {
+        CrestCover const& cover = CrestCoverOf(player->GetClass());
+        if (!cover.SpellId || !cover.Mask)
+            return;
+        mod = new SpellModifier(crest->GetBase());
+        mod->op = SPELLMOD_COOLDOWN;
+        mod->type = SPELLMOD_PCT;
+        mod->spellId = cover.SpellId;
+        mod->mask = cover.Mask;
+    }
+    mod->value = -int32(std::min(float(std::max(crest->GetAmount(), 0)), COOLDOWN_REDUCTION_CAP));
+}
+
+float CooldownReduction(Player const* player, SpellInfo const* spellInfo, bool* clientMisreads)
+{
+    uint32 bits = 0;
+    float const share = CrestShare(player, spellInfo, &bits);
+    // the Crest's modifier takes it off once server-side (Player::ApplySpellMod)
+    bool const modReaches = bits && spellInfo->IsAffectedBySpellMods();
+    if (clientMisreads)
+        *clientMisreads = share > 0.0f && !(modReaches && bits == 1);
+    return modReaches ? 0.0f : share;
 }
 
 std::vector<uint8> WeaponShapes(Player* player)
@@ -2601,6 +2789,13 @@ void Maintain(Player* player)
     BotSyncSpellbook(player, *state);
     BotSpendTalents(player, *state);
     BotShop(player, *state);
+}
+
+uint8 BuildRole(Player const* player)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = player ? Find(player) : nullptr;
+    return state ? uint8(RoleOf(player, *state)) : 0;
 }
 
 void HandlePickRequest(Player* player, std::string_view argument)

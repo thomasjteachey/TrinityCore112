@@ -287,7 +287,7 @@ float constexpr SRF_FOUNTAIN_FACING[PVP_TEAMS_COUNT] = { 5.4978f, 2.3562f };
 // would be 22.5 here, inside a caster's 30 or a hunter's 35, so a ranged champion
 // could siege it untouched; owner, 2026-10-20: "at least 50 yards"). Both shot
 // spells carry it: Ice Lance 43427 is unlimited, Fireball 22088 100 yards.
-float constexpr SRF_TURRET_RANGE        = 50.0f;
+float constexpr SRF_TURRET_RANGE        = 45.0f;   // owner, 2026-10-22 (50 before)
 float constexpr SRF_MINION_AGGRO_RANGE  = Yards(400.0f);
 // With no enemy unit near, a minion takes on an enemy structure in a turret's
 // range of it: a wave walking down a lane stops at the first turret standing.
@@ -396,6 +396,11 @@ float constexpr SRF_MINION_CALL_RANGE    = Yards(1000.0f);
 // Caster minions: League's 550 range, siege minions 450; their attack speed League's (rift_league_unit).
 float constexpr SRF_CASTER_RANGE        = Yards(550.0f);
 float constexpr SRF_SIEGE_RANGE         = Yards(450.0f);
+// League Season 3's Dragon (the mid-2013 wiki): a ranged attack at 350, whose
+// burn is 60 true damage over 4 sec (4 ticks) and 20% less attack speed.
+float constexpr SRF_DRAGON_RANGE        = Yards(350.0f);
+float constexpr SRF_DRAGON_BURN         = 60.0f;            // League's, over the burn's 4 ticks
+float constexpr SRF_DRAGON_FIRE_SPEED   = 36.0f;            // yd/s: the Fireball missile (94144's)
 // League's minion kinds (Season 3). Waves are three melee and three casters, a
 // siege minion every third wave until 35:00 and every second after; a lane whose
 // enemy inhibitor is down sends a super minion instead of the siege minion every
@@ -1290,30 +1295,168 @@ float constexpr SRF_BOT_RETURN_PCT    = 90.0f;
 float constexpr SRF_BOT_ENGAGE_RANGE  = 22.0f;    // yards round its post (or itself) it fights in
 float constexpr SRF_BOT_CLASH_RANGE   = 30.0f;    // an enemy minion this close to an allied one is a fight
 float constexpr SRF_BOT_BEHIND_WAVE   = 5.0f;     // yards it keeps behind its own wave
+// A ranged champion stands back at its reach behind the wave, as League's carries
+// and mages do: 5 yards behind the front put the enemy wave inside a hunter's
+// minimum range, so it stepped back to shoot, was ordered back to the post, and
+// stepped back again (Aerendil Trapfang's hiccup walk, 2026-10-22) until the
+// terrain behind it held it. Its fighting circle grows by the same.
+float constexpr SRF_BOT_BEHIND_WAVE_RANGED = 18.0f;
+// Walking out to the post it is given nothing to fight beyond its own circle:
+// ordered onto a minion 390 yards off, a bot re-aimed at a moving target every
+// tick instead of walking the lane.
+float constexpr SRF_BOT_POST_NEAR     = 2.0f * SRF_BOT_ENGAGE_RANGE;
+// The current target keeps this much score over an equal one, so a bot does not
+// flip between two minions every time the orders are worked out.
+int32 constexpr SRF_BOT_TARGET_KEEP   = 5;
+// The jungler ganks an enemy champion this close, off its turrets, that is hurt
+// or already fighting one of the team; between camps it goes where a fight is.
+float constexpr SRF_BOT_GANK_RANGE    = 60.0f;
+float constexpr SRF_BOT_GANK_HURT_PCT = 60.0f;
+float constexpr SRF_BOT_FIGHT_RANGE   = 30.0f;
+// The support walks this far behind its carry, along the lane.
+float constexpr SRF_BOT_SUPPORT_BEHIND = 4.0f;
+
+namespace
+{
+    // Fights from range: the hunter's bow, the cloth casters' spells.
+    bool FightsAtRange(Player const* bot)
+    {
+        switch (bot->GetClass())
+        {
+            case CLASS_HUNTER:
+            case CLASS_MAGE:
+            case CLASS_WARLOCK:
+            case CLASS_PRIEST:
+                return true;
+            default:
+                return false;
+        }
+    }
+}
 uint32 constexpr SRF_BOT_SHOP_GOLD    = 1300;     // League gold that sends it home to shop
+uint32 constexpr SRF_BOT_SHOP_WAIT_MS = 7000;     // at the fountain this long with its gold untouched: nothing to buy
+uint32 constexpr SRF_BOT_SHOP_MORE    = 500;      // League gold more it needs before the next trip home after that
 uint32 constexpr SRF_SPELL_RECALL     = 94120;    // League's recall (RiftProgression teaches it)
+
+namespace
+{
+    // How well a champion fits each of League's positions, by what its class and
+    // spec build toward (RiftProgression::BuildRole: melee, ranged, caster,
+    // healer, tank) and the class's own leaning.
+    //                                      top  jungle  mid  carry  support
+    uint8 constexpr SRF_ROLE_FIT[5][5] = { {  8,    9,     3,    2,     1 },    // melee
+                                           {  2,    4,     5,   10,     2 },    // ranged
+                                           {  3,    2,    10,    4,     5 },    // caster
+                                           {  2,    1,     4,    1,    10 },    // healer
+                                           { 10,    8,     1,    1,     6 } };  // tank
+    // A team short of five leaves the support open first, then the jungle.
+    uint8 constexpr SRF_ROLE_PRIORITY[] = { 2 /*mid*/, 0 /*top*/, 3 /*carry*/, 1 /*jungle*/, 4 /*support*/ };
+
+    int32 RoleFit(Player const* player, uint8 role)
+    {
+        int32 score = SRF_ROLE_FIT[std::min<uint8>(RiftProgression::BuildRole(player), 4)][role];
+        switch (player->GetClass())
+        {
+            case CLASS_ROGUE:        if (role == 1) score += 2; break;   // the jungle
+            case CLASS_DRUID:        if (role == 1) score += 1; break;
+            case CLASS_WARRIOR:
+            case CLASS_DEATH_KNIGHT: if (role == 0) score += 2; break;   // top
+            case CLASS_PALADIN:      if (role == 0) score += 1; break;
+            case CLASS_HUNTER:       if (role == 3) score += 2; break;   // the carry
+            default: break;
+        }
+        return score;
+    }
+
+    uint8 LaneOfRole(uint8 role)
+    {
+        switch (role)
+        {
+            case 0:  return BG_SRF_LANE_TOP;
+            case 1:  return BG_SRF_LANE_NONE;
+            case 2:  return BG_SRF_LANE_MID;
+            default: return BG_SRF_LANE_BOT;   // the carry and its support
+        }
+    }
+}
+
+// Every champion of a team at once, when its match has started: the hand-out of
+// the positions with the best fit overall, over every way of handing them out.
+// The humans are in it too - a human hunter will carry whatever it is told - so
+// the bots take what the humans leave.
+void BattlegroundSRF::AssignRoles(TeamId team)
+{
+    _rolesAssigned[team] = true;
+    std::vector<Player*> members = TeamPlayers(team);
+    std::sort(members.begin(), members.end(), [](Player const* a, Player const* b) { return a->GetGUID() < b->GetGUID(); });
+    size_t const n = std::min<size_t>(members.size(), SRF_ROLE_COUNT);
+    if (!n)
+        return;
+    std::vector<uint8> roles(SRF_ROLE_PRIORITY, SRF_ROLE_PRIORITY + n);
+    std::sort(roles.begin(), roles.end());
+    std::vector<std::array<int32, SRF_ROLE_COUNT>> fit(n);
+    for (size_t i = 0; i < n; ++i)
+        for (uint8 r = 0; r < SRF_ROLE_COUNT; ++r)
+            fit[i][r] = RoleFit(members[i], r);
+    std::vector<uint8> best = roles;
+    int32 bestScore = -1;
+    do
+    {
+        int32 score = 0;
+        for (size_t i = 0; i < n; ++i)
+            score += fit[i][roles[i]];
+        if (score > bestScore)
+        {
+            bestScore = score;
+            best = roles;
+        }
+    } while (std::next_permutation(roles.begin(), roles.end()));
+    for (size_t i = 0; i < members.size(); ++i)
+        _roles[members[i]->GetGUID()] = i < n ? best[i] : uint8(SRF_ROLE_MID);
+}
+
+uint8 BattlegroundSRF::RoleOf(ObjectGuid guid) const
+{
+    auto const itr = _roles.find(guid);
+    return itr != _roles.end() ? itr->second : uint8(SRF_ROLE_MID);
+}
+
+// The team's carry, alive, for its support to walk behind.
+Player* BattlegroundSRF::TeamCarry(TeamId team) const
+{
+    for (Player* player : TeamPlayers(team))
+        if (player->IsAlive() && RoleOf(player->GetGUID()) == SRF_ROLE_CARRY)
+            return player;
+    return nullptr;
+}
 
 BattlegroundSRF::BotState& BattlegroundSRF::BotOf(Player* bot)
 {
     BotState& st = _bots[bot->GetGUID()];
     if (st.Assigned)
         return st;
-    // League's laning: top, mid and bottom first, bottom twice, then the jungle.
     TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(bot->GetGUID()));
-    uint8 counts[BG_SRF_LANE_COUNT + 1] = {};
-    for (auto const& [guid, other] : _bots)
-        if (other.Assigned && guid != bot->GetGUID())
-            if (GetTeamIndexByTeamId(GetPlayerTeam(guid)) == team)
-                ++counts[other.Lane];
-    uint8 const order[] = { BG_SRF_LANE_MID, BG_SRF_LANE_TOP, BG_SRF_LANE_BOT, BG_SRF_LANE_NONE, BG_SRF_LANE_BOT };
-    uint8 const quota[BG_SRF_LANE_COUNT + 1] = { 1, 1, 2, 1 };    // top, mid, bot, jungle
-    st.Lane = BG_SRF_LANE_MID;
-    for (uint8 lane : order)
-        if (counts[lane] < quota[lane])
-        {
-            st.Lane = lane;
-            break;
-        }
+    if (!_rolesAssigned[team])
+        AssignRoles(team);
+    // One that came in after (a seat refilled): the best of the positions free.
+    if (_roles.find(bot->GetGUID()) == _roles.end())
+    {
+        std::array<bool, SRF_ROLE_COUNT> held = {};
+        for (Player* player : TeamPlayers(team))
+            if (player != bot)
+                held[RoleOf(player->GetGUID())] = true;
+        uint8 role = SRF_ROLE_MID;
+        int32 bestFit = -1;
+        for (uint8 r = 0; r < SRF_ROLE_COUNT; ++r)
+            if (!held[r] && RoleFit(bot, r) > bestFit)
+            {
+                bestFit = RoleFit(bot, r);
+                role = r;
+            }
+        _roles[bot->GetGUID()] = role;
+    }
+    st.Role = RoleOf(bot->GetGUID());
+    st.Lane = LaneOfRole(st.Role);
     st.Assigned = true;
     return st;
 }
@@ -1412,15 +1555,37 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
     if (!map)
         return false;
     TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(bot->GetGUID()));
+    // `out` is the bot's own last orders (GetBotOrders): what it was fighting goes first
+    ObjectGuid const current = out.Target;
     out = BattlegroundBotOrders();
 
-    // Home: to heal, or to spend.
+    // Home: to heal, or to spend. A trip home that buys nothing - the build is done,
+    // or nothing fits - sends it back out until it has SRF_BOT_SHOP_MORE more:
+    // Tinkerton stood at the fountain with 1515 gold for the rest of a match.
+    uint32 const money = bot->GetMoney();
+    if (IsAtBase(bot) && money >= std::max(SRF_BOT_SHOP_GOLD * GOLD, st.ShopBar))
+    {
+        uint32 const now = GameTime::GetGameTimeMS();
+        if (!st.ShopSince || money < st.ShopGold)
+        {
+            st.ShopSince = now;
+            st.ShopGold = money;
+        }
+        else if (now - st.ShopSince >= SRF_BOT_SHOP_WAIT_MS)
+        {
+            st.ShopBar = money + SRF_BOT_SHOP_MORE * GOLD;
+            st.ShopSince = 0;
+        }
+    }
+    else
+        st.ShopSince = 0;
+    bool const wantsShop = money >= std::max(SRF_BOT_SHOP_GOLD * GOLD, st.ShopBar);
     float const pct = bot->GetHealthPct();
     if (pct < SRF_BOT_RETREAT_PCT)
         st.Retreating = true;
-    else if (st.Retreating && pct >= SRF_BOT_RETURN_PCT && !(IsAtBase(bot) && bot->GetMoney() >= SRF_BOT_SHOP_GOLD * GOLD))
+    else if (st.Retreating && pct >= SRF_BOT_RETURN_PCT && !(IsAtBase(bot) && wantsShop))
         st.Retreating = false;
-    if (!st.Retreating && bot->GetMoney() >= SRF_BOT_SHOP_GOLD * GOLD && !bot->IsInCombat() && !IsAtBase(bot))
+    if (!st.Retreating && wantsShop && !bot->IsInCombat() && !IsAtBase(bot))
         st.Retreating = true;
     if (st.Retreating)
     {
@@ -1450,9 +1615,31 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
         return true;
     }
 
-    // The jungler: the next camp that is up, its own side first.
+    // The jungler: a gank first - an enemy champion near, hurt or in a fight with
+    // the team, and off its turrets - then the next camp that is up, its own side
+    // first, and with none up the lane where a fight is (the middle with none).
+    uint8 lane = st.Lane;
     if (st.Lane == BG_SRF_LANE_NONE)
     {
+        Player* prey = nullptr;
+        for (Player* enemy : TeamPlayers(OtherTeam(team)))
+        {
+            if (!enemy->IsAlive() || enemy->GetExactDist2d(bot) > SRF_BOT_GANK_RANGE || !bot->IsValidAttackTarget(enemy)
+                || UnderFreeEnemyTurret(team, enemy->GetPosition(), 3.0f))
+                continue;
+            bool fighting = enemy->GetHealthPct() < SRF_BOT_GANK_HURT_PCT;
+            for (Player* ally : TeamPlayers(team))
+                if (!fighting && ally != bot && ally->IsAlive() && ally->GetExactDist2d(enemy) < SRF_BOT_FIGHT_RANGE)
+                    fighting = true;
+            if (fighting && (!prey || enemy->GetHealthPct() < prey->GetHealthPct()))
+                prey = enemy;
+        }
+        if (prey)
+        {
+            out.Post = prey->GetPosition();
+            out.Target = prey->GetGUID();
+            return true;
+        }
         for (uint8 tries = 0; tries < BG_SRF_JUNGLE_CAMPS; ++tries)
         {
             uint8 const camp = (st.Camp + tries) % BG_SRF_JUNGLE_CAMPS;
@@ -1468,16 +1655,33 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
                 continue;
             st.Camp = camp;
             out.Post = best->GetPosition();
-            out.Target = best->GetGUID();
+            if (best->GetExactDist2d(bot) <= SRF_BOT_POST_NEAR || best->GetVictim() == bot)
+                out.Target = best->GetGUID();
             return true;
         }
-        // nothing up: help the middle lane
-        st.Lane = BG_SRF_LANE_MID;
+        // nothing up: the lane with a fight in it, else the middle - for now; the
+        // jungler stays the jungler (it used to be sent mid for the rest of the match)
+        lane = BG_SRF_LANE_MID;
+        for (Player* ally : TeamPlayers(team))
+        {
+            uint8 const role = RoleOf(ally->GetGUID());
+            if (ally == bot || !ally->IsAlive() || role == SRF_ROLE_JUNGLE)
+                continue;
+            bool fight = false;
+            for (Player* enemy : TeamPlayers(OtherTeam(team)))
+                if (enemy->IsAlive() && enemy->GetExactDist2d(ally) < SRF_BOT_FIGHT_RANGE)
+                    fight = true;
+            if (fight)
+            {
+                lane = LaneOfRole(role);
+                break;
+            }
+        }
     }
 
     // Laning: just behind the frontmost allied minion of its lane, or at its
     // outermost standing turret while there is none.
-    std::vector<Position> const& path = LanePath(team, st.Lane);
+    std::vector<Position> const& path = LanePath(team, lane);
     if (path.empty())
         return false;
     // The front is where the waves meet: the allied minion of this lane closest
@@ -1489,7 +1693,7 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
     Position const* clashAt = nullptr;
     for (Minion const& m : _minions)
     {
-        if (m.Team != team || m.Lane != st.Lane)
+        if (m.Team != team || m.Lane != lane)
             continue;
         front = std::max<int32>(front, int32(m.PathIndex));
         for (Minion const& e : _minions)
@@ -1501,22 +1705,25 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
                 }
     }
     if (clashAt)
-        front = int32(LaneIndexNear(team, st.Lane, *clashAt));
+        front = int32(LaneIndexNear(team, lane, *clashAt));
     if (front < 0)
     {
         front = 0;
         for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
         {
             uint8 const slot = SlotOf(team, i);
-            if (!_structures[slot].Destroyed && StructureAt(slot).kind == BG_SRF_KIND_TURRET && StructureAt(slot).lane == st.Lane)
-                front = std::max<int32>(front, int32(LaneIndexNear(team, st.Lane, StructurePos(slot))));
+            if (!_structures[slot].Destroyed && StructureAt(slot).kind == BG_SRF_KIND_TURRET && StructureAt(slot).lane == lane)
+                front = std::max<int32>(front, int32(LaneIndexNear(team, lane, StructurePos(slot))));
         }
     }
     front = std::min<int32>(front, int32(path.size()) - 1);
-    // back along the path until SRF_BOT_BEHIND_WAVE behind it, and out of free turret reach
+    // back along the path until it is its distance behind it, and out of free turret reach
+    bool const ranged = FightsAtRange(bot);
+    float const behind = ranged ? SRF_BOT_BEHIND_WAVE_RANGED : SRF_BOT_BEHIND_WAVE;
+    float const engage = SRF_BOT_ENGAGE_RANGE + (ranged ? SRF_BOT_BEHIND_WAVE_RANGED - SRF_BOT_BEHIND_WAVE : 0.0f);
     int32 post = front;
     float walked = 0.0f;
-    while (post > 0 && walked < SRF_BOT_BEHIND_WAVE)
+    while (post > 0 && walked < behind)
     {
         walked += path[post].GetExactDist2d(&path[post - 1]);
         --post;
@@ -1525,28 +1732,47 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
         --post;
     out.Post = path[post];
 
+    // The support: a few yards behind its carry, wherever the carry is in the lane.
+    bool const support = st.Role == SRF_ROLE_SUPPORT;
+    if (support)
+        if (Player* carry = TeamCarry(team); carry && carry != bot && carry->GetExactDist2d(&out.Post) < SRF_BOT_GANK_RANGE)
+        {
+            int32 at = int32(LaneIndexNear(team, lane, carry->GetPosition()));
+            float back = 0.0f;
+            while (at > 0 && back < SRF_BOT_SUPPORT_BEHIND)
+            {
+                back += path[at].GetExactDist2d(&path[at - 1]);
+                --at;
+            }
+            out.Post = path[at];
+        }
+
     // What to hit near the post: an enemy minion low enough to last-hit, then any
     // enemy minion, then an enemy champion in reach, then a turret the minions tank.
     Unit* best = nullptr;
     int32 bestScore = 0;
+    bool const atPost = bot->GetExactDist2d(&out.Post) <= SRF_BOT_POST_NEAR;
     auto consider = [&](Unit* unit, int32 score)
     {
         if (!unit || !unit->IsAlive() || !bot->IsValidAttackTarget(unit))
             return;
-        // in reach of the post, or of the bot itself
-        if ((unit->GetExactDist2d(&out.Post) > SRF_BOT_ENGAGE_RANGE && unit->GetExactDist2d(bot) > SRF_BOT_ENGAGE_RANGE)
+        // in reach of the bot itself, or of the post once it is there
+        if ((unit->GetExactDist2d(bot) > engage && (!atPost || unit->GetExactDist2d(&out.Post) > engage))
             || !BotMayAttack(bot, unit))
             return;
+        if (unit->GetGUID() == current)
+            score += SRF_BOT_TARGET_KEEP;
         if (score > bestScore || (score == bestScore && best && unit->GetExactDist2d(bot) < best->GetExactDist2d(bot)))
         {
             best = unit;
             bestScore = score;
         }
     };
+    // A support leaves the last hits to its carry: a low minion is not its.
     for (Minion const& m : _minions)
         if (m.Team != team)
             if (Creature* minion = map->GetCreature(m.Guid))
-                consider(minion, minion->GetHealthPct() < 35.0f ? 40 : 20);
+                consider(minion, support ? (minion->GetHealthPct() < 35.0f ? 0 : 5) : (minion->GetHealthPct() < 35.0f ? 40 : 20));
     for (Player* enemy : TeamPlayers(OtherTeam(team)))
         consider(enemy, enemy->GetHealthPct() < 40.0f ? 50 : 30);
     for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
@@ -2720,7 +2946,8 @@ void BattlegroundSRF::UpdateTurrets(uint32 elapsed)
 
 void BattlegroundSRF::FireBolt(Unit* source, Unit* target, uint32 spellId, int32 damage)
 {
-    SpellCastResult const result = source->CastSpell(target, spellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(damage));
+    // a base point: the shot rows' die adds 1 (SpellEffectInfo::CalcValue)
+    SpellCastResult const result = source->CastSpell(target, spellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(std::max(0, damage - 1)));
     if (result == SPELL_CAST_OK)
         ++_boltsCast;
     else
@@ -2787,8 +3014,9 @@ void BattlegroundSRF::Report(uint32 diff)
             continue;
         Unit* ordered = !st.Orders.Target.IsEmpty() ? ObjectAccessor::GetUnit(*bot, st.Orders.Target) : nullptr;
         Unit* victim = bot->GetVictim();
-        TC_LOG_INFO("bg.battleground", "Summoner's Rift {} bot {} (class {}): lane {}, {}{}, {:.0f} yd from post, ordered {}, victim {}, hp {:.0f}%, casting {}.",
-            GetInstanceID(), bot->GetName(), uint32(bot->GetClass()), uint32(st.Lane),
+        static char const* const ROLE_NAMES[SRF_ROLE_COUNT] = { "top", "jungle", "mid", "carry", "support" };
+        TC_LOG_INFO("bg.battleground", "Summoner's Rift {} bot {} (class {}): {}, lane {}, {}{}, {:.0f} yd from post, ordered {}, victim {}, hp {:.0f}%, casting {}.",
+            GetInstanceID(), bot->GetName(), uint32(bot->GetClass()), st.Assigned ? ROLE_NAMES[st.Role % SRF_ROLE_COUNT] : "unassigned", uint32(st.Lane),
             st.HasOrders ? "orders" : "NO ORDERS", st.Orders.Retreat ? " (retreating)" : "",
             bot->GetExactDist2d(&st.Orders.Post), ordered ? ordered->GetName() : std::string("nothing"),
             victim ? victim->GetName() : std::string("nothing"), bot->GetHealthPct(),
@@ -2928,7 +3156,8 @@ void BattlegroundSRF::UpdateJungle(uint32 elapsed)
 // hit inside the leash gives some back and holds the drain for 1.5 seconds. Out
 // of patience, the camp resets: home, healed, deaf to attackers until there
 // (EnterEvadeMode). Back home, patience refills over a couple of seconds.
-// Baron is stationary and has no leash.
+// Baron is stationary (League: he never leaves his pit - creature_template_movement
+// Rooted on 922141) and has no leash. The S3 Dragon walks and can be pulled out.
 float constexpr SRF_LEASH_RANGE         = Yards(800.0f);    // from each monster's own spawn
 float constexpr SRF_PATIENCE_DRAIN      = 20.0f;            // a second, just outside the leash
 float constexpr SRF_PATIENCE_PER_YARD   = 4.0f;             // more a second per yard further out
@@ -3123,17 +3352,19 @@ bool BattlegroundSRF::HandleJungleKill(Creature* creature, Player* killer)
     return true;
 }
 
-// A stock spell with League's values: base points 0 keep the spell's own.
+// A stock spell with League's values (the amounts; 0 keeps the spell's own). The
+// rows roll a die of 1 on top of their base points (SpellEffectInfo::CalcValue),
+// so a base point is the amount less 1 - passed whole, Baron's 40 came out 41.
 void BattlegroundSRF::ApplyBuff(Player* player, uint32 spellId, int32 bp0, int32 bp1, int32 bp2, int32 durationMs)
 {
     player->RemoveAurasDueToSpell(spellId);
     CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
     if (bp0)
-        args.AddSpellMod(SPELLVALUE_BASE_POINT0, bp0);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT0, bp0 - 1);
     if (bp1)
-        args.AddSpellMod(SPELLVALUE_BASE_POINT1, bp1);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT1, bp1 - 1);
     if (bp2)
-        args.AddSpellMod(SPELLVALUE_BASE_POINT2, bp2);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT2, bp2 - 1);
     player->CastSpell(player, spellId, args);
     if (durationMs > 0)
         if (Aura* aura = player->GetAura(spellId))
@@ -3209,6 +3440,46 @@ bool BattlegroundSRF::HandlePlayerUnderMap(Player* player)
     Position const fountain = FountainPos(team);
     player->TeleportTo(GetMapId(), fountain.GetPositionX(), fountain.GetPositionY(), fountain.GetPositionZ() + 1.0f, fountain.GetOrientation());
     return true;
+}
+
+float BattlegroundSRF::DragonRange() const
+{
+    return SRF_DRAGON_RANGE;
+}
+
+// The fire goes through the target's armour, as a basic attack does, and on
+// landing it burns: put on, or already there, made to last its 4 sec again
+// without restarting the ticks (the wiki: it "refreshes as Dragon attacks").
+void BattlegroundSRF::DragonAttack(Creature* dragon, Unit* victim)
+{
+    if (!dragon || !victim)
+        return;
+    float const hit = (dragon->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE) + dragon->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE)) / 2.0f;
+    float const damage = hit * RiftLeague::ArmorMultiplier(float(victim->GetArmor()), _combatLevel);
+    FireBolt(dragon, victim, BG_SRF_SPELL_DRAGON_FIRE, std::max<int32>(1, int32(std::lround(damage))));
+
+    int32 const tick = std::max(1, int32(std::lround(UnitScale() * SRF_DRAGON_BURN / 4.0f)));
+    uint32 const flight = std::max<uint32>(1, uint32(dragon->GetExactDist(victim) / SRF_DRAGON_FIRE_SPEED * 1000.0f));
+    ObjectGuid const victimGuid = victim->GetGUID();
+    dragon->m_Events.AddEventAtOffset([dragon, victimGuid, tick]()
+    {
+        Unit* struck = ObjectAccessor::GetUnit(*dragon, victimGuid);
+        if (!struck || !struck->IsAlive() || !dragon->IsAlive())
+            return;
+        if (Aura* burn = struck->GetAura(BG_SRF_SPELL_DRAGON_BURN, dragon->GetGUID()))
+        {
+            burn->SetDuration(burn->GetMaxDuration());
+            return;
+        }
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT2, tick - 1);   // the row's die adds 1
+        dragon->CastSpell(struck, BG_SRF_SPELL_DRAGON_BURN, args);
+    }, Milliseconds(flight));
+}
+
+float BattlegroundSRF::FlatHonorMultiplier() const
+{
+    return std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.FlatHonorMultiplier", 2.0f));
 }
 
 void BattlegroundSRF::EndBattleground(uint32 winner)

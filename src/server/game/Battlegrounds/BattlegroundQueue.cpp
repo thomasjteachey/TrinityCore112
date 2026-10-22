@@ -1241,11 +1241,12 @@ void BattlegroundQueue::OfferPreparationSeats(BattlegroundTypeId bgTypeId, Battl
     if (!instances)
         return;
 
-    // Oldest first. Entry 0 is the template.
+    // Oldest first. Entry 0 is the template. Skirmishes, and the battlegrounds
+    // seated like them (Battleground::TakesSeatsInPreparationOnly, arenaType 0).
     std::vector<Battleground*> arenas;
     for (auto const& [instanceId, bg] : *instances)
-        if (instanceId && bg->isArena() && !bg->isRated() && !bg->IsCustomGame() && bg->IsBotFillMatch() &&
-            bg->GetArenaType() == arenaType && bg->GetBracketId() == bracket_id && InActivePool(bg) &&
+        if (instanceId && (bg->isArena() ? !bg->isRated() && bg->GetArenaType() == arenaType : bg->TakesSeatsInPreparationOnly()) &&
+            !bg->IsCustomGame() && bg->IsBotFillMatch() && bg->GetBracketId() == bracket_id && InActivePool(bg) &&
             bg->GetStatus() == STATUS_WAIT_JOIN)
             arenas.push_back(bg);
 
@@ -1288,7 +1289,10 @@ void BattlegroundQueue::OfferPreparationSeats(BattlegroundTypeId bgTypeId, Battl
                 entry = &waiting.emplace_back();
 
             entry->Entries.push_back(ginfo);
-            entry->Ready = entry->Ready && getMSTimeDiff(ginfo->JoinTime, nowMs) >= queueWaitMs && GroupAllowsArenaBotFill(ginfo);
+            // the "Arena bot matches" box is an arena queue's; a battleground's
+            // queue is one with bots already
+            entry->Ready = entry->Ready && getMSTimeDiff(ginfo->JoinTime, nowMs) >= queueWaitMs &&
+                (!arenaType || GroupAllowsArenaBotFill(ginfo));
             entry->Real = entry->Real || GroupHasRealPlayerInvitee(ginfo);
         }
     }
@@ -2126,10 +2130,10 @@ void BattlegroundQueue::UpdatePool(BattlegroundTypeId bgTypeId, BattlegroundBrac
         if (!InActivePool(bg))
             continue;
 
-        // A bot-filled skirmish admits latecomers only into its clones' seats
-        // and only before its gates open (OfferPreparationSeats); never as a
-        // free-slot backfill.
-        if (bg->isArena() && bg->IsBotFillMatch())
+        // A bot-filled skirmish - and a battleground seated like one, the Rift -
+        // admits latecomers only into its clones' seats and only before its gates
+        // open (OfferPreparationSeats); never as a free-slot backfill.
+        if (!bg->TakesQueueBackfill())
             continue;
 
         // DO NOT allow queue manager to invite new player to rated games
@@ -2179,6 +2183,10 @@ void BattlegroundQueue::UpdatePool(BattlegroundTypeId bgTypeId, BattlegroundBrac
                 continue;
 
             if (bg->GetStatus() <= STATUS_WAIT_QUEUE || bg->GetStatus() >= STATUS_WAIT_LEAVE)
+                continue;
+
+            // nor a match the queue may not seat anyone in (a Rift under way)
+            if (!bg->TakesQueueBackfill())
                 continue;
 
             if (bg->HasFreeSlots())
@@ -2270,8 +2278,14 @@ void BattlegroundQueue::UpdatePool(BattlegroundTypeId bgTypeId, BattlegroundBrac
         // pads battlegrounds with clones, the people waiting get one anyway
         // once they have waited long enough for company to show up.
         else if (bg_template->isBattleground() && sBattlegroundMgr->IsBotFillBattleground(bgTypeId))
+        {
+            // Seated like a skirmish: a clone's seat in a match still preparing
+            // comes first, so the people waiting meet the ones already in it.
+            if (bg_template->TakesSeatsInPreparationOnly())
+                OfferPreparationSeats(bgTypeId, bracket_id, 0, sBattlegroundMgr->GetBotFillQueueWaitMs());
             TryStartBotFilledMatch(bgTypeId, bracketEntry, bracket_id, MaxPlayersPerTeam, 0,
                 sBattlegroundMgr->GetBotFillQueueWaitMs());
+        }
         else if (bg_template->isArena() && sBattlegroundMgr->IsBotFillSkirmishArena(arenaType))
         {
             // A clone's seat in a skirmish still preparing comes first, so the

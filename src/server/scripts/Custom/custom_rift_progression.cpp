@@ -45,10 +45,12 @@
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "DBCStores.h"
+#include "Map.h"
 #include "Player.h"
 #include "RiftLeague.h"
 #include "RiftProgression.h"
 #include "ScriptMgr.h"
+#include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "Spell.h"
 #include "SpellHistory.h"
@@ -316,6 +318,60 @@ struct npc_rift_armsmaster : public CreatureAI
     }
 };
 
+// League Season 3's Dragon (creature_template 922140): a ranged basic attack at
+// 350 League units that never swings in melee. It closes to its reach - the
+// Season 3 Dragon walks, and can be pulled out of its pit - and fires on its own
+// attack timer; BattlegroundSRF::DragonAttack makes the shot and the burn.
+struct npc_rift_dragon : public ScriptedAI
+{
+    explicit npc_rift_dragon(Creature* creature) : ScriptedAI(creature) { }
+
+    BattlegroundSRF* Rift() const
+    {
+        BattlegroundMap* map = me->GetMap() ? me->GetMap()->ToBattlegroundMap() : nullptr;
+        Battleground* bg = map ? map->GetBG() : nullptr;
+        return bg && bg->GetTypeID(true) == BATTLEGROUND_SRF ? static_cast<BattlegroundSRF*>(bg) : nullptr;
+    }
+
+    void AttackStart(Unit* who) override
+    {
+        BattlegroundSRF* rift = Rift();
+        // Attack without the melee swing
+        if (who && rift && me->Attack(who, false))
+            me->GetMotionMaster()->MoveChase(who, rift->DragonRange() * 0.8f);
+    }
+
+    void Reset() override
+    {
+        _attackTimer = 0;
+    }
+
+    void UpdateAI(uint32 diff) override
+    {
+        if (!UpdateVictim())
+            return;
+        BattlegroundSRF* rift = Rift();
+        Unit* victim = me->GetVictim();
+        if (!rift || !victim)
+            return;
+        _attackTimer = _attackTimer > diff ? _attackTimer - diff : 0;
+        if (me->GetExactDist2d(victim) > rift->DragonRange())
+        {
+            if (me->GetMotionMaster()->GetCurrentMovementGeneratorType() != CHASE_MOTION_TYPE)
+                me->GetMotionMaster()->MoveChase(victim, rift->DragonRange() * 0.8f);
+            return;
+        }
+        if (_attackTimer || me->HasUnitState(UNIT_STATE_CASTING))
+            return;
+        me->SetFacingToObject(victim);
+        _attackTimer = me->GetAttackTime(BASE_ATTACK);
+        rift->DragonAttack(me, victim);
+    }
+
+private:
+    uint32 _attackTimer = 0;
+};
+
 void AddSC_custom_rift_progression()
 {
     new custom_rift_contribution_unit();
@@ -325,5 +381,6 @@ void AddSC_custom_rift_progression()
     RegisterSpellScript(spell_rift_recall);
     RegisterSpellScript(spell_rift_recall_league);
     RegisterCreatureAI(npc_rift_minion);
+    RegisterCreatureAI(npc_rift_dragon);
     RegisterCreatureAI(npc_rift_armsmaster);
 }

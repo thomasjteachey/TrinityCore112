@@ -620,6 +620,17 @@ class TC_GAME_API Battleground
         // there (an Obsidian Colosseum mirror, a Violet Hold wave) is somebody
         // else's business and counts as a participant.
         bool IsBotFillMatch() const { return m_IsBotFillMatch; }
+        // Seated like a bot-filled skirmish: people from the queue take its
+        // clones' seats while it prepares (BattlegroundQueue::OfferPreparationSeats)
+        // and nobody joins once its gates are open - no free-slot backfill.
+        virtual bool TakesSeatsInPreparationOnly() const { return false; }
+        // Whether the queue may still put somebody into this match's free slots.
+        bool TakesQueueBackfill() const
+        {
+            if (isArena() && IsBotFillMatch())
+                return false;
+            return !TakesSeatsInPreparationOnly() || (!IsBotFillMatch() && GetStatus() == STATUS_WAIT_JOIN);
+        }
         void SetBotFillMatch(bool enabled) { m_IsBotFillMatch = enabled; }
         // A match the queue made for people who would not have bots (a squad
         // match of real squads only): the bot fill leaves its empty seats empty.
@@ -651,6 +662,12 @@ class TC_GAME_API Battleground
         // match; everything else (custom games, templates) stays world.
         bool IsTournamentPool() const { return m_IsTournamentPool; }
         void SetTournamentPool(bool tournament) { m_IsTournamentPool = tournament; }
+        // Whether the tournament's rules hold in this match - no talent changes,
+        // the armour lock, the consumable ban, free reagents (Tournament::
+        // IsInTournamentMatch). A tournament-pool match plays by them, unless the
+        // battleground has its own for everything a character brings in and
+        // spends (Summoner's Rift), which keeps the pool for its matchmaking only.
+        virtual bool PlaysByTournamentRules() const { return IsTournamentPool(); }
         // True when the session belongs to a bot occupant of this match rather
         // than a person: any socketless virtual session, and a transient
         // in-memory clone when the match is bot-filled. The human accounting,
@@ -1152,6 +1169,11 @@ class TC_GAME_API Battleground
         // to the realm's honor per hour (BattlegroundMgr::GetHourlyHonorPayout).
         // Off for a mode whose payout already measures its own effort.
         virtual bool PaysHourlyHonor() const { return true; }
+        // The flat end-of-match honor times this, while the kind has too few
+        // recorded matches for the hourly payout (HourlyHonor.MinSamples) - a
+        // kind that runs far longer than a Warsong asks for more until its
+        // own medians take over.
+        virtual float FlatHonorMultiplier() const { return 1.0f; }
 
         // Player lists, those need to be accessible by inherited classes
         BattlegroundPlayerMap m_Players;

@@ -6210,6 +6210,18 @@ Centurion.Rift.PlayerGoldRate = 1.5
 Centurion.Rift.PlayerXpRate = 1.5
 
 #
+#    Centurion.Rift.FlatHonorMultiplier
+#        Description: Summoner's Rift's end-of-match honor, as a multiple of the flat
+#                     battleground payout, until the hourly payout has enough Rift
+#                     matches recorded (Centurion.Battleground.HourlyHonor.MinSamples);
+#                     from then on the Rift pays the realm's honor per hour like every
+#                     other kind (3v3 arena's). Custom games pay no honor at all.
+#                     .reload config applies a change at once.
+#        Default:     2.0 - (a League match runs two or three Warsongs)
+
+Centurion.Rift.FlatHonorMultiplier = 2.0
+
+#
 #    Centurion.Rift.UnitLevelRate
 #        Description: Summoner's Rift: how fast minions, jungle monsters and
 #                     structures level with the champions - the share of the way

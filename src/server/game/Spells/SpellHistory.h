@@ -132,14 +132,14 @@ public:
     // and the spell is a shock.
     void SyncShockCooldownsToClient(SpellInfo const* castSpell);
 
-    // League's cooldown reduction (Summoner's Rift, RiftProgression::
-    // CooldownReduction): StartCooldown shortens a champion's class spell on the
-    // server, and the client - which starts its own from Spell.dbc on
-    // SMSG_SPELL_GO - is told the real one right after it: call this right after
-    // SendSpellGo. A stock SPELLMOD_COOLDOWN aura cannot do it: the client adds a
-    // modifier once for every class-mask bit a spell has (Spell_C_GetSpellModifiers
-    // 0x7FD970), so a spell with two bits would show -40%. No-op unless
-    // StartCooldown shortened this cast's cooldown.
+    // League's cooldown reduction (Summoner's Rift): the Crest's cooldown
+    // modifier (RiftProgression::CrestCooldownMod) gives each class spell one
+    // bit of its mask, since the client adds a modifier once for every bit a
+    // spell carries (Spell_C_GetSpellModifiers 0x7FD970). For a spell it
+    // cannot reach that way (StartCooldown shortens it itself) or reaches on
+    // two bits, the client's own cooldown from SMSG_SPELL_GO is wrong, and it
+    // is told the real one: call this right after SendSpellGo. No-op unless
+    // StartCooldown marked this cast.
     void SyncReducedCooldownToClient(SpellInfo const* castSpell);
 
     // School lockouts

@@ -1882,7 +1882,7 @@ bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto)
         return true;
 
     Battleground const* battleground = player->GetBattleground();
-    if (!battleground || !battleground->IsTournamentPool())
+    if (!battleground || !battleground->PlaysByTournamentRules())
         return true;
 
     if (LoadoutConfig.ConsumablesFreeIn.count(uint32(battleground->GetTypeID())) != 0)

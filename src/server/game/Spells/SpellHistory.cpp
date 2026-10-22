@@ -348,19 +348,24 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
             }
         }
 
-        // League's cooldown reduction (Summoner's Rift): a cast's own class spell,
-        // cast for itself; the client hears after SMSG_SPELL_GO
-        // (SyncReducedCooldownToClient).
+        // League's cooldown reduction (Summoner's Rift): the Crest's modifier did
+        // it above; a class spell it cannot reach is shortened here. Either way,
+        // where the client's own cooldown comes out different it hears the real
+        // one after SMSG_SPELL_GO (SyncReducedCooldownToClient).
         if (spell && !itemId && spellInfo->SpellFamilyName && (cooldown > 0 || categoryCooldown > 0))
             if (Player* player = _owner->ToPlayer())
-                if (float const reduction = RiftProgression::CooldownReduction(player, spellInfo); reduction > 0.0f)
+            {
+                bool clientMisreads = false;
+                if (float const reduction = RiftProgression::CooldownReduction(player, spellInfo, &clientMisreads); reduction > 0.0f)
                 {
                     if (cooldown > 0)
                         cooldown = int32(float(cooldown) * (1.0f - reduction) + 0.5f);
                     if (categoryCooldown > 0)
                         categoryCooldown = int32(float(categoryCooldown) * (1.0f - reduction) + 0.5f);
-                    _reducedCooldownSpell = spellInfo->Id;
                 }
+                if (clientMisreads)
+                    _reducedCooldownSpell = spellInfo->Id;
+            }
 
         // replace negative cooldowns by 0
         if (cooldown < 0)

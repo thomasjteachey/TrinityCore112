@@ -194,9 +194,16 @@ float ToWowResist(float leagueResist)
     return 300.0f * m / (100.0f + m);
 }
 
+float FromWowResist(float wowResist)
+{
+    // ToWowResist never reaches 300; a WoW buff on top could
+    float const r = std::clamp(wowResist, 0.0f, 299.0f);
+    return 100.0f * r / (300.0f - r);
+}
+
 float ArmorMultiplier(float wowArmor, uint8 level)
 {
     float const a = std::max(0.0f, wowArmor);
-    return 1.0f - std::min(0.75f, a / (a + ArmorConstant(level)));
+    return 1.0f - a / (a + ArmorConstant(level));
 }
 }

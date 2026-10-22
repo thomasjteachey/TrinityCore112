@@ -547,26 +547,36 @@ do
 		driver:SetScript("OnUpdate", function()
 			local width, height = WorldFrame:GetWidth(), WorldFrame:GetHeight();
 			target, mouseover = UnitGUID("target"), UnitGUID("mouseover");
-			local n = CenturionUnitBarsScan();
-			for i = 1, n do
+			-- Where the player has WoW's own nameplates on, those are the bars:
+			-- none of ours over the units they cover (enemy plates: enemies and
+			-- neutral monsters; friendly plates: allies).
+			local enemyPlates = GetCVar("nameplateShowEnemies") == "1";
+			local friendPlates = GetCVar("nameplateShowFriends") == "1";
+			local scanned = CenturionUnitBarsScan();
+			local n = 0;
+			for i = 1, scanned do
 				local fx, fy, health, reaction, scale, guid, isPlayer = CenturionUnitBar(i);
-				local e = entries[i] or {};
-				entries[i] = e;
-				-- Sized in yards where the unit stands, so it shrinks with distance
-				-- as a name would, and hung where the name would be. A champion's
-				-- bar is bigger than a minion's, as in League.
-				local big = isPlayer == 1 and PLAYER_BAR_SCALE or 1;
-				local yard = (scale or 0) * height;
-				if ( yard > 0 ) then
-					e.w = math.min(math.max(yard * BAR_YARDS_WIDE, BAR_MIN_WIDTH), BAR_MAX_WIDTH) * big;
-					e.h = math.min(math.max(yard * BAR_YARDS_HIGH, 2), 3) * big;
-				else
-					e.w, e.h = BAR_WIDTH * big, BAR_HEIGHT * big;
+				local plated = (reaction <= 4 and enemyPlates) or (reaction >= 5 and friendPlates);
+				if ( not plated ) then
+					n = n + 1;
+					local e = entries[n] or {};
+					entries[n] = e;
+					-- Sized in yards where the unit stands, so it shrinks with distance
+					-- as a name would, and hung where the name would be. A champion's
+					-- bar is bigger than a minion's, as in League.
+					local big = isPlayer == 1 and PLAYER_BAR_SCALE or 1;
+					local yard = (scale or 0) * height;
+					if ( yard > 0 ) then
+						e.w = math.min(math.max(yard * BAR_YARDS_WIDE, BAR_MIN_WIDTH), BAR_MAX_WIDTH) * big;
+						e.h = math.min(math.max(yard * BAR_YARDS_HIGH, 2), 3) * big;
+					else
+						e.w, e.h = BAR_WIDTH * big, BAR_HEIGHT * big;
+					end
+					e.x, e.y = fx * width, fy * height - 1;
+					e.pad = math.max((CLICK_BAND - e.h) / 2, 1);
+					e.health, e.reaction, e.guid, e.player = health, reaction, guid, isPlayer == 1;
+					order[n] = e;
 				end
-				e.x, e.y = fx * width, fy * height - 1;
-				e.pad = math.max((CLICK_BAND - e.h) / 2, 1);
-				e.health, e.reaction, e.guid, e.player = health, reaction, guid, isPlayer == 1;
-				order[i] = e;
 			end
 			for i = n + 1, #order do
 				order[i] = nil;

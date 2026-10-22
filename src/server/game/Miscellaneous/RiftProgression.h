@@ -25,9 +25,11 @@
 #include <utility>
 #include <vector>
 
+class AuraEffect;
 class Player;
 class SpellInfo;
 class Unit;
+struct SpellModifier;
 
 // Summoner's Rift progression: every match starts at level 10 - where the first
 // talent point comes - and climbs back to the character's real level, the way a
@@ -163,6 +165,10 @@ namespace RiftProgression
     TC_GAME_API void SetMatchScale(Player* player, float scale, uint8 combatLevel);
     // That scale: a League number times it is the WoW one (0 outside a match).
     TC_GAME_API float MatchScale(Player const* player);
+    // What a champion's class and spec build toward - the bots' item lists:
+    // 0 melee, 1 ranged, 2 caster, 3 healer, 4 tank (its real talents' main
+    // tree). BattlegroundSRF hands out League's positions by it.
+    TC_GAME_API uint8 BuildRole(Player const* player);
     // A basic attack at range, as League counts one: the repeating shot (Auto
     // Shot, a wand's Shoot) or a warrior's or rogue's Shoot and Throw.
     TC_GAME_API bool IsRangedBasicAttack(SpellInfo const* info);
@@ -173,10 +179,22 @@ namespace RiftProgression
     // The Blessing of the Lizard Elder's slow and burn on whoever a champion's
     // basic attack struck (OnBasicAttackDamage).
     TC_GAME_API void LizardBurn(Player* attacker, Unit* victim, bool ranged);
-    // League's cooldown reduction on one of the champion's own class spells (the
-    // Crest of the Ancient Golem): the share it comes off, 0 for none
-    // (SpellHistory::StartCooldown).
-    TC_GAME_API float CooldownReduction(Player const* player, SpellInfo const* spellInfo);
+    // League's cooldown reduction on the champion's own class spells (the Crest
+    // of the Ancient Golem) is a real SPELLMOD_COOLDOWN pct modifier, so the
+    // client works the shortened cooldowns out itself - tooltips, timers, its
+    // "not ready" check - as Violet Hold's Boon of Alacrity does. The Crest's
+    // aura script builds it here (DoEffectCalcSpellMod), on a mask that gives
+    // each class spell one bit (the client adds a modifier once per bit).
+    TC_GAME_API void CrestCooldownMod(AuraEffect const* crest, SpellModifier*& mod);
+    // What SpellHistory::StartCooldown still takes off itself: the share, 0 for
+    // none, for the few class spells the modifier cannot reach. `clientMisreads`
+    // is set when the client's own cooldown will be wrong (a spell left out, or
+    // one with two bits on the mask), so it is re-told after SMSG_SPELL_GO.
+    TC_GAME_API float CooldownReduction(Player const* player, SpellInfo const* spellInfo, bool* clientMisreads = nullptr);
+    // League's flat magic penetration (runes, Sorcerer's Shoes), in League's
+    // points: Unit::CalculateAverageResistReduction takes it off the target's
+    // magic resist, converted back (RiftLeague::FromWowResist). 0 outside a match.
+    TC_GAME_API float MagicPenetration(Player const* player);
     // BattlegroundSRF: a champion killed a unit (minion, monster, champion), and a
     // champion died - the Bloodthirster's stacks.
     TC_GAME_API void OnUnitKill(Player* player);

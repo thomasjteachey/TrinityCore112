@@ -19,3 +19,4 @@ RiftPerf.lua
 RiftDeathTimer.lua
 RiftMap.lua
 RiftTurret.lua
+RiftAuraText.lua

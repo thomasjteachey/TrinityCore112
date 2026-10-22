@@ -1674,6 +1674,11 @@ void Battleground::EndBattleground(uint32 winner)
             winner_honor = hourlyPayout.Winner;
             loser_honor = hourlyPayout.Loser;
         }
+        else if (float const flat = FlatHonorMultiplier(); flat != 1.0f)
+        {
+            winner_honor = uint32(std::lround(float(winner_honor) * flat));
+            loser_honor = uint32(std::lround(float(loser_honor) * flat));
+        }
 
         // Honor earned in play. The payout below is not part of it: the match
         // has already left STATUS_IN_PROGRESS, so NoteMatchHonor ignores it.

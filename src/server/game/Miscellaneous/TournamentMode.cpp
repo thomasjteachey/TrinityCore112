@@ -1736,7 +1736,7 @@ bool IsInTournamentMatch(Player const* player)
         return false;
 
     Battleground const* battleground = player->GetBattleground();
-    return battleground && battleground->IsTournamentPool();
+    return battleground && battleground->PlaysByTournamentRules();
 }
 
 bool RefuseTalentChangeInMatch(Player* player, char const* what)

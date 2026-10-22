@@ -285,9 +285,6 @@ events:SetScript("OnEvent", function(self, event, prefix, message)
 	if ( not kind ) then
 		return;
 	end
-	if ( kind == "END" ) then
-		myTeam = nil;           -- the next match may put you on the other side
-	end
 	local f = {};
 	for field in string.gmatch(rest .. ":", "([^:]*):") do
 		table.insert(f, field);
@@ -295,5 +292,10 @@ events:SetScript("OnEvent", function(self, event, prefix, message)
 	local a = Word(kind, f[1] or "", f[2] or "", tonumber(f[3]) or 0, f[4], f[5], f[6], tonumber(f[7] or ""), tonumber(f[8] or ""));
 	if ( a ) then
 		Push(a);
+	end
+	-- Only once Victory / Defeat is worded: forgotten before it, the faction
+	-- stood in and a Chaos win read DEFEAT for an Alliance character.
+	if ( kind == "END" ) then
+		myTeam = nil;           -- the next match may put you on the other side
 	end
 end);

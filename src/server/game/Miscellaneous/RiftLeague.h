@@ -115,7 +115,10 @@ namespace RiftLeague
     TC_GAME_API float ToWowArmor(float leagueArmor, uint8 level);
     // This fork's resistance reduction is R / 300 (Unit::CalculateAverageResistReduction).
     TC_GAME_API float ToWowResist(float leagueResist);
-    // What survives `wowArmor` at `level`, League's 100 / (100 + a).
+    // And back: the League magic resist a resistance stands for, so League's
+    // magic penetration comes off in League's points.
+    TC_GAME_API float FromWowResist(float wowResist);
+    // What survives `wowArmor` at `level`, League's 100 / (100 + a), uncapped.
     TC_GAME_API float ArmorMultiplier(float wowArmor, uint8 level);
     // League's attack speed cap.
     float constexpr ATTACK_SPEED_CAP = 2.5f;

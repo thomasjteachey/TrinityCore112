@@ -51,6 +51,7 @@
 #include "Log.h"
 #include "LootMgr.h"
 #include "Miscellaneous/BotPvePower.h"
+#include "Miscellaneous/RiftLeague.h"
 #include "Miscellaneous/RiftProgression.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MotionMaster.h"
@@ -2516,7 +2517,8 @@ void Unit::HandleEmoteCommand(Emote emoteId)
     float damageReduction = 0.1f * armor / (8.5f * levelModifier + 40.f);
     damageReduction /= (1.0f + damageReduction);
 
-    RoundToInterval(damageReduction, 0.f, 0.75f);
+    // League has no cap: a / (100 + a) runs on past 300 armor's 75%.
+    RoundToInterval(damageReduction, 0.f, league ? 1.0f : 0.75f);
     return uint32(std::ceil(std::max(damage * (1.0f - damageReduction), 0.0f)));
 }
 
@@ -2526,8 +2528,12 @@ void Unit::HandleEmoteCommand(Emote emoteId)
     if (!(schoolMask & SPELL_SCHOOL_MASK_MAGIC))
         return 0;
 
+    // League's combat: League has only physical, magic and true damage, so holy
+    // is magic and magic resistance takes its share of it like any other.
+    bool const league = GetLeagueCombatBattleground(victim) != nullptr;
+
     // Npcs can have holy resistance
-    if ((schoolMask & SPELL_SCHOOL_MASK_HOLY) && victim->GetTypeId() != TYPEID_UNIT)
+    if ((schoolMask & SPELL_SCHOOL_MASK_HOLY) && victim->GetTypeId() != TYPEID_UNIT && !league)
         return 0;
 
     // Ignore spells that can't be resisted
@@ -2542,13 +2548,13 @@ void Unit::HandleEmoteCommand(Emote emoteId)
         return 0;
 
     float damageResisted = 0.0f;
-    if (averageResist >= 0.75f)
+    // League's combat: its average share every time, and no cap.
+    if (league)
+        damageResisted = damage * averageResist;
+    else if (averageResist >= 0.75f)
     {
         damageResisted = damage * 0.75f;
     }
-    // League's combat: magic resistance takes its average share every time.
-    else if (GetLeagueCombatBattleground(victim))
-        damageResisted = damage * averageResist;
     else
     {
         constexpr std::array<float, 4> quartiles = { 0.0f, 0.25f, 0.50f, 0.75f };
@@ -2577,9 +2583,11 @@ void Unit::HandleEmoteCommand(Emote emoteId)
         return 0.0f;
 
     float victimResistance = float(victim->GetResistance(schoolMask));
+    bool const league = GetLeagueCombatBattleground(victim) != nullptr;
 
-    // Players do not have dedicated holy resistance stats in PvP
-    if ((schoolMask & SPELL_SCHOOL_MASK_HOLY) && victim->GetTypeId() != TYPEID_UNIT)
+    // Players do not have dedicated holy resistance stats in PvP (a champion's
+    // magic resistance covers holy: CalcSpellResistedDamage)
+    if ((schoolMask & SPELL_SCHOOL_MASK_HOLY) && victim->GetTypeId() != TYPEID_UNIT && !league)
         victimResistance = 0.0f;
 
     // Respect spells that explicitly ignore resistances
@@ -2652,6 +2660,21 @@ void Unit::HandleEmoteCommand(Emote emoteId)
 
     static float const RESIST_SCALE = 300.0f;
     static float const RESIST_CAP = 0.75f;
+
+    // League's combat: the resistance is League's magic resist converted
+    // (RiftLeague::ToWowResist, 300 m / (100 + m)), so back to League's points,
+    // less the caster's League magic penetration in those points (flat
+    // penetration cannot take it below 0), and League's m / (100 + m), uncapped.
+    if (league)
+    {
+        float m = RiftLeague::FromWowResist(victimResistance);
+        if (casterOwner)
+            m = std::max(m - RiftProgression::MagicPenetration(casterOwner), 0.0f);
+        else if (casterUnit && casterUnit->ToPlayer())
+            m = std::max(m - RiftProgression::MagicPenetration(casterUnit->ToPlayer()), 0.0f);
+        return m / (100.0f + m);
+    }
+
     return std::min(victimResistance / RESIST_SCALE, RESIST_CAP);
 }
 

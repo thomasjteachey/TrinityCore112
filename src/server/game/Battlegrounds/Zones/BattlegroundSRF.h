@@ -114,6 +114,10 @@ enum BG_SRF_Spells
     BG_SRF_SPELL_BLUE_BUFF   = 94161, // "Crest of the Ancient Golem": cooldowns, mana
     BG_SRF_SPELL_RED_BUFF    = 94162, // "Blessing of the Lizard Elder": basic attacks burn and slow
     BG_SRF_SPELL_RED_BURN    = 94163, // the Blessing's burn and slow, on the one struck
+    // The Season 3 Dragon (npc_rift_dragon, DragonAttack): its ranged attack - the
+    // Chaos turret shot's Fireball missile, renamed - and the burn it leaves.
+    BG_SRF_SPELL_DRAGON_BURN = 94168, // "Dragon Fire": true damage (spell_rift_dragon_burn), 20% less attack speed
+    BG_SRF_SPELL_DRAGON_FIRE = 94169, // "Dragon Fire": the missile, its damage set per cast
     BG_SRF_SPELL_BARON_BUFF  = 94164  // "Exalted with Baron Nashor": damage, ability power, regeneration
 };
 
@@ -253,6 +257,22 @@ public:
     bool UsesSpiritGuideWaves() const override { return false; }
     uint32 GetTimeUntilResurrectionFor(Player const* player) const override;
     uint8 GetLeagueCombatLevel() const override { return _combatLevel; }
+    // A League match runs two or three Warsongs: Centurion.Rift.FlatHonorMultiplier
+    // until the hourly payout has the Rift's own medians (owner 2026-10-22: "2x the
+    // honor for now", then 3v3 arena's honor an hour).
+    float FlatHonorMultiplier() const override;
+    // The Season 3 Dragon's basic attack, timed by its AI (npc_rift_dragon): reach
+    // and the shot itself.
+    float DragonRange() const;
+    void DragonAttack(Creature* dragon, Unit* victim);
+    // League's lobby: a seat is taken before the match, never during it (owner
+    // 2026-10-22: "like arenas ... not join late").
+    bool TakesSeatsInPreparationOnly() const override { return true; }
+    // Its own field kit, talent points from level 10 and shop (RiftProgression):
+    // none of the tournament's rules, from the tournament queue too - the custom
+    // game never had them (owner 2026-10-22: "you cannot spend points in a
+    // tournament match wtf").
+    bool PlaysByTournamentRules() const override { return false; }
     void EndBattleground(uint32 winner) override;
 
 private:
@@ -447,15 +467,31 @@ private:
     // victim's bounty for its streak, less for a champion that keeps dying.
     uint32 KillBounty(uint32 victimStreak, uint32 victimDeathStreak) const;
 
+    // League's positions. Each team's are handed out when its match starts - the
+    // humans too, by what their class and spec fit, so the bots take the rest
+    // (AssignRoles) - and a bot plays its own loosely: the support walks behind
+    // its carry and leaves it the last hits, the jungler clears camps and ganks
+    // (ComputeBotOrders).
+    enum SrfRole : uint8 { SRF_ROLE_TOP, SRF_ROLE_JUNGLE, SRF_ROLE_MID, SRF_ROLE_CARRY, SRF_ROLE_SUPPORT, SRF_ROLE_COUNT };
+    std::unordered_map<ObjectGuid, uint8> _roles;       // every champion's, humans' as guessed
+    std::array<bool, PVP_TEAMS_COUNT> _rolesAssigned = { false, false };
+    void AssignRoles(TeamId team);
+    uint8 RoleOf(ObjectGuid guid) const;
+    Player* TeamCarry(TeamId team) const;
+
     struct BotState
     {
         uint8 Lane = BG_SRF_LANE_NONE;
+        uint8 Role = SRF_ROLE_MID;
         bool Assigned = false;
         bool Retreating = false;
         uint8 Camp = 0;            // the jungler's next camp
         BattlegroundBotOrders Orders;   // the last orders, reused for SRF_BOT_ORDERS_MS
         bool HasOrders = false;
         uint32 OrdersAt = 0;            // GameTime ms they were worked out
+        uint32 ShopBar = 0;             // copper the next trip home to shop waits for (raised when a trip buys nothing)
+        uint32 ShopSince = 0;           // GameTime ms it has stood at the fountain with the gold to shop
+        uint32 ShopGold = 0;            // its money then
     };
     // Per team: the standing enemy turrets free to shoot one of its champions (no
     // minion of the team inside their reach), refreshed with the brush tick.
