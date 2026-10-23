@@ -8,8 +8,8 @@ launcher players start the game with.
 - **Two kinds of character.** World characters level up under hardcore rules: full-loot
   death chests, field kits and War Mode. Tournament characters start at 60 and play only
   battlegrounds and arenas.
-- **Custom battlegrounds**, among them the Obsidian Colosseum, Tanaris, Violet Hold,
-  Scarlet Chapel and Blackrock Throne.
+- **Custom battlegrounds**, among them Summoner's Rift, the Obsidian Colosseum, Tanaris,
+  Violet Hold, Scarlet Chapel and Blackrock Throne.
 - **A world full of bots**: zone guardians, drifters and bounty hunters out in the world,
   and battleground fill bots in easy, medium and hard tiers.
 - Bounties and notoriety, challenge modes, arena replays, and dungeons that scale to the
@@ -25,7 +25,7 @@ you fork on GitHub, untick **Copy the `master` branch only**.
 | folder | what |
 |---|---|
 | `src/` | the server: TrinityCore plus Centurion's changes and the playerbot module |
-| `centurion/` | what the server runs on: databases, DBCs, client patches, client DLL, launcher source, and the live bot and dungeon-scaling configs |
+| `centurion/` | what the server runs on: databases, DBCs, Summoner's Rift's navmesh, client patches, client DLL, launcher source, and the live world, bot and dungeon-scaling configs |
 | `sql/` | TrinityCore's SQL tree, plus some of Centurion's own changes in `sql/custom`; the databases in `centurion/sql/` already contain them |
 | `clientedits/` | source for Centurion's addons, including the GM-only ones, and interface files |
 | `tools/` | maintenance scripts: map data, DBC editing, battleground builders |
@@ -127,7 +127,7 @@ GRANT ALL PRIVILEGES ON characters.* TO 'trinity'@'localhost';
 `import.sh` creates `auth`, `world` and `characters`, the names the `.conf.dist` files
 already use. To pick other names, set `AUTH_DB`, `WORLD_DB` or `CHAR_DB`. The script
 renames the database references inside triggers, views and procedures to match. It
-loads Centurion's 259 bots too; set `BOTS=0` to start without them. It refuses to
+loads Centurion's 637 bots too; set `BOTS=0` to start without them. It refuses to
 overwrite a database that already has tables unless you set `FORCE=1`. On Windows, run
 it from Git Bash.
 
@@ -157,6 +157,8 @@ your launcher once (step 8), or unpack them by hand:
 |---|---|---|
 | `patch-Y.zip` | the art base, `patch-Y.MPQ` | `Data\`, then rename it to `patch-X.MPQ` |
 | `patch-Z.zip` | `patch-Z.MPQ` | `Data\` |
+| `patch-4.zip` | `patch-4.MPQ`, rider seats for the stock hunter-pet models (Beast Rider) | `Data\` |
+| `patch-N.zip` | `patch-N.MPQ`, Summoner's Rift music | `Data\` |
 | `patch-dungeon-maps.zip` | `patch-M.MPQ`, dungeon floor maps | `Data\` |
 | `patch-enUS-6.zip` | login screen, character select and create | `Data\enUS\` |
 | `patch-enUS-7.zip` | interface | `Data\enUS\` |
@@ -194,15 +196,27 @@ without the Centurion patches, the custom maps come out stock. `mmaps_generator`
 hours. When it finishes, move `maps`, `vmaps`, `mmaps` and `Cameras` into
 `~/centurion-server/data/`.
 
+Then copy Summoner's Rift's navmesh over the one you generated:
+
+```bash
+cp centurion/mmaps/1690* ~/centurion-server/data/mmaps/
+```
+
+The bots' navmesh for the Rift (map 1690) is built from a server-only version of the
+map: no walkable safety floor under the ground, and every turret, inhibitor and nexus
+a solid block. The client carries neither, so one generated from it lets bots walk
+through structures and get stuck under the floor.
+
 ### 6. Configure
 
 In the folder with the `.conf.dist` files:
 
-- Copy `worldserver.conf.dist` to `worldserver.conf` and `authserver.conf.dist` to
-  `authserver.conf`.
+- Copy `centurion/conf/worldserver.conf` there, and `authserver.conf.dist` to
+  `authserver.conf`. That `worldserver.conf` is the live realm's, with its database
+  passwords, folders, SOAP, realm id and port put back to the `.dist` defaults.
 - Copy `centurion/conf/playerbots.conf` and `centurion/conf/AutoBalance.conf` next to
   `worldserver.conf`. They are the live realm's. `playerbots.conf` names the bot accounts
-  and battleground tiers from step 3 and keeps 150 bots online. Use `playerbots.conf.dist`
+  and battleground tiers from step 3 and keeps 400 bots online. Use `playerbots.conf.dist`
   instead if you loaded with `BOTS=0`.
 
 In `worldserver.conf`:
@@ -210,16 +224,19 @@ In `worldserver.conf`:
 - `DataDir`: the folder from step 5, for example `"/home/you/centurion-server/data"`.
 - `LoginDatabaseInfo`, `WorldDatabaseInfo` and `CharacterDatabaseInfo`: replace the
   second `trinity` (the password) with yours.
-- `Updates.EnableDatabases = 0`. These databases carry Centurion's own changes, so
-  TrinityCore's auto-updater must not replay stock updates over them.
-- To play like the live realm: `MaxPlayerLevel = 60`, `GameType = 1` (PvP),
-  `Centurion.Hardcore.Enable = 1` and `Centurion.Tournament.Enable = 1`. The `.dist`
-  file has 80, 0, 0 and 0.
+Everything else is already set the way Centurion plays: `Updates.EnableDatabases = 0`
+(these databases carry Centurion's own changes, so TrinityCore's auto-updater must not
+replay stock updates over them), `MaxPlayerLevel = 60`, `GameType = 1` (PvP),
+`Centurion.Hardcore.Enable = 1`, `Centurion.Tournament.Enable = 1`, and about 300 other
+settings that differ from the `.dist`: bounties, notoriety, world prices, Mok'gora,
+battleground rewards and spoils, transmog, the tournament zones and so on.
 
 In `authserver.conf`, set the password in `LoginDatabaseInfo` the same way.
 
-Every Centurion key is documented in the `.dist` files, so read through them and turn on
-what you want.
+To start from stock TrinityCore settings instead, copy `worldserver.conf.dist` to
+`worldserver.conf` and set at least `Updates.EnableDatabases = 0`. Most Centurion keys
+are documented in the `.dist` files; a few the `.dist` leaves out still have the values
+Centurion uses in `centurion/conf/worldserver.conf`.
 
 ### 7. Start the servers
 
@@ -274,7 +291,7 @@ the launcher says its auto-update is unavailable and keeps working.
 A player whose client already came from Centurion keeps its patches. Changing the update
 server only makes the launcher compare versions, and it downloads a patch again only
 when your `.version` file differs from the one it installed. The zips and `.version`
-files in this repository match what Centurion served on 2026-09-26.
+files in this repository match what Centurion served on 2026-10-23.
 
 **To build your own**, for your own name, defaults or patch list, point it at your
 servers in `centurion/launcher/src/common/constants.ts`:
@@ -324,18 +341,18 @@ auction house each have their own `Playerbot.Pve.*.Enable` key.
 |---|---|---|
 | `RandomPopulation.Enable` | 1 | logs bots in and out to hold the target |
 | `RandomPopulation.BotAccountIds` | 76,77,78 | the accounts whose characters are world bots. Everything on them is treated as a bot, so never put a real player's account here |
-| `RandomPopulation.TargetMin`, `TargetMax` | 150 | how many bots are online |
+| `RandomPopulation.TargetMin`, `TargetMax` | 400 | how many bots are online |
 | `RandomPopulation.MinLevel`, `MaxLevel` | 1, 60 | which characters may be picked |
 | `RandomPopulation.DynamicWorldLoad.Enable` | 1 | each real player online takes one bot's place, so the server load stays flat |
 | `Pve.ZoneGuardians.PerZone` | 1 | bots per classic zone that stay at the zone's level cap and guard it |
 | `Pve.Drifters.Count`, `Pve.Drifters.MaxPerZone` | 30, 15 | bots that travel to wherever real players are, and the most that gather in one zone |
 | `Pve.Rebirth.ZoneBanded` | 1 | each bot lives in one zone and is reborn at its bottom level when it outgrows it, keeping its gear and gold |
 | `Pve.Rebirth.Veterans` | 20 | bots that climb to 60 and stay there instead |
-| `Pve.Rebirth.VeteranFleetSize` | 256 | the fleet size those roles are dealt from. Keep it pinned when you change `TargetMax`, or the roles reshuffle |
+| `Pve.Rebirth.VeteranFleetSize` | 310 | the fleet size those roles are dealt from. Keep it pinned when you change `TargetMax`, or the roles reshuffle |
 | `Pve.GuildName` | AI Uprising | the world bots' guild |
 | `WhoListVisibility` | 2 | 2 lists bots in `/who` for everyone, 1 only for GMs, 0 never |
 
-**The PvP bots** are the 27 characters on account 79 (`Pve.PvpOnlyAccountIds = "79"`).
+**The PvP bots** are the 81 characters on account 79 (`Pve.PvpOnlyAccountIds = "79"`).
 They do no PvE at all; they stay parked and exist to be copied. World bots do not queue
 for battlegrounds themselves (`PvpLifecycle.PersistentBots.Enable = 0`). Instead:
 
@@ -360,8 +377,8 @@ id to `RandomPopulation.BotAccountIds`, or to `Pve.PvpOnlyAccountIds` for PvP-on
 and run `.reload config`. New bots level, train, gear up and spend their talents by
 themselves. To give a PvP bot a difficulty, add its guid to one of the tier lists.
 
-**Cost.** On the live realm, 150 bots take about 2.6 GB of memory and roughly two CPU
-cores. Two `worldserver.conf` keys cut that down, and the live realm runs both:
+**Cost.** Measured on the live realm with 150 bots: about 2.6 GB of memory and roughly
+two CPU cores. It runs 400 now. Two `worldserver.conf` keys cut that down, and the live realm runs both:
 `Centurion.Bots.SkipClientPackets = 1` and `Centurion.Bots.GridActivationRange = 90`
 (the `.dist` has them off). The `Playerbot.Governor.*` keys stop adding bots to matches,
 and end bot-only matches, when the server's update time runs long.
@@ -408,11 +425,11 @@ recompute on the spot, so avoid it while people are mid-fight.
 
 ## What the databases hold
 
-Snapshot taken 2026-09-26 from the live realm.
+Snapshot taken 2026-10-23 from the live realm.
 
 **World: all the game data.** One file per table under `centurion/sql/world/`.
 `broadcast_text_locale` is split into `.1.sql` and `.2.sql` so every file stays under
-GitHub's 50 MB warning. About 216 backup and scratch tables from the live database are
+GitHub's 50 MB warning. About 234 backup and scratch tables from the live database are
 left out (`zz_*`, `*_bak_*`, `tmp_*`, `*_backup`, `*_copy` and similar). The two `zz_`
 tables the server still reads, `zz_fieldkit_map` and `zz_tmode_item_map`, are included.
 The nine procedures in `_routines.sql` are maintenance tools, and several of them expect
@@ -425,9 +442,9 @@ a `classicmangos` database you will not have. The server never calls them.
   spells, talents, action bars and hunter pets. The `createTournamentKit` procedure
   copies from them when a tournament character is created. They belong to account 0, so
   nobody can log them in.
-- `characters_bots.sql`: all 259 bots with their gear, spells, talents, glyphs, quests,
+- `characters_bots.sql`: all 637 bots with their gear, spells, talents, glyphs, quests,
   reputation, skills, action bars, hunter pets and homebinds. It also has the two bot
-  guilds (AI Uprising and The Robot Masters) and the zone-guardian posts. The 27 named
+  guilds (AI Uprising and The Robot Masters) and the zone-guardian posts. The 81 named
   PvP bots on account 79 fill battlegrounds. Their guids are the same as on the live
   realm, because the easy, medium and hard tiers in `playerbots.conf` pick bots by guid.
 
@@ -442,7 +459,7 @@ No player accounts, player characters, mail, auction data or logs are included.
 ## About the patches and addons
 
 The zips in `centurion/patches/` are byte-identical to what the live download server
-served on 2026-09-26, and `patches.md5` has their checksums. `patch-Y.zip`,
+served on 2026-10-23, and `patches.md5` has their checksums. `patch-Y.zip`,
 `patch-enUS-6.zip` and `patch-enUS-A.zip` are stored as 49 MB pieces, because GitHub
 refuses files over 100 MB. `join.sh` or `join.ps1` puts them back together. The joined
 zips are git-ignored so they cannot be committed by accident.
@@ -452,10 +469,11 @@ still use it. The launcher writes it to disk as `patch-X.MPQ`, which frees the `
 for the optional World Terrain pack.
 
 `addons.zip` is the addon pack every player gets, because the launcher treats it as
-required. It holds the 17 `CENTURION_*` addons (character pane, class boot, diminishing
+required. It holds the 20 `CENTURION_*` addons (character pane, class boot, diminishing
 returns, energy ticker, Gurubashi timer, heirloom colours, key binding profiles,
 Mok'gora, replays, scoreboard, tooltips, WSG helper, zone bands, bot map, auto-auction,
-temporal tint, default options), TrinketMenu, Cooldowns, and Centurion's versions of
+temporal tint, default options, absorb bar, bounty board, and Summoner's Rift's shop,
+skill picks and match HUD), TrinketMenu, Cooldowns, and Centurion's versions of
 `Blizzard_TalentUI` and `Blizzard_BattlefieldMinimap`. Two GM-only addons are not in it,
 because players never get them: `CENTURION_GMOnline` (the GM Panel, whose Server page
 reads `.tick addon`) and `CENTURION_BotStats`. They are in `clientedits/addons/`. Copy
@@ -496,9 +514,11 @@ HD Textures and HD Battlegrounds carry no DBCs.
 ## Not included
 
 - **The optional HD packs.** See [The HD packs](#the-hd-packs) for where to get them.
-- **`maps`, `vmaps`, `mmaps`.** Generate them in step 5.
-- **The live `worldserver.conf`.** It holds passwords. Step 6 lists the settings that
-  make a realm play like Centurion; everything else is documented in the `.dist` file.
+- **`maps`, `vmaps`, `mmaps`.** Generate them in step 5. The one exception is
+  Summoner's Rift's navmesh, `centurion/mmaps/1690*`, which cannot be generated from the
+  client.
+- **The live realm's passwords.** `centurion/conf/worldserver.conf` is the live file
+  with them taken out; step 6 says where to put yours.
 
 The DLL can attest to the server (`ClientTweaks.Attest.*`, off by default). Its shared
 secret is compiled into the DLL and is public in the clientedits source. If you turn

@@ -150,6 +150,17 @@ export const FileMap: Record<
 		 * older archive that shipped under the same name on disk stops loading.
 		 */
 		removeWhenUnused?: string[];
+		/**
+		 * The files the archive installs into extractPath, under their names on
+		 * disk. The launcher records what it extracts, but a client can hold a
+		 * copy it has no record of: one installed by an older launcher, or left
+		 * behind after a force update with the patch turned off. These names find
+		 * it anyway. While the patch is not in use they are moved out of the
+		 * client, and while it is in use with nothing recorded they are what the
+		 * client is checked for. The key is no use for either: hd-creatures
+		 * installs patch-F.MPQ.
+		 */
+		files?: string[];
 	}
 > = {
 	['addons']: { extractPath: 'Interface/Addons' },
@@ -205,7 +216,15 @@ export const FileMap: Record<
 		extractPath: 'Data/enUS',
 		realms: ['barracks_plus', 'centurion', 'centurion_dev']
 	},
-	['patch-4']: { extractPath: 'Data', realms: ['legionnaire_plus'] },
+	// Rider seats for the stock hunter-pet models (Boar, cats, Bear, Raptor,
+	// Hyena, ...), so Beast Rider shows the hunter on the pet with HD Creatures
+	// off. Stock Boar.m2 has no seat at all, and the client hides a rider whose
+	// mount has none - the hunter turns into a riderless pig. '4' sorts below
+	// patch-F, so with HD Creatures on the HD pack's own fixed models still win.
+	['patch-4']: {
+		extractPath: 'Data',
+		realms: ['legionnaire_plus', 'centurion', 'centurion_dev']
+	},
 	// The production art base. patch-Z used to carry all of it; it is now the
 	// small dev-only delta layered above this, so a texture save no longer
 	// makes every dev redownload 700MB. On patch day the delta is merged down
@@ -224,6 +243,13 @@ export const FileMap: Record<
 		migrateFrom: 'patch-Y'
 	},
 	['patch-Z']: { extractPath: 'Data', devFile: 'itemforge/patch-Z-test' },
+	// Summoner's Rift's music: the MP3 under Sound\Music\Centurion and a
+	// SoundEntries.dbc with its row (18690), which patch-enUS-A's ZoneMusic 1690
+	// and AreaTable 30610 point at. Without this archive the Rift is silent.
+	// SoundEntries is the HD packs' copy (patch-F and patch-G carry identical
+	// ones) plus that row, and 'N' outranks both, so a later SoundEntries change
+	// in F or G has to be copied into this archive too or it will not show.
+	['patch-N']: { extractPath: 'Data', realms: ['centurion', 'centurion_dev'] },
 	// The in-instance floor maps. Barracks Plus was added 2026-09-04: it had
 	// never been on this list, because when the patch was introduced B+ still
 	// shared 'barracks' patches, and the split onto its own patch-enUS-A left
@@ -241,35 +267,46 @@ export const FileMap: Record<
 			'townsendboys'
 		]
 	},
+	// The client loads every MPQ in Data whether its toggle is on or not, and the
+	// HD packs carry whole DBCs that outrank the realm's (patch-F's
+	// CreatureDisplayInfo beats patch-enUS-A's, F=26 > A=21). A copy left behind
+	// with the toggle off therefore hides every creature, spell visual or map
+	// added since it was built - for that one player only. `files` names each
+	// pack's archives so turning it off moves them out even with no record.
 	['hd-creatures']: {
 		extractPath: 'Data',
 		optional: true,
 		label: 'HD Creatures',
-		description: 'Higher resolution retail creature models'
+		description: 'Higher resolution retail creature models',
+		files: ['patch-F.MPQ']
 	},
 	['hd-textures']: {
 		extractPath: 'Data',
 		optional: true,
 		label: 'HD Textures',
-		description: 'Higher resolution retail textures'
+		description: 'Higher resolution retail textures',
+		files: ['patch-T.MPQ']
 	},
 	['hd-spells']: {
 		extractPath: 'Data',
 		optional: true,
 		label: 'HD Spells',
-		description: 'Higher resolution retail spell visuals'
+		description: 'Higher resolution retail spell visuals',
+		files: ['patch-G.MPQ', 'patch-H.MPQ']
 	},
 	['hd-bgs']: {
 		extractPath: 'Data',
 		optional: true,
 		label: 'HD Battlegrounds',
-		description: 'Higher detail retail battleground maps'
+		description: 'Higher detail retail battleground maps',
+		files: ['patch-U.MPQ']
 	},
 	['hd-misc']: {
 		extractPath: 'Data',
 		optional: true,
 		label: 'HD Interface',
-		description: 'Shadowlands style user interface'
+		description: 'Shadowlands style user interface',
+		files: ['patch-L.MPQ']
 	},
 	// Reznik's world art (patch-Y.MPQ), lifted from his client patches: his
 	// versions of World, Tileset, Dungeons and Environments textures, his

@@ -23,7 +23,7 @@ CREATE TABLE `version` (
 
 LOCK TABLES `version` WRITE;
 /*!40000 ALTER TABLE `version` DISABLE KEYS */;
-INSERT INTO `version` VALUES ('TrinityCore rev. ae9950c72f29 2026-09-26 15:42:19 +0000 (origin/CENTURION branch) (Unix, RelWithDebInfo, Static)','ae9950c72f29','TDB 335.23061',23061);
+INSERT INTO `version` VALUES ('TrinityCore rev. b058ecf7d0af 2026-10-23 12:31:27 -0400 (origin/CENTURION branch) (Unix, RelWithDebInfo, Static)','b058ecf7d0af','TDB 335.23061',23061);
 /*!40000 ALTER TABLE `version` ENABLE KEYS */;
 UNLOCK TABLES;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;

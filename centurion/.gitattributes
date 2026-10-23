@@ -7,3 +7,4 @@ patches/*.md5      text eol=lf
 patches/join.sh    text eol=lf
 sql/**/*.sql       text eol=lf -diff linguist-generated
 sql/import.sh      text eol=lf
+mmaps/*            binary

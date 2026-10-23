@@ -7,6 +7,6 @@ INSERT INTO `account` (`id`, `username`, `salt`, `verifier`, `email`, `reg_mail`
 (79, 'PLAYERBOTFOUR', RANDOM_BYTES(32), RANDOM_BYTES(32), '', '', '127.0.0.1', 2);
 INSERT INTO `realmcharacters` (`realmid`, `acctid`, `numchars`) VALUES
 (1, 76, 2),
-(1, 77, 115),
-(1, 78, 115),
-(1, 79, 27);
+(1, 77, 255),
+(1, 78, 255),
+(1, 79, 81);

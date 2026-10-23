@@ -58,6 +58,52 @@ export const migrateRenamedPatch = async (
 };
 
 /**
+ * Moves the named files out of a patch's extract path into cachePath, so the
+ * client stops loading them and turning the patch back on can copy them back.
+ * Names match without regard to case (Proton clients sit on case-sensitive
+ * filesystems), and each file is cached under the name given, which is the
+ * one the restore looks for. A file that cannot be moved is reported rather
+ * than stopping the rest.
+ */
+export const stowPatchFiles = async (
+	clientDir: string,
+	extractPath: string,
+	files: string[],
+	cachePath: string
+) => {
+	const dir = path.join(clientDir, extractPath);
+	const entries = await fs.readdir(dir).catch(() => [] as string[]);
+	const onDisk = new Map(entries.map(entry => [entry.toLowerCase(), entry]));
+
+	const moved: string[] = [];
+	const failed: { file: string; error: unknown }[] = [];
+	const seen = new Set<string>();
+	for (const file of files) {
+		const key = file.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+
+		// A recorded file can sit in a subfolder; those are looked up as given.
+		const found = /[\\/]/.test(file)
+			? (await fs.pathExists(path.join(dir, file)))
+				? file
+				: undefined
+			: onDisk.get(key);
+		if (!found) continue;
+
+		try {
+			const destination = path.join(cachePath, file);
+			await fs.ensureDir(path.dirname(destination));
+			await fs.move(path.join(dir, found), destination, { overwrite: true });
+			moved.push(found);
+		} catch (error) {
+			failed.push({ file: found, error });
+		}
+	}
+	return { moved, failed };
+};
+
+/**
  * Deletes the named files from a patch's extract path, matching names without
  * regard to case (Proton clients sit on case-sensitive filesystems). Returns
  * the names that were actually removed.

@@ -19,12 +19,12 @@ CREATE TABLE `custom_hidden_itemset_bonus` (
   `spell_to_apply` int unsigned NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_set` (`itemset_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 LOCK TABLES `custom_hidden_itemset_bonus` WRITE;
 /*!40000 ALTER TABLE `custom_hidden_itemset_bonus` DISABLE KEYS */;
-INSERT INTO `custom_hidden_itemset_bonus` VALUES (1,1013,12,82667),(2,1036,3,17327),(3,1002,12,70613),(4,1009,12,1290),(5,1007,12,82669);
+INSERT INTO `custom_hidden_itemset_bonus` VALUES (1,1013,12,82667),(2,1036,3,17327),(3,1002,12,70613),(4,1009,12,1290),(5,1007,12,82669),(6,1078,8,90618),(7,2191,8,90618);
 /*!40000 ALTER TABLE `custom_hidden_itemset_bonus` ENABLE KEYS */;
 UNLOCK TABLES;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;

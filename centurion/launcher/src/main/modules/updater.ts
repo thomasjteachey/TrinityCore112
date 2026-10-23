@@ -22,7 +22,11 @@ import Observable from './observable';
 import resumableFetch, { type FetchProgress } from './resumableFetch';
 import { getCompatibilityRuntime } from './compatibility';
 import updateFetch from './updateFetch';
-import { migrateRenamedPatch, removePatchFiles } from './patchFiles';
+import {
+	migrateRenamedPatch,
+	removePatchFiles,
+	stowPatchFiles
+} from './patchFiles';
 
 const resolveBaseUrl = () => {
         const { launcherUpdateUrl } = Preferences.data;
@@ -449,6 +453,54 @@ class UpdaterClass extends Observable<UpdaterStatus> {
                 }
         };
 
+	/**
+	 * Takes a patch that is not in use out of the client: the game loads every
+	 * archive it finds, whatever the launcher's toggles say. Everything the
+	 * patch is known to install moves to the cache - the files recorded when
+	 * it was extracted, and the ones FileMap declares, which still find a copy
+	 * the launcher has no record of.
+	 *
+	 * With a recorded version the files land where turning the patch back on
+	 * restores them from. Without one there is no release to restore them as,
+	 * so they go to a holding folder that the patch's next download clears,
+	 * rather than being deleted outright.
+	 */
+	#stowUnusedPatch = async (
+		clientDir: string,
+		name: string,
+		meta: (typeof FileMap)[string],
+		version: string | undefined
+	) => {
+		const files = [...(this.#fileCache[name] ?? []), ...(meta.files ?? [])];
+		if (files.length === 0) return;
+
+		const cachePath = path.join(
+			clientDir,
+			'.launcher',
+			'cached',
+			name,
+			version ?? 'unversioned'
+		);
+		const { moved, failed } = await stowPatchFiles(
+			clientDir,
+			meta.extractPath,
+			files,
+			cachePath
+		);
+		if (moved.length !== 0) {
+			Logger.log(
+				`Moved ${moved.join(', ')} to ${path.relative(clientDir, cachePath)} because ${name} is not in use.`
+			);
+		}
+		for (const { file, error } of failed) {
+			Logger.log(
+				`Failed to move ${file} out of the client while ${name} is not in use`,
+				'error',
+				error
+			);
+		}
+	};
+
 	#loadCache = async (clientDir: string) => {
 		await fs.ensureDir(path.join(clientDir, '.launcher'));
 
@@ -612,45 +664,9 @@ class UpdaterClass extends Observable<UpdaterStatus> {
                                 const shouldUse = isOptionalEnabled && isRealmEnabled;
 
                                 if (!shouldUse) {
-                                        if (shouldCache && cachePath) {
-                                                // Move files to cache without nuking an existing copy when there's
-                                                // nothing new to move. This prevents losing cached data for realms
-                                                // that remain disabled across multiple verification runs.
-                                                const filesToMove = await Promise.all(
-                                                        (this.#fileCache[name] ?? []).map(async file => {
-                                                                const source = path.join(
-                                                                        clientDir,
-                                                                        meta.extractPath,
-                                                                        file
-                                                                );
-                                                                return {
-                                                                        file,
-                                                                        source,
-                                                                        exists: await fs.pathExists(source)
-                                                                };
-                                                        })
-                                                );
-
-                                                const existingSources = filesToMove.filter(({ exists }) => exists);
-
-                                                        if (existingSources.length !== 0) {
-                                                                await fs.ensureDir(path.join(clientDir, '.launcher', 'cached'));
-                                                                await fs.remove(cachePath);
-                                                                await fs.ensureDir(cachePath);
-
-                                                                for (const { file, source } of existingSources) {
-                                                                        try {
-                                                                                const destination = path.join(cachePath, file);
-                                                                                await fs.ensureDir(path.dirname(destination));
-                                                                                await fs.move(source, destination, {
-                                                                                        overwrite: true
-                                                                        });
-                                                                } catch (_error) {
-                                                                        console.error(_error);
-                                                                }
-                                                        }
-                                                }
-                                        }
+                                        // Only what is still in the client moves, one file at a time, so a
+                                        // cached copy survives any number of runs with the patch off.
+                                        await this.#stowUnusedPatch(clientDir, name, meta, cachedVersion);
                                         if (meta.removeWhenUnused) {
                                                 try {
                                                         const removed = await removePatchFiles(
@@ -674,9 +690,11 @@ class UpdaterClass extends Observable<UpdaterStatus> {
                                 version = await fetchVersion(`${remoteName(name)}.version`);
                                 cachePath = getCachePath();
 
+                                // With nothing recorded, check for the archives the patch declares;
+                                // the key-prefix guess in hasAllFiles is only for patches without.
                                 let expectedFiles = this.#fileCache[name];
-                                if (!expectedFiles) {
-                                        expectedFiles = [];
+                                if (!expectedFiles?.length) {
+                                        expectedFiles = [...(meta.files ?? [])];
                                         this.#fileCache[name] = expectedFiles;
                                 }
 
@@ -916,6 +934,16 @@ class UpdaterClass extends Observable<UpdaterStatus> {
                                 const shouldCache = !!meta.optional || !!meta.realms;
 
                                 if (!shouldUse) {
+                                        // Force update runs from Preferences without a verify first, so a
+                                        // patch turned off just before it is still in the client here.
+                                        // Stowed under its version before force forgets it, so it joins
+                                        // any copy already cached rather than making a second one.
+                                        await this.#stowUnusedPatch(
+                                                clientDir,
+                                                name,
+                                                meta,
+                                                this.#versionCache[name]
+                                        );
                                         if (force) {
                                                 delete this.#versionCache[name];
                                         }
@@ -1020,8 +1048,8 @@ class UpdaterClass extends Observable<UpdaterStatus> {
                                         : undefined;
 
                         let expectedFiles = this.#fileCache[name];
-                        if (!expectedFiles) {
-                                expectedFiles = [];
+                        if (!expectedFiles?.length) {
+                                expectedFiles = [...(meta.files ?? [])];
                                 this.#fileCache[name] = expectedFiles;
                                 cacheModified = true;
                         }

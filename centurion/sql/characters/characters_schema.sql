@@ -193,6 +193,29 @@ CREATE TABLE `calendar_invites` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `centurion_pvp_match_duration`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `centurion_pvp_match_duration` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `ended_at` int unsigned NOT NULL COMMENT 'unix time the match ended',
+  `type_id` int unsigned NOT NULL COMMENT 'BG played (random resolved); arenas: format queued (6 All Arenas, 889 Solo Shuffle)',
+  `arena_type` tinyint unsigned NOT NULL COMMENT '0 for battlegrounds, else team size',
+  `min_level` tinyint unsigned NOT NULL,
+  `max_level` tinyint unsigned NOT NULL,
+  `arena` tinyint unsigned NOT NULL,
+  `duration_sec` int unsigned NOT NULL COMMENT 'from gate countdown to end, preparation included',
+  `winner` tinyint unsigned NOT NULL COMMENT 'PvPTeamId: 0 horde, 1 alliance, 2 none',
+  `humans` tinyint unsigned NOT NULL COMMENT 'real players present at the end; 0-human rows are not used',
+  `players` tinyint unsigned NOT NULL,
+  `honor_win` int unsigned DEFAULT NULL COMMENT 'median honor winners earned in play (end payout excluded); NULL = no winners',
+  `honor_loss` int unsigned DEFAULT NULL COMMENT 'median honor losers earned in play; NULL = no losers',
+  `paid_win` int unsigned NOT NULL COMMENT 'end-of-match honor a winner was paid (before per-BG adjustments)',
+  `paid_loss` int unsigned NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_kind` (`type_id`,`arena_type`,`min_level`,`ended_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Centurion hourly match honor (BattlegroundMgr::LoadMatchDurations)';
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `channels`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -634,6 +657,15 @@ CREATE TABLE `character_pet_declinedname` (
   KEY `owner_key` (`owner`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `character_player_kills`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `character_player_kills` (
+  `guid` int unsigned NOT NULL,
+  `kills` int unsigned NOT NULL DEFAULT '0',
+  PRIMARY KEY (`guid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Centurion: lifetime player kills, shown on the inn bounty boards';
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `character_queststatus`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -1013,6 +1045,31 @@ CREATE TABLE `creature_respawn` (
   PRIMARY KEY (`guid`,`instanceId`),
   KEY `idx_instance` (`instanceId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COMMENT='Grid Loading System';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `custom_rift_stash`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `custom_rift_stash` (
+  `guid` int unsigned NOT NULL,
+  `real_level` tinyint unsigned NOT NULL,
+  `real_xp` int unsigned NOT NULL,
+  `money` int unsigned NOT NULL,
+  `talents` text NOT NULL,
+  `actions` text NOT NULL,
+  `skills` varchar(4096) NOT NULL DEFAULT '',
+  `pet_spells` varchar(4096) NOT NULL DEFAULT '',
+  PRIMARY KEY (`guid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Summoner''s Rift: what a character had before the match';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `custom_rift_weapons`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `custom_rift_weapons` (
+  `guid` int unsigned NOT NULL,
+  `shape` tinyint unsigned NOT NULL DEFAULT '0',
+  `subclass` int NOT NULL DEFAULT '-1',
+  PRIMARY KEY (`guid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Summoner''s Rift: the armsmaster''s weapon loadout (Tournament::RiftWeaponShape; ITEM_SUBCLASS_WEAPON_*, -1 the best of any)';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `custom_transmog_settings`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;

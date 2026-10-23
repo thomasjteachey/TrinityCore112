@@ -21,7 +21,6 @@ CREATE TABLE `game_event_battleground_holiday` (
 
 LOCK TABLES `game_event_battleground_holiday` WRITE;
 /*!40000 ALTER TABLE `game_event_battleground_holiday` DISABLE KEYS */;
-INSERT INTO `game_event_battleground_holiday` VALUES (18,1),(19,2),(20,3),(21,7),(53,9),(54,30);
 /*!40000 ALTER TABLE `game_event_battleground_holiday` ENABLE KEYS */;
 UNLOCK TABLES;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
