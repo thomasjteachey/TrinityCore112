@@ -395,8 +395,30 @@ hooksecurefunc("ToggleCharacter", function(tab)
 end);
 
 -- League words on the shop items' tooltips: they are held, not equipped. A stat
--- line is League's own number ("+70 Attack Damage", rift_shop.py), shown as League
--- shows it; a passive or an active says so.
+-- line is League's own number ("+70 Attack Damage", rift_shop.py), shown in white as
+-- League shows it; a passive or an active says so, in the passive green. One equip
+-- spell carries up to three lines (rift_shop.py packs them), often a stat and then a
+-- UNIQUE line, so each line is coloured on its own: coloured whole, by its first
+-- line, a UNIQUE Passive under a stat came out white.
+local WHITE_CODE = "|cffffffff";
+local PASSIVE_CODE = GREEN_FONT_COLOR_CODE or "|cff20ff20";
+
+local function Recolour(rest)
+	local parts = {};
+	for piece in string.gmatch(rest .. "\n", "(.-)\n") do
+		if ( piece ~= "" ) then
+			if ( string.sub(piece, 1, 1) == "+" ) then
+				table.insert(parts, WHITE_CODE .. piece .. "|r");
+			elseif ( string.find(piece, "^UNIQUE") or string.find(piece, "^Passive") ) then
+				table.insert(parts, PASSIVE_CODE .. piece .. "|r");
+			else
+				table.insert(parts, PASSIVE_CODE .. "Passive: " .. piece .. "|r");
+			end
+		end
+	end
+	return table.concat(parts, "\n");
+end
+
 local function Relabel(tooltip)
 	local _, link = tooltip:GetItem();
 	local id = link and tonumber(string.match(link, "item:(%d+)"));
@@ -409,11 +431,8 @@ local function Relabel(tooltip)
 		local text = line and line:GetText();
 		if ( text ) then
 			local rest = string.match(text, "^" .. (ITEM_SPELL_TRIGGER_ONEQUIP or "Equip:") .. "%s*(.*)$");
-			if ( rest and string.sub(rest, 1, 1) == "+" ) then
-				line:SetText(rest);
-				line:SetTextColor(1, 1, 1);
-			elseif ( rest ) then
-				line:SetText("Passive: " .. rest);
+			if ( rest ) then
+				line:SetText(Recolour(rest));
 			else
 				rest = string.match(text, "^" .. (ITEM_SPELL_TRIGGER_ONUSE or "Use:") .. "%s*(.*)$");
 				if ( rest ) then

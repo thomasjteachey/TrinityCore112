@@ -232,9 +232,20 @@ end
 local GRID_X = CAT_W + 30;
 local GRID_W = W - DETAIL_W - CAT_W - 60;
 local PER_ROW = math.floor((GRID_W + CELL_GAP) / (CELL + CELL_GAP));
+-- The grid scrolls, as League's shop does: a hundred items ran 90 pixels out of the
+-- bottom of the frame (owner, 2026-10-23: "the shop doesn't fit my frame"). The wheel
+-- scrolls it anywhere over the grid; the bar sits in the gap before the detail panel.
+local GRID_TOP, GRID_BOTTOM = 52, 40      -- pixels below the frame's top / above its bottom
+local gridScroll = CreateFrame("ScrollFrame", "CENTURION_RiftShopGridScroll", shop, "UIPanelScrollFrameTemplate");
+gridScroll:SetPoint("TOPLEFT", shop, "TOPLEFT", GRID_X - 4, -GRID_TOP);
+gridScroll:SetPoint("BOTTOMRIGHT", shop, "BOTTOMLEFT", GRID_X + GRID_W, GRID_BOTTOM);
+local gridChild = CreateFrame("Frame", nil, gridScroll);
+gridChild:SetWidth(GRID_W + 4);
+gridChild:SetHeight(1);
+gridScroll:SetScrollChild(gridChild);
 local tierLabels, grid = {}, {};
 for i, t in ipairs(TIERS) do
-	local fs = shop:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall");
+	local fs = gridChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall");
 	fs:SetTextColor(EDGE[1], EDGE[2], EDGE[3]);
 	fs:SetText(string.upper(t[2]));
 	tierLabels[i] = fs;
@@ -407,9 +418,10 @@ Refresh = function()
 	end
 	if ( search == "" ) then searchHint:Show(); else searchHint:Hide(); end
 
-	-- the grid, tier by tier, in League's price order
+	-- the grid, tier by tier, in League's price order, inside the scroll area
+	-- (gridChild's own space: x from its left, y down from its top)
 	local used = 0;
-	local y = -56;
+	local y = -4;
 	for i, t in ipairs(TIERS) do
 		local ids = {};
 		for id, item in pairs(ITEMS) do
@@ -421,14 +433,14 @@ Refresh = function()
 		local label = tierLabels[i];
 		if ( #ids > 0 ) then
 			label:ClearAllPoints();
-			label:SetPoint("TOPLEFT", shop, "TOPLEFT", GRID_X, y);
+			label:SetPoint("TOPLEFT", gridChild, "TOPLEFT", 4, y);
 			label:Show();
 			y = y - 16;
 			for k, id in ipairs(ids) do
 				used = used + 1;
 				local b = grid[used];
 				if ( not b ) then
-					b = ItemButton(shop, CELL);
+					b = ItemButton(gridChild, CELL);
 					b:SetScript("OnClick", function(self, button)
 						if ( button == "RightButton" ) then Buy(self.item); else selected = self.item; Refresh(); end
 					end);
@@ -437,7 +449,7 @@ Refresh = function()
 				local col = (k - 1) % PER_ROW;
 				local row = math.floor((k - 1) / PER_ROW);
 				b:ClearAllPoints();
-				b:SetPoint("TOPLEFT", shop, "TOPLEFT", GRID_X + col * (CELL + CELL_GAP), y - row * (CELL + 16));
+				b:SetPoint("TOPLEFT", gridChild, "TOPLEFT", 4 + col * (CELL + CELL_GAP), y - row * (CELL + 16));
 				Fill(b, id, held);
 				if ( id == selected ) then
 					b.edge:SetTexture(1, 0.9, 0.6, 1);
@@ -451,6 +463,8 @@ Refresh = function()
 		end
 	end
 	for i = used + 1, #grid do grid[i]:Hide(); end
+	gridChild:SetHeight(math.max(1, 4 - y));
+	gridScroll:UpdateScrollChildRect();
 
 	-- the detail panel
 	if ( selected and ITEMS[selected] ) then
@@ -507,7 +521,25 @@ end
 
 searchBox:SetScript("OnTextChanged", function(self) search = self:GetText() or ""; Refresh(); end);
 searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus(); end);
-shop:SetScript("OnShow", Refresh);
+
+-- The shop is laid out at 900 x 560; on a smaller screen or a larger UI scale it ran
+-- off the edges. It shrinks to fit inside the screen, clear of the action bars
+-- (owner, 2026-10-23: "the shop doesn't fit my frame"), and never grows past 1.
+local FIT_MARGIN_X, FIT_MARGIN_Y = 40, 150;
+local function FitToScreen()
+	local sw, sh = UIParent:GetWidth(), UIParent:GetHeight();
+	if ( not sw or sw <= 0 or not sh or sh <= 0 ) then
+		return;
+	end
+	local scale = math.min(1, (sw - FIT_MARGIN_X) / W, (sh - FIT_MARGIN_Y) / H);
+	if ( math.abs(shop:GetScale() - scale) > 0.001 ) then
+		shop:SetScale(scale);
+	end
+end
+shop:SetScript("OnShow", function()
+	FitToScreen();
+	Refresh();
+end);
 
 -- ------------------------------------------------------------------ the takeover
 
@@ -552,6 +584,15 @@ events:SetScript("OnEvent", function(self, event)
 end);
 events:RegisterEvent("PLAYER_ENTERING_WORLD");
 events:RegisterEvent("ZONE_CHANGED_NEW_AREA");
+-- a resolution or UI scale change while it is open
+local fitter = CreateFrame("Frame");
+fitter:RegisterEvent("DISPLAY_SIZE_CHANGED");
+fitter:RegisterEvent("UI_SCALE_CHANGED");
+fitter:SetScript("OnEvent", function()
+	if ( shop:IsShown() ) then
+		FitToScreen();
+	end
+end);
 
 -- League's shop key: open it anywhere in the Rift (buying is the server's to
 -- allow - at the fountain, or while dead); again to close it.
