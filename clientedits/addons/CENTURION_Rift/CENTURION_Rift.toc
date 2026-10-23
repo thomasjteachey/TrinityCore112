@@ -5,7 +5,7 @@
 ## Version: 1.0
 ## DefaultState: Enabled
 ## SavedVariablesPerCharacter: CENTURION_Rift_Position
-## SavedVariables: CENTURION_RiftPerf, CENTURION_RiftMusic
+## SavedVariables: CENTURION_RiftPerf
 
 RiftItems.lua
 CENTURION_Rift.lua
@@ -20,4 +20,3 @@ RiftDeathTimer.lua
 RiftMap.lua
 RiftTurret.lua
 RiftAuraText.lua
-RiftMusic.lua
