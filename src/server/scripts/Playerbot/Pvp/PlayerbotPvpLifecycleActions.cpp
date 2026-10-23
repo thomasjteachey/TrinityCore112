@@ -6934,6 +6934,97 @@ namespace playerbot
         }
     }
 
+    namespace
+    {
+        // A bot sent somewhere that has not taken a step in this long is held by
+        // something the orders cannot see. Summoner's Rift showed it as a bot
+        // standing two minutes at its fountain after a recall or a respawn, its
+        // post 400 yards off, with nothing in any log to say why.
+        constexpr uint32 kOrdersStallMs = 6 * IN_MILLISECONDS;
+        constexpr uint32 kOrdersStallLogMs = 30 * IN_MILLISECONDS;
+        constexpr float kOrdersStallStep = 2.0f;
+        // this close to where it was sent, a bot standing still is there
+        constexpr float kOrdersStallNear = 6.0f;
+
+        struct OrdersProgress
+        {
+            Position at;
+            uint32 sinceMs = 0;
+            uint32 lastMs = 0;
+            uint32 loggedMs = 0;
+        };
+
+        std::unordered_map<uint64, OrdersProgress> g_ordersProgressByGuid;
+
+        // The bot is not walking anywhere this tick (it fights, casts or holds
+        // its post): standing still is right, so the stall clock starts over.
+        void RestartOrdersProgress(Player* player)
+        {
+            if (OrdersProgress* progress = playerbot::LockedFind(g_ordersProgressByGuid, player->GetGUID().GetRawValue()))
+                progress->sinceMs = 0;
+        }
+
+        // Called each tick the orders send the bot to `destination`. Once it has
+        // stood kOrdersStallMs, one line says where it is, what holds its movement
+        // and what a fresh route looks like, and the movement it holds is dropped
+        // so this tick's order goes out new.
+        void WatchOrdersProgress(Player* player, Position const& destination)
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            OrdersProgress& progress = playerbot::LockedGetOrCreate(g_ordersProgressByGuid, player->GetGUID().GetRawValue());
+            bool const fresh = !progress.sinceMs || nowMs - progress.lastMs > 2 * IN_MILLISECONDS;
+            progress.lastMs = nowMs;
+            if (fresh || player->GetExactDist2d(&progress.at) >= kOrdersStallStep)
+            {
+                progress.at = player->GetPosition();
+                progress.sinceMs = nowMs;
+                return;
+            }
+            if (nowMs - progress.sinceMs < kOrdersStallMs)
+                return;
+
+            // Rooted, stunned or feared: a spell holds it, not the movement.
+            if (IsCrowdControlledForAction(player) || player->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_STUNNED))
+            {
+                progress.sinceMs = nowMs;
+                return;
+            }
+
+            uint32 const stoodMs = nowMs - progress.sinceMs;
+            progress.sinceMs = nowMs;
+            progress.at = player->GetPosition();
+
+            MotionMaster* motionMaster = player->GetMotionMaster();
+            if (!progress.loggedMs || nowMs - progress.loggedMs >= kOrdersStallLogMs)
+            {
+                progress.loggedMs = nowMs;
+                MovementGenerator const* generator = motionMaster ? motionMaster->GetCurrentMovementGenerator() : nullptr;
+                Position const safe = BuildCollisionSafeDestination(player, destination);
+                PathGenerator path(player);
+                path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
+                bool const pathOk = path.CalculatePath(safe.GetPositionX(), safe.GetPositionY(), safe.GetPositionZ(), false);
+                G3D::Vector3 const end = path.GetActualEndPosition();
+                float const short2d = std::sqrt((end.x - safe.GetPositionX()) * (end.x - safe.GetPositionX()) +
+                    (end.y - safe.GetPositionY()) * (end.y - safe.GetPositionY()));
+                TC_LOG_INFO("playerbots.pvp.lifecycle",
+                    "Battleground orders stall: {} ({}) on map {} stood {} s at ({:.1f}, {:.1f}, {:.1f}), {:.0f} yd from ({:.1f}, {:.1f}, {:.1f}); "
+                    "motion {} flags 0x{:X}, spline {}, moving {}, casting {}, mounted {}, form {}; a route there: {} type 0x{:X}, {} points, "
+                    "ends {:.1f} yd short. Movement dropped.",
+                    player->GetName(), player->GetGUID().ToString(), player->GetMapId(), stoodMs / IN_MILLISECONDS,
+                    player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetExactDist2d(&destination),
+                    destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
+                    generator ? uint32(generator->GetMovementGeneratorType()) : uint32(MAX_MOTION_TYPE), generator ? uint32(generator->Flags) : 0u,
+                    !player->movespline->Initialized() ? "none" : player->movespline->Finalized() ? "finalized" : "running",
+                    player->isMoving() ? 1 : 0, player->HasUnitState(UNIT_STATE_CASTING) ? 1 : 0, player->IsMounted() ? 1 : 0,
+                    uint32(player->GetShapeshiftForm()), pathOk ? "ok" : "failed", uint32(path.GetPathType()), uint32(path.GetPath().size()), short2d);
+            }
+
+            if (motionMaster)
+                motionMaster->Clear();
+            player->StopMoving();
+        }
+    }
+
     // The battleground's orders, carried out: channel the recall it says is safe,
     // walk home without stopping when it says go home, fight what it names, or
     // hold the post it gives. A victim the orders no longer name - one that ran
@@ -6959,7 +7050,10 @@ namespace playerbot
 
         // A cast in progress (the recall above all) is left to finish.
         if (player->HasUnitState(UNIT_STATE_CASTING))
+        {
+            RestartOrdersProgress(player);
             return true;
+        }
 
         if (orders.RecallSpell)
         {
@@ -6967,17 +7061,38 @@ namespace playerbot
             if (MotionMaster* motionMaster = player->GetMotionMaster())
                 motionMaster->Clear();
             if (player->CastSpell(player, orders.RecallSpell, false) == SPELL_CAST_OK)
+            {
+                RestartOrdersProgress(player);
                 return true;
+            }
         }
 
         if (orders.Retreat)
+        {
+            // home already, waiting to heal or to shop: standing is right
+            if (player->IsWithinDist2d(&orders.Post, kOrdersStallNear))
+                RestartOrdersProgress(player);
+            else
+                WatchOrdersProgress(player, orders.Post);
             return MoveToBattlegroundObjective(player, battleground, orders.Post) || player->isMoving();
+        }
 
         if (target && playerbot::EngageSelectedEnemyPlayer(player, target, "battleground-orders"))
+        {
+            RestartOrdersProgress(player);
             return true;
+        }
 
         if (!player->IsWithinDist2d(&orders.Post, 2.5f))
+        {
+            // a route's last vertex can stop a few yards short of the post
+            if (player->IsWithinDist2d(&orders.Post, kOrdersStallNear))
+                RestartOrdersProgress(player);
+            else
+                WatchOrdersProgress(player, orders.Post);
             return MoveToBattlegroundObjective(player, battleground, orders.Post) || player->isMoving();
+        }
+        RestartOrdersProgress(player);
         return true;
     }
 
