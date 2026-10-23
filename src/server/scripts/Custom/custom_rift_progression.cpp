@@ -257,6 +257,75 @@ public:
     }
 };
 
+// The Rift's mounts - the shop's two steeds and the Tauren's Plainsrunning - come
+// off at any hit, whoever or whatever deals it (a champion, a minion, a turret, a
+// monster, the enemy fountain; a blow the shields took whole too), a mount being
+// cast is broken off, and a mount waits 5 sec before it can be ridden again: from
+// the moment it is mounted, and from the hit that knocked the champion off (owner,
+// 2026-10-23: "getting hit for any reason should dismount and mounting should have
+// a 5 second cooldown (summoner's rift). plainstriding needs to be considered too").
+namespace
+{
+    // 94150 Summoner's Steed, 94151 Swift Summoner's Steed, 89153 Plainsrunning
+    uint32 constexpr RIFT_MOUNT_SPELLS[] = { 94150, 94151, 89153 };
+    std::chrono::seconds constexpr RIFT_MOUNT_COOLDOWN(5);
+
+    bool IsRiftMountSpell(uint32 spellId)
+    {
+        return std::find(std::begin(RIFT_MOUNT_SPELLS), std::end(RIFT_MOUNT_SPELLS), spellId) != std::end(RIFT_MOUNT_SPELLS);
+    }
+
+    // All three at once, so a Tauren knocked off a steed cannot run off on Plainsrunning.
+    void StartRiftMountCooldown(Player* player)
+    {
+        std::vector<uint32> spells(std::begin(RIFT_MOUNT_SPELLS), std::end(RIFT_MOUNT_SPELLS));
+        for (uint32 spell : spells)
+            player->GetSpellHistory()->AddCooldown(spell, 0, RIFT_MOUNT_COOLDOWN);
+        player->GetSpellHistory()->SendCooldowns(spells);
+    }
+}
+
+class custom_rift_mount_unit : public UnitScript
+{
+public:
+    custom_rift_mount_unit() : UnitScript("custom_rift_mount_unit") { }
+
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
+    {
+        // a hit: damage taken, or a blow from someone else that the shields took whole
+        if (!damage && (!attacker || attacker == victim))
+            return;
+        if (!RiftOfVictim(victim))
+            return;
+        Player* player = victim->ToPlayer();
+        bool knocked = false;
+        if (player->HasAuraType(SPELL_AURA_MOUNTED))
+        {
+            player->RemoveAurasByType(SPELL_AURA_MOUNTED);
+            knocked = true;
+        }
+        if (Spell const* spell = player->GetCurrentSpell(CURRENT_GENERIC_SPELL); spell && IsRiftMountSpell(spell->GetSpellInfo()->Id))
+        {
+            player->InterruptSpell(CURRENT_GENERIC_SPELL, false);
+            knocked = true;
+        }
+        if (knocked)
+            StartRiftMountCooldown(player);
+    }
+};
+
+class custom_rift_mount_player : public PlayerScript
+{
+public:
+    custom_rift_mount_player() : PlayerScript("custom_rift_mount_player") { }
+
+    void OnSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
+    {
+        if (spell && IsRiftMountSpell(spell->GetSpellInfo()->Id) && RiftOf(player))
+            StartRiftMountCooldown(player);
+    }
+};
+
 // The armsmaster at each fountain (922152 Order, 922153 Chaos): the field kit's
 // weapons as the champion wants them - a one-hander and a shield, two
 // one-handers, a two-hander, two two-handers (Titan's Grip, which Bloodthirsty
@@ -590,6 +659,8 @@ void AddSC_custom_rift_progression()
 {
     new custom_rift_contribution_unit();
     new custom_rift_contribution_player();
+    new custom_rift_mount_unit();
+    new custom_rift_mount_player();
     AddonRequestRoutes::Register("RIFTPICK", &RiftProgression::HandlePickRequest);
     AddonRequestRoutes::Register("RIFTSTATE", &RiftProgression::HandleStateRequest);
     AddonRequestRoutes::Register("RIFTBUY", &RiftProgression::HandleBuyRequest);
