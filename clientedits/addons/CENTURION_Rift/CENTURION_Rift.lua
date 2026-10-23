@@ -332,8 +332,12 @@ end
 -- (owner, 2026-10-22, zoning back into Gurubashi). And just after login, where
 -- a match a crash or a restart cut off is handed back.
 local spellbookSpam = {};
-for _, fmt in ipairs({ ERR_LEARN_SPELL_S, ERR_LEARN_ABILITY_S, ERR_LEARN_PASSIVE_S, ERR_SPELL_UNLEARNED_S,
-		ERR_LEARN_RECIPE_S, ERR_LEARN_COMPANION_S, ERR_LEARN_MOUNT_S }) do
+-- By name: this client has no ERR_LEARN_PASSIVE_S or ERR_LEARN_MOUNT_S, and ipairs over
+-- the strings themselves stopped at the first missing one - "You have unlearned ..."
+-- was never matched.
+for _, name in ipairs({ "ERR_LEARN_SPELL_S", "ERR_LEARN_ABILITY_S", "ERR_LEARN_PASSIVE_S", "ERR_SPELL_UNLEARNED_S",
+		"ERR_LEARN_RECIPE_S", "ERR_LEARN_COMPANION_S", "ERR_LEARN_MOUNT_S" }) do
+	local fmt = _G[name];
 	if ( fmt ) then
 		local pattern = string.gsub(fmt, "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1");
 		pattern = string.gsub(pattern, "%%%%s", ".+");
@@ -357,11 +361,27 @@ end);
 local function QuietSpellbook()   -- RIFT:END starts the quiet too
 	quietSince = GetTime();
 end
+-- In the Rift by the zone, or by the battlefield: the match hands the champion its
+-- spells and skills as it joins, while the zone text is still the one it left (the
+-- owner's chat, 2026-10-23: a screen of "You have unlearned ..." and skill-ups, all
+-- at the second he entered). The battlefield status says "active" before that.
+local function RiftActive()
+	if ( GetRealZoneText() == RIFT_ZONE or inRift ) then
+		return true;
+	end
+	for i = 1, (MAX_BATTLEFIELD_QUEUES or 3) do
+		local status, mapName = GetBattlefieldStatus(i);
+		if ( status == "active" and mapName == RIFT_ZONE ) then
+			return true;
+		end
+	end
+	return false;
+end
 ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", function(self, event, message, ...)
 	if ( type(message) ~= "string" ) then
 		return false;
 	end
-	if ( GetRealZoneText() ~= RIFT_ZONE and not inRift and GetTime() - quietSince > QUIET_AFTER ) then
+	if ( not RiftActive() and GetTime() - quietSince > QUIET_AFTER ) then
 		return false;
 	end
 	for _, pattern in ipairs(spellbookSpam) do
@@ -378,9 +398,10 @@ end);
 -- puts the real level and skills back: none of it belongs in the chat. Same
 -- window as the spellbook lines above - in the Rift, and for a while after.
 local function RiftQuiet()
-	return GetRealZoneText() == RIFT_ZONE or inRift or GetTime() - quietSince <= QUIET_AFTER;
+	return RiftActive() or GetTime() - quietSince <= QUIET_AFTER;
 end
-for _, fmt in ipairs({ SKILL_RANK_UP, ERR_SKILL_GAINED_S, ERR_SKILL_UP_SI }) do
+for _, name in ipairs({ "SKILL_RANK_UP", "ERR_SKILL_GAINED_S", "ERR_SKILL_UP_SI" }) do
+	local fmt = _G[name];
 	if ( fmt ) then
 		local pattern = string.gsub(fmt, "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1");
 		pattern = string.gsub(pattern, "%%%%[sd]", ".+");
