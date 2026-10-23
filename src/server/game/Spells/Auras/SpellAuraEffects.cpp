@@ -40,6 +40,7 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "T2UnitHooks.h"
+#include "Miscellaneous/RiftProgression.h"
 #include "StringFormat.h"
 #include "ThreatManager.h"
 #include "Unit.h"
@@ -5501,6 +5502,9 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     target->SendPeriodicAuraLog(&pInfo);
 
     Unit::DealDamage(caster, target, damage, &cleanDamage, DOT, GetSpellInfo()->GetSchoolMask(), GetSpellInfo(), true);
+    // League's spell vamp on a damage-over-time tick (Summoner's Rift's items)
+    if (caster && damage && caster->GetTypeId() == TYPEID_PLAYER)
+        RiftProgression::SpellVamp(caster->ToPlayer(), target, damage, GetSpellInfo());
 
     Unit::ProcSkillsAndAuras(caster, target, procAttacker, procVictim, PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, hitMask, nullptr, &damageInfo, nullptr);
 }

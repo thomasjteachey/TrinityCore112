@@ -2568,6 +2568,12 @@ int32 WorldObject::ModSpellDuration(SpellInfo const* spellInfo, WorldObject cons
         if (int32 boonPct = VioletHoldBoons::GetCcDurationReductionPct(unitTarget, uint32(mechanicMask)))
             AddPct(duration, -boonPct);
 
+        // Summoner's Rift: League's tenacity (Mercury's Treads, Spirit of the
+        // Ancient Golem) off crowd control, slows included.
+        if (Player const* champion = unitTarget->ToPlayer())
+            if (float const tenacity = RiftProgression::Tenacity(champion, spellInfo, effectMask); tenacity > 0.0f)
+                AddPct(duration, -tenacity);
+
         // there are only negative mods currently
         durationMod_always = unitTarget->GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL, spellInfo->Dispel);
         durationMod_not_stack = unitTarget->GetMaxNegativeAuraModifierByMiscValue(SPELL_AURA_MOD_AURA_DURATION_BY_DISPEL_NOT_STACK, spellInfo->Dispel);

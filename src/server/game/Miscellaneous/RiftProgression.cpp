@@ -29,6 +29,7 @@
 #include "Bag.h"
 #include "Item.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "Player.h"
@@ -89,7 +90,7 @@ namespace
     // The fountain shops' League items (import/rift/scripts/rift_shop.py): bought
     // for the match, gone with it.
     uint32 constexpr SHOP_ITEM_FIRST = 991000;
-    uint32 constexpr SHOP_ITEM_LAST = 991099;
+    uint32 constexpr SHOP_ITEM_LAST = 991299;     // 2026-10-22: every League S3 item (991099 before)
 
     // League's build paths (world `rift_item_recipe`): an item's components.
     std::unordered_map<uint32, std::vector<uint32>> Recipes;
@@ -162,6 +163,15 @@ namespace
     // bar, then the bottom-left, bottom-right, right and right-2 bars.
     uint8 constexpr BAR_ORDER[] = { 0, 60, 48, 24, 36 };
 
+    // A held item's League aura: what it gives the champions near the holder (GatherAuras).
+    struct AuraEmit
+    {
+        std::string Name;          // the League name, or "#<entry>" for an unnamed one
+        RiftLeague::Unique Stat;
+        float Value;
+    };
+    using UniqueStats = std::array<float, size_t(RiftLeague::Unique::Count)>;
+
     struct State
     {
         uint8 RealLevel = 1;
@@ -227,6 +237,22 @@ namespace
         // A rogue's poison coats the match taught (AddPoisonChains), as dependent
         // spells - never written down - and taken back on the way out.
         std::unordered_set<uint32> MatchPoisons;
+        // A talent's trained ranks the character never trained, picked in the match
+        // (HandlePickRequest): taught the same way, taken back the same way.
+        std::unordered_set<uint32> MatchRanks;
+        // League's UNIQUE item effects (HeldItemEffects): the champion's own, the auras its
+        // items give the champions near it, and the spell vamp it gets from its allies'
+        // (SetChampionCarriers), for the hooks outside SyncItems.
+        UniqueStats Unique = { };
+        std::vector<AuraEmit> Emits;
+        float ReceivedSpellVamp = 0.0f;
+        float CooldownReduction = 0.0f;
+        // The stacking items: Mejai's Soulstealer and Sword of the Occult (2 a kill, 1 an
+        // assist, a third lost on death), Seeker's Armguard (one a unit killed).
+        uint8 MejaiStacks = 0;
+        uint8 OccultStacks = 0;
+        uint8 SeekerStacks = 0;
+        float GoldOwed = 0.0f;     // gold every 10 sec: the fractions a tick leaves
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -347,6 +373,27 @@ namespace
                 continue;
             uint32 const first = sSpellMgr->GetFirstSpellInChain(spellId);
             state.Chains[first ? first : spellId].Ranks.push_back(spellId);
+        }
+        // ---- the trained ranks after a talent (Mortal Strike 2-4, Hemorrhage 2-5): every
+        // one is a pick, whatever the real character trained. Only the ranks it had
+        // trained AND had active were here: a talent of its other spec has them put aside
+        // (disabled), one it never took has none, and either, taken in the match, could
+        // never be ranked up. A rank it does not know is taught for the match alone
+        // (HandlePickRequest, MatchRanks).
+        for (TalentEntry const* talent : sTalentStore)
+        {
+            TalentTabEntry const* tab = talent ? sTalentTabStore.LookupEntry(talent->TabID) : nullptr;
+            if (!tab || !(tab->ClassMask & player->GetClassMask()) || !talent->SpellRank[0])
+                continue;
+            uint32 const first = talent->SpellRank[0];
+            for (uint32 next = sSpellMgr->GetNextSpellInChain(first); next; next = sSpellMgr->GetNextSpellInChain(next))
+            {
+                if (taughtByTalents.count(next) || !IsGovernedClassSpell(player, sSpellMgr->GetSpellInfo(next)))
+                    break;      // a talent's own next rank (Improved X 2/5), or not a trained rank
+                std::vector<uint32>& ranks = state.Chains[first].Ranks;
+                if (std::find(ranks.begin(), ranks.end(), next) == ranks.end())
+                    ranks.push_back(next);
+            }
         }
         for (auto itr = state.Chains.begin(); itr != state.Chains.end();)
         {
@@ -509,7 +556,7 @@ namespace
     // profession lines do not, and a spell on no line stays only if it belongs
     // to a class family (a talent's) or is a racial that has no line.
     uint32 constexpr RIFT_OWN_FIRST = 94120;
-    uint32 constexpr RIFT_OWN_LAST = 94299;
+    uint32 constexpr RIFT_OWN_LAST = 94699;
     uint32 constexpr SPELL_MATCH_STEED = 94150;
     uint32 constexpr SPELL_MATCH_SWIFT_STEED = 94151;
     uint32 constexpr SPELL_MATCH_PLAINSRUNNING = 89153;
@@ -707,8 +754,25 @@ namespace
     uint32 constexpr SPELL_CHAMPION_F = 94157;    // the boots' run speed; life steal (tenths of a percent)
     uint32 constexpr CHAMPION_CARRIERS[] = { SPELL_CHAMPION_A, SPELL_CHAMPION_B, SPELL_CHAMPION_C,
         SPELL_CHAMPION_D, SPELL_CHAMPION_E, SPELL_CHAMPION_F };
-    uint32 constexpr STAT_SPELL_FIRST = 94200;
-    uint32 constexpr STAT_SPELL_LAST = 94299;
+    // The stat spells on the items are only their tooltips' lines (rift_shop.py's
+    // STAT_SPELL_RANGES).
+    bool IsStatSpell(uint32 spell) { return (spell >= 94200 && spell <= 94299) || (spell >= 94400 && spell <= 94699); }
+    // League's items, batch 1 (2026-10-22): the champion's whole cooldown reduction as one
+    // modifier (spell_rift_cdr), and the stacking items' stacks as Bloodthirster's are shown.
+    uint32 constexpr SPELL_COOLDOWN_CARRIER = 94170;
+    uint32 constexpr SPELL_MEJAI_STACK = 94174;
+    uint32 constexpr SPELL_OCCULT_STACK = 94175;
+    uint32 constexpr SPELL_SEEKER_STACK = 94176;
+    uint8 constexpr TAKEDOWN_MAX_STACKS = 20;       // Mejai's Soulstealer, Sword of the Occult
+    uint8 constexpr SEEKER_MAX_STACKS = 30;
+    float constexpr MEJAI_FULL_CDR = 15.0f;         // percent, at 20 stacks
+    float constexpr OCCULT_FULL_SPEED = 15.0f;      // percent move speed, at 20 stacks
+    // League's item auras: the allies' (Aegis, Emblem, Mana Manipulator, Zeke's, Will of
+    // the Ancients) reach 1100 units, the enemies' (Abyssal Scepter, Frozen Heart) 700.
+    float constexpr ALLY_AURA_RANGE = RiftLeague::Yards(1100.0f);
+    float constexpr ENEMY_AURA_RANGE = RiftLeague::Yards(700.0f);
+    float constexpr LEAGUE_BASE_MOVE = 325.0f;      // League's flat speeds as a share of a champion's base
+    uint32 constexpr RIFT_MAP_ID = 1690;
     uint32 constexpr SPELL_DEATHCAP = 94140;      // Rabadon's: +30% ability power (League S3)
     uint32 constexpr SPELL_ETERNITY_STACK = 94129; // Rod of Ages: League's +20 health, +20 mana, +2 AP a stack
     // The Bloodthirster (League S3): +1 attack damage and +0.2% life steal a unit
@@ -786,17 +850,50 @@ namespace
         RiftLeague::ItemStats League;      // summed per copy held; MoveSpeed without the boots
         float BootsSpeed = 0.0f;           // the fastest boots'
         std::map<uint32, uint32> Spells;
+        UniqueStats Unique = { };          // the uniques, a name's highest, names added up
+        std::vector<AuraEmit> Emits;
     };
+
+    // The shop items in the bags, by entry, in one pass: 300 GetItemCount calls twice a
+    // second for every champion was most of what SyncItems cost.
+    std::map<uint32, uint32> ShopItemCounts(Player const* player)
+    {
+        std::map<uint32, uint32> held;
+        auto add = [&held](Item const* item)
+        {
+            if (item && IsShopItem(item->GetEntry()))
+                held[item->GetEntry()] += item->GetCount();
+        };
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            add(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Bag const* bag = player->GetBagByPos(bagSlot))
+                for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                    add(bag->GetItemByPos(uint8(slot)));
+        return held;
+    }
 
     ItemEffects HeldItemEffects(Player const* player, RiftLeague::Tables const& tables)
     {
         ItemEffects out;
-        for (uint32 entry = SHOP_ITEM_FIRST; entry <= SHOP_ITEM_LAST; ++entry)
+        std::map<std::pair<std::string, RiftLeague::Unique>, float> named;
+        for (auto const& [entry, held] : ShopItemCounts(player))
         {
-            int32 const count = int32(player->GetItemCount(entry, false));
-            ItemTemplate const* proto = count ? sObjectMgr->GetItemTemplate(entry) : nullptr;
+            int32 const count = int32(held);
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
             if (!proto)
                 continue;
+            if (auto const uniques = tables.Uniques.find(entry); uniques != tables.Uniques.end())
+                for (RiftLeague::ItemUnique const& u : uniques->second)
+                {
+                    if (u.Name == "*")
+                        out.Unique[size_t(u.Stat)] += u.Value * float(count);
+                    else
+                    {
+                        float& best = named[{ u.Name.empty() ? "#" + std::to_string(entry) : u.Name, u.Stat }];
+                        best = std::max(best, u.Value);
+                    }
+                }
             if (RiftLeague::ItemStats const* stats = RiftLeague::FindItem(tables, entry))
             {
                 float const n = float(count);
@@ -819,15 +916,74 @@ namespace
                     sum.MoveSpeed += stats->MoveSpeed * n;
             }
             for (_Spell const& spell : proto->Spells)
-                if (spell.SpellId > 0 && spell.SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP &&
-                    (uint32(spell.SpellId) < STAT_SPELL_FIRST || uint32(spell.SpellId) > STAT_SPELL_LAST))
+                if (spell.SpellId > 0 && spell.SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP && !IsStatSpell(uint32(spell.SpellId)))
                     out.Spells[uint32(spell.SpellId)] += uint32(count);
+        }
+        for (auto const& [key, value] : named)
+        {
+            if (RiftLeague::IsAura(key.second))
+                out.Emits.push_back({ key.first, key.second, value });
+            else
+                out.Unique[size_t(key.second)] += value;
         }
         // League's UNIQUE passives count once.
         for (auto& [spell, count] : out.Spells)
             if (spell >= RIFT_SPELL_FIRST && spell <= RIFT_SPELL_LAST)
                 count = 1;
         return out;
+    }
+
+    // What the item auras of the champions near this one give it: its allies' (its own
+    // included) within 1100 League units, its enemies' within 700. A name counts once,
+    // its highest, however many hold it. A dead champion's auras are off.
+    State* Find(Player const* player);   // further down, with the states
+
+    UniqueStats GatherAuras(Player const* player)
+    {
+        UniqueStats out = { };
+        Battleground const* bg = player->GetBattleground();
+        if (!bg)
+            return out;
+        uint32 const team = bg->GetPlayerTeam(player->GetGUID());
+        std::map<std::pair<std::string, RiftLeague::Unique>, float> best;
+        for (auto const& [guid, bgPlayer] : bg->GetPlayers())
+        {
+            Player const* other = guid == player->GetGUID() ? player : ObjectAccessor::GetPlayer(*player, guid);
+            if (!other || !other->IsAlive())
+                continue;
+            State const* os = Find(other);
+            if (!os || os->Emits.empty())
+                continue;
+            bool const ally = bg->GetPlayerTeam(guid) == team;
+            float const distance = player->GetExactDist2d(other);
+            for (AuraEmit const& e : os->Emits)
+            {
+                bool const enemyAura = RiftLeague::IsEnemyAura(e.Stat);
+                if (enemyAura == ally || distance > (enemyAura ? ENEMY_AURA_RANGE : ALLY_AURA_RANGE))
+                    continue;
+                float& value = best[{ e.Name, e.Stat }];
+                value = std::max(value, e.Value);
+            }
+        }
+        for (auto const& [key, value] : best)
+            out[size_t(key.second)] += value;
+        return out;
+    }
+
+    // The stacks a stacking item shows (Bloodthirster's way): gone at none.
+    void ShowStacks(Player* player, uint32 spell, uint8 stacks)
+    {
+        Aura* aura = player->GetAura(spell);
+        if (!stacks)
+        {
+            if (aura)
+                player->RemoveAurasDueToSpell(spell);
+            return;
+        }
+        if (!aura && player->IsAlive())
+            aura = player->AddAura(spell, player);
+        if (aura && aura->GetStackAmount() != stacks)
+            aura->SetStackAmount(stacks);
     }
 
     // A carrier's effects set to `amounts`; gone when they are all zero.
@@ -976,6 +1132,29 @@ namespace
         it.Damage += BLOODTHIRSTER_DAMAGE_PER_STACK * thirst;
         it.LifeSteal += BLOODTHIRSTER_LIFE_STEAL_PER_STACK * thirst;
 
+        // League's UNIQUE item effects (rift_league_item_unique), and the item auras of
+        // the champions near this one.
+        using RiftLeague::Unique;
+        auto const own = [&items](Unique stat) { return items.Unique[size_t(stat)]; };
+        UniqueStats const aura = GatherAuras(player);
+        auto const near = [&aura](Unique stat) { return aura[size_t(stat)]; };
+        state.Unique = items.Unique;
+        state.Emits = items.Emits;
+        state.ReceivedSpellVamp = near(Unique::AuraAllySpellVamp);
+        it.Resist += near(Unique::AuraAllyMr) - near(Unique::AuraEnemyMr);
+        it.HealthRegen += near(Unique::AuraAllyHp5);
+        it.ManaRegen += near(Unique::AuraAllyMp5);
+        it.AbilityPower += near(Unique::AuraAllyAp);
+        it.Damage += near(Unique::AuraAllyAd);
+        it.LifeSteal += near(Unique::AuraAllyLs);
+        // the stacking items
+        it.AbilityPower += own(Unique::TakedownAp) * float(state.MejaiStacks);
+        it.Damage += own(Unique::TakedownAd) * float(state.OccultStacks);
+        if (own(Unique::TakedownAd) > 0.0f && state.OccultStacks >= TAKEDOWN_MAX_STACKS)
+            it.MoveSpeed += OCCULT_FULL_SPEED;
+        it.Armor += own(Unique::UnitKillArmorAp) * float(state.SeekerStacks);
+        it.AbilityPower += own(Unique::UnitKillArmorAp) * float(state.SeekerStacks);
+
         // The camp buffs (League Season 3).
         Aura* const crest = player->GetAura(BG_SRF_SPELL_BLUE_BUFF);
         AuraEffect const* const baron = player->GetAuraEffect(BG_SRF_SPELL_BARON_BUFF, EFFECT_0);
@@ -988,12 +1167,15 @@ namespace
         float const health = cs->Health + cs->HealthPerLevel * l + it.Health;
         float const armor = cs->Armor + cs->ArmorPerLevel * l + cs->RuneArmor + it.Armor;
         float const resist = cs->Resist + (cs->ResistPerLevel + cs->RuneResistPerLevel) * l + it.Resist;
-        float const damage = cs->Damage + cs->DamagePerLevel * l + cs->RuneDamage + it.Damage;
+        // Atma's Impaler: a share of the champion's League maximum health as attack damage.
+        float const damage = cs->Damage + cs->DamagePerLevel * l + cs->RuneDamage + it.Damage + own(Unique::AdPerHealth) / 100.0f * health;
         float abilityPower = cs->RuneAbilityPower + cs->RuneAbilityPowerPerLevel * l + it.AbilityPower;
         if (items.Spells.count(SPELL_DEATHCAP))
             abilityPower *= 1.3f;
+        // Frozen Heart's aura takes its share off the champion's whole attack speed.
         float const attackSpeed = std::min(RiftLeague::ATTACK_SPEED_CAP,
-            cs->AttackSpeed * (1.0f + cs->AttackSpeedPerLevel * (l - 1.0f) + it.AttackSpeed / 100.0f));
+            cs->AttackSpeed * (1.0f + cs->AttackSpeedPerLevel * (l - 1.0f) + it.AttackSpeed / 100.0f)
+            * std::max(0.0f, 1.0f - near(Unique::AuraEnemyAs) / 100.0f));
 
         // health: WoW's own is the class's base health and its base stamina's
         float const naturalHealth = (player->GetFlatModifierValue(UNIT_MOD_HEALTH, BASE_VALUE) + float(player->GetCreateHealth()))
@@ -1028,14 +1210,19 @@ namespace
             float const ratio = leagueMana > 0.0f ? natural / leagueMana : 0.0f;
             mana = Round(it.Mana * ratio);
             float const pool = float(player->GetMaxPower(POWER_MANA));
-            manaRegen = Round(it.ManaRegen * ratio + (crest ? CREST_MANA_PER_5 * ratio + CREST_POOL_PER_5 * pool : 0.0f)
-                + (baron ? BARON_MANA_PER_5 * pool : 0.0f));
+            float regen = it.ManaRegen * ratio + (crest ? CREST_MANA_PER_5 * ratio + CREST_POOL_PER_5 * pool : 0.0f)
+                + (baron ? BARON_MANA_PER_5 * pool : 0.0f);
+            // Mana Font (Chalice of Harmony, Athene's): +1% for every 1% of mana missing.
+            if (own(Unique::ManaFont) > 0.0f && pool > 0.0f)
+                regen *= 2.0f - float(player->GetPower(POWER_MANA)) / pool;
+            manaRegen = Round(regen);
         }
         // Health per 5 sec (League's unit) on SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT,
         // which adds its whole amount at every 2 sec regeneration tick
         // (Player::RegenerateHealth): 2/5 of it. Carried whole, the items' health
         // regeneration came out 2.5 times League's.
-        int32 const healthRegen = Round(0.4f * (s * it.HealthRegen + (baron ? BARON_HEALTH_PER_5 * float(player->GetMaxHealth()) : 0.0f)));
+        int32 const healthRegen = Round(0.4f * (s * it.HealthRegen + (baron ? BARON_HEALTH_PER_5 * float(player->GetMaxHealth()) : 0.0f))
+            * (1.0f + own(Unique::HealAmp) / 100.0f));      // Spirit Visage
         // The Crest's energy: 0.5% of the pool a second, on WoW's 10 a second.
         if (AuraEffect* energy = crest ? crest->GetEffect(EFFECT_1) : nullptr)
         {
@@ -1046,7 +1233,17 @@ namespace
         // magic penetration stays in League's points: no WoW spell penetration
         // on the carrier, Unit::CalculateAverageResistReduction takes it off the
         // target's League magic resist (MagicPenetration)
-        state.MagicPen = cs->RuneMagicPen + it.MagicPen;
+        state.MagicPen = cs->RuneMagicPen + it.MagicPen + own(Unique::MagicPen);
+
+        // Cooldown reduction: the items', the Crest's and Mejai's at 20 stacks, League's 40% at most.
+        state.CooldownReduction = std::min(COOLDOWN_REDUCTION_CAP, own(Unique::CooldownReduction)
+            + (crest && crest->GetEffect(EFFECT_0) ? float(std::max(0, crest->GetEffect(EFFECT_0)->GetAmount())) : 0.0f)
+            + (own(Unique::TakedownAp) > 0.0f && state.MejaiStacks >= TAKEDOWN_MAX_STACKS ? MEJAI_FULL_CDR : 0.0f));
+
+        // Boots of Mobility: their speed rises out of combat.
+        float bootsSpeed = items.BootsSpeed;
+        if (own(Unique::OutOfCombatSpeed) > 0.0f && !player->IsInCombat())
+            bootsSpeed += own(Unique::OutOfCombatSpeed) / LEAGUE_BASE_MOVE * 100.0f;
         state.GearResist = it.Resist;
 
         // League's numbers as League's stat panel shows them; WoW's attack power
@@ -1064,7 +1261,8 @@ namespace
         SetCarrier(player, SPELL_CHAMPION_C, { meleeHaste, rangedHaste, spellPower });
         SetCarrier(player, SPELL_CHAMPION_D, { spellPower, mana, healthRegen });
         SetCarrier(player, SPELL_CHAMPION_E, { manaRegen, 0, Round(it.MoveSpeed) });
-        SetCarrier(player, SPELL_CHAMPION_F, { Round(items.BootsSpeed), Round(it.LifeSteal * 10.0f) });
+        SetCarrier(player, SPELL_CHAMPION_F, { Round(bootsSpeed), Round(it.LifeSteal * 10.0f) });
+        SetCarrier(player, SPELL_COOLDOWN_CARRIER, { Round(state.CooldownReduction) });
     }
 
     void ShowBloodthirster(Player* player, State const& state)
@@ -1116,6 +1314,17 @@ namespace
         if (!player->GetItemCount(ITEM_BLOODTHIRSTER, false))
             state.BloodthirsterStacks = 0;
         ShowBloodthirster(player, state);
+        // League: the stacks go with the item (sold, or built into another).
+        using RiftLeague::Unique;
+        if (want.Unique[size_t(Unique::TakedownAp)] <= 0.0f)
+            state.MejaiStacks = 0;
+        if (want.Unique[size_t(Unique::TakedownAd)] <= 0.0f)
+            state.OccultStacks = 0;
+        if (want.Unique[size_t(Unique::UnitKillArmorAp)] <= 0.0f)
+            state.SeekerStacks = 0;
+        ShowStacks(player, SPELL_MEJAI_STACK, state.MejaiStacks);
+        ShowStacks(player, SPELL_OCCULT_STACK, state.OccultStacks);
+        ShowStacks(player, SPELL_SEEKER_STACK, state.SeekerStacks);
         SetChampionCarriers(player, state, want, *tables);
 
         // The steed held is the champion's riding: Plainsrunning follows it, and a
@@ -1139,6 +1348,12 @@ namespace
             player->RemoveAurasDueToSpell(spell);
         player->RemoveAurasDueToSpell(SPELL_BLOODTHIRSTER_STACK);
         state.BloodthirsterStacks = 0;
+        for (uint32 spell : { SPELL_COOLDOWN_CARRIER, SPELL_MEJAI_STACK, SPELL_OCCULT_STACK, SPELL_SEEKER_STACK })
+            player->RemoveAurasDueToSpell(spell);
+        state.MejaiStacks = state.OccultStacks = state.SeekerStacks = 0;
+        state.Unique = { };
+        state.Emits.clear();
+        state.ReceivedSpellVamp = state.CooldownReduction = 0.0f;
         player->RemoveAurasDueToSpell(SPELL_STEED);
         player->RemoveAurasDueToSpell(SPELL_SWIFT_STEED);
         player->RemoveAurasDueToSpell(SPELL_RIFT_FOCUS);
@@ -1329,6 +1544,9 @@ namespace
                         return true;
                     auto const chain = state.SpellToChain.find(ab->GetAction());
                     if (first && chain != state.SpellToChain.end() && chain->second == first)
+                        return true;
+                    // a talent's own rank (Mortal Strike 1): no chain holds it, its ranks' chain is keyed by it
+                    if (first && ab->GetAction() == first)
                         return true;
                 }
         return false;
@@ -1544,6 +1762,32 @@ namespace
             if (player->HasSpell(spell))
                 player->RemoveSpell(spell, false, false);
         state.MatchPoisons.clear();
+        // and the talent ranks the match taught (a button holding one goes back to
+        // the real bars' own on the way out)
+        for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+            if (ActionButton const* ab = player->GetActionButton(button))
+                if (ab->GetType() == ACTION_BUTTON_SPELL && state.MatchRanks.count(ab->GetAction()))
+                    player->removeActionButton(button);
+        for (uint32 spell : state.MatchRanks)
+            if (player->HasSpell(spell))
+                player->RemoveSpell(spell, false, false);
+        state.MatchRanks.clear();
+    }
+
+    // A relog into the match: a dependent spell is not loaded back, so the talent
+    // ranks it picked that the character never trained are taught again.
+    void RelearnMatchRanks(Player* player, State& state)
+    {
+        for (auto const& [first, chain] : state.Chains)
+        {
+            if (!chain.Talent)
+                continue;
+            auto const itr = state.Unlocked.find(first);
+            uint8 const have = itr != state.Unlocked.end() ? itr->second : 0;
+            for (uint32 k = 0; k < have && k < chain.Ranks.size(); ++k)
+                if (state.MatchRanks.count(chain.Ranks[k]) && !player->HasSpell(chain.Ranks[k]))
+                    player->LearnSpell(chain.Ranks[k], true);
+        }
     }
 
     // An addon whisper from the character to itself, as Mok'gora's are: the
@@ -1741,6 +1985,7 @@ void Enter(Player* player)
         // Learned after the loop above: the client is told each one, and
         // PublishBars takes the locked ones back out of its spellbook.
         AddPoisonChains(player, *existing);
+        RelearnMatchRanks(player, *existing);
         PublishBars(player, *existing);
         SendState(player, *existing);
         return;
@@ -1907,7 +2152,8 @@ namespace
     uint8 const realLevel = fields[0].GetUInt8();
     for (uint32 spell : CHAMPION_CARRIERS)
         player->RemoveAurasDueToSpell(spell);
-    player->RemoveAurasDueToSpell(SPELL_BLOODTHIRSTER_STACK);
+    for (uint32 spell : { SPELL_BLOODTHIRSTER_STACK, SPELL_COOLDOWN_CARRIER, SPELL_MEJAI_STACK, SPELL_OCCULT_STACK, SPELL_SEEKER_STACK })
+        player->RemoveAurasDueToSpell(spell);
     player->RemoveAurasDueToSpell(SPELL_RIFT_FOCUS);
     TakeShopItems(player);
     TakeRecallButtons(player);
@@ -1978,7 +2224,12 @@ SpellInfo const* AdjustCast(Player const* player, SpellInfo const* spellInfo)
     auto const unlocked = state->Unlocked.find(chain->second);
     uint8 const have = unlocked != state->Unlocked.end() ? unlocked->second : 0;
     if (!have)
+    {
+        // A talent's trained rank before any is picked: the talent's own rank is cast.
+        if (state->Chains.at(chain->second).Talent && player->HasSpell(chain->second))
+            return sSpellMgr->GetSpellInfo(chain->second);
         return nullptr;
+    }
     std::vector<uint32> const& ranks = state->Chains.at(chain->second).Ranks;
     auto const pos = std::find(ranks.begin(), ranks.end(), spellInfo->Id);
     if (pos != ranks.end() && size_t(pos - ranks.begin()) < have)
@@ -2166,15 +2417,15 @@ namespace
             *bits = 0;
         if (!player || !spellInfo)
             return 0.0f;
-        AuraEffect const* crest = player->GetAuraEffect(BG_SRF_SPELL_BLUE_BUFF, EFFECT_0);
-        if (!crest || crest->GetAmount() <= 0)
+        AuraEffect const* cdr = player->GetAuraEffect(SPELL_COOLDOWN_CARRIER, EFFECT_0);
+        if (!cdr || cdr->GetAmount() <= 0)
             return 0.0f;
         ChrClassesEntry const* playerClass = sChrClassesStore.LookupEntry(player->GetClass());
         if (!playerClass || !spellInfo->SpellFamilyName || spellInfo->SpellFamilyName != playerClass->SpellClassSet || !IsInMatch(player))
             return 0.0f;
         if (bits)
             *bits = MaskBits(spellInfo->SpellFamilyFlags & CrestCoverOf(player->GetClass()).Mask);
-        return std::min(float(crest->GetAmount()), COOLDOWN_REDUCTION_CAP) / 100.0f;
+        return std::min(float(cdr->GetAmount()), COOLDOWN_REDUCTION_CAP) / 100.0f;
     }
 }
 
@@ -2192,9 +2443,9 @@ float GearMagicResist(Player const* player)
     return state ? state->GearResist : 0.0f;
 }
 
-void CrestCooldownMod(AuraEffect const* crest, SpellModifier*& mod)
+void CooldownMod(AuraEffect const* carrier, SpellModifier*& mod)
 {
-    Player* player = crest ? crest->GetBase()->GetUnitOwner()->ToPlayer() : nullptr;
+    Player* player = carrier ? carrier->GetBase()->GetUnitOwner()->ToPlayer() : nullptr;
     if (!player)
         return;
     if (!mod)
@@ -2202,13 +2453,13 @@ void CrestCooldownMod(AuraEffect const* crest, SpellModifier*& mod)
         CrestCover const& cover = CrestCoverOf(player->GetClass());
         if (!cover.SpellId || !cover.Mask)
             return;
-        mod = new SpellModifier(crest->GetBase());
+        mod = new SpellModifier(carrier->GetBase());
         mod->op = SPELLMOD_COOLDOWN;
         mod->type = SPELLMOD_PCT;
         mod->spellId = cover.SpellId;
         mod->mask = cover.Mask;
     }
-    mod->value = -int32(std::min(float(std::max(crest->GetAmount(), 0)), COOLDOWN_REDUCTION_CAP));
+    mod->value = -int32(std::min(float(std::max(carrier->GetAmount(), 0)), COOLDOWN_REDUCTION_CAP));
 }
 
 float CooldownReduction(Player const* player, SpellInfo const* spellInfo, bool* clientMisreads)
@@ -2334,13 +2585,13 @@ void OnTalentLearned(Player* player, uint32 talentSpell)
         return;
     // A talent with trained ranks after it: the talent point pays for its own
     // rank, and the trained ranks after it are picks from now on (the core no
-    // longer hands them back with the talent in a match: Player::LearnSpell).
+    // longer hands them back with the talent in a match: Player::LearnSpell),
+    // each at its trainer's level. The talent used to count as the first of
+    // them too: rank 2 came with the talent, before its level, put aside and
+    // so never castable, and the first pick went straight to rank 3.
     for (auto const& [first, chain] : state->Chains)
-        if (chain.Talent && player->HasSpell(first) && state->TalentKnown.insert(first).second)
-        {
-            uint8& have = state->Unlocked[first];
-            have = std::max<uint8>(have, 1);
-        }
+        if (chain.Talent && player->HasSpell(first))
+            state->TalentKnown.insert(first);
     if (IsTransient(player))
         return;
     RefillSavedButtons(player, *state);
@@ -2364,7 +2615,20 @@ void OnTalentLearned(Player* player, uint32 talentSpell)
         for (uint8 button = 0; button < MAX_ACTION_BUTTONS && !onBars; ++button)
             if (ActionButton const* ab = player->GetActionButton(button))
                 onBars = ab->GetType() == ACTION_BUTTON_SPELL && sSpellMgr->GetFirstSpellInChain(ab->GetAction()) == first;
-        if (!onBars)
+        if (onBars)
+            continue;
+        // Back where the real bars had it - their button held a trained rank, which
+        // stays locked until it is picked, so it was never put back.
+        bool placed = false;
+        for (SavedButton const& b : state->RealButtons)
+            if (b.Type == ACTION_BUTTON_SPELL && sSpellMgr->GetFirstSpellInChain(b.Action) == first
+                && !player->GetActionButton(b.Button) && player->addActionButton(b.Button, spell, ACTION_BUTTON_SPELL))
+            {
+                state->Returned.insert(b.Button);
+                placed = true;
+                break;
+            }
+        if (!placed)
             PlaceUnlockedSpell(player, *state, 0, spell);
     }
     PublishBars(player, *state);
@@ -2581,6 +2845,13 @@ void OnBasicAttackDamage(Unit* attacker, Unit* victim, uint32 damage, SpellInfo 
     // life steal rides on the champion's carrier (SetChampionCarriers).
     if (!damage || !attacker || !victim || attacker == victim || attacker->GetTypeId() != TYPEID_PLAYER)
         return;
+    // An ability's damage: spell vamp (League items).
+    if (spell && !IsRangedBasicAttack(spell))
+    {
+        if (attacker->GetMapId() == RIFT_MAP_ID)
+            SpellVamp(attacker->ToPlayer(), victim, damage, spell);
+        return;
+    }
     AuraEffect const* lifeSteal = attacker->GetAuraEffect(SPELL_CHAMPION_F, EFFECT_1);
     bool const blessed = attacker->HasAura(BG_SRF_SPELL_RED_BUFF);
     if ((!blessed && (!lifeSteal || lifeSteal->GetAmount() <= 0)) || !attacker->IsAlive())
@@ -2595,6 +2866,9 @@ void OnBasicAttackDamage(Unit* attacker, Unit* victim, uint32 damage, SpellInfo 
         return;
     // Healing cuts on the champion (Mortal Strike's) cut it too, as Grievous Wounds does in League.
     float heal = float(damage) * float(lifeSteal->GetAmount()) / 1000.0f;
+    // Spirit Visage
+    if (float const amp = ItemHooksOf(attacker->ToPlayer()).HealAmp; amp > 0.0f)
+        heal *= 1.0f + amp / 100.0f;
     if (int32 const cut = attacker->GetMaxNegativeAuraModifier(SPELL_AURA_MOD_HEALING_PCT))
         AddPct(heal, cut);
     if (heal < 1.0f)
@@ -2603,26 +2877,193 @@ void OnBasicAttackDamage(Unit* attacker, Unit* victim, uint32 damage, SpellInfo 
     Unit::DealHeal(healInfo);
 }
 
+void SpellVamp(Player* player, Unit* victim, uint32 damage, SpellInfo const* spell)
+{
+    if (!player || !victim || !damage || !player->IsAlive())
+        return;
+    if (victim->GetTypeId() == TYPEID_UNIT && victim->GetEntry() >= RIFT_STRUCTURE_FIRST && victim->GetEntry() <= RIFT_STRUCTURE_LAST)
+        return;
+    // abilities only: not an item's passive (Thornmail, Sunfire, Maim) nor a camp buff's burn
+    if (spell && spell->Id >= RIFT_OWN_FIRST && spell->Id <= RIFT_OWN_LAST)
+        return;
+    ItemHooks const hooks = ItemHooksOf(player);
+    if (hooks.SpellVamp <= 0.0f)
+        return;
+    // League: an area ability heals a third as much; Spirit Visage adds its share.
+    float heal = float(damage) * hooks.SpellVamp / 100.0f * (spell && spell->IsAffectingArea() ? 1.0f / 3.0f : 1.0f)
+        * (1.0f + hooks.HealAmp / 100.0f);
+    if (int32 const cut = player->GetMaxNegativeAuraModifier(SPELL_AURA_MOD_HEALING_PCT))
+        AddPct(heal, cut);
+    if (heal < 1.0f)
+        return;
+    HealInfo healInfo(player, player, uint32(heal), nullptr, SPELL_SCHOOL_MASK_NORMAL);
+    Unit::DealHeal(healInfo);
+}
+
 void OnUnitKill(Player* player)
 {
-    if (!player || !player->GetItemCount(ITEM_BLOODTHIRSTER, false))
+    if (!player)
         return;
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
-    if (State* state = Find(player); state && state->BloodthirsterStacks < BLOODTHIRSTER_MAX_STACKS)
+    State* state = Find(player);
+    if (!state)
+        return;
+    if (player->GetItemCount(ITEM_BLOODTHIRSTER, false) && state->BloodthirsterStacks < BLOODTHIRSTER_MAX_STACKS)
     {
         ++state->BloodthirsterStacks;
         ShowBloodthirster(player, *state);
     }
+    using RiftLeague::Unique;
+    // Seeker's Armguard: a stack a unit killed.
+    if (state->Unique[size_t(Unique::UnitKillArmorAp)] > 0.0f && state->SeekerStacks < SEEKER_MAX_STACKS)
+    {
+        ++state->SeekerStacks;
+        ShowStacks(player, SPELL_SEEKER_STACK, state->SeekerStacks);
+    }
+    // Avarice Blade's Greed: gold a unit killed.
+    if (float const greed = state->Unique[size_t(Unique::Greed)]; greed > 0.0f)
+        AddGold(player, uint32(std::lround(greed)), false);
+}
+
+void OnChampionTakedown(Player* player, bool kill)
+{
+    if (!player)
+        return;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State* state = Find(player);
+    if (!state)
+        return;
+    using RiftLeague::Unique;
+    uint8 const gain = kill ? 2 : 1;
+    if (state->Unique[size_t(Unique::TakedownAp)] > 0.0f)
+    {
+        state->MejaiStacks = std::min<uint8>(TAKEDOWN_MAX_STACKS, state->MejaiStacks + gain);
+        ShowStacks(player, SPELL_MEJAI_STACK, state->MejaiStacks);
+    }
+    if (state->Unique[size_t(Unique::TakedownAd)] > 0.0f)
+    {
+        state->OccultStacks = std::min<uint8>(TAKEDOWN_MAX_STACKS, state->OccultStacks + gain);
+        ShowStacks(player, SPELL_OCCULT_STACK, state->OccultStacks);
+    }
+    // Athene's Unholy Grail: a share of maximum mana back.
+    if (float const pct = state->Unique[size_t(Unique::TakedownManaPct)]; pct > 0.0f && player->IsAlive() && player->GetMaxPower(POWER_MANA))
+        player->ModifyPower(POWER_MANA, Round(float(player->GetMaxPower(POWER_MANA)) * pct / 100.0f));
 }
 
 void OnDeath(Player* player)
 {
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
-    if (State* state = player ? Find(player) : nullptr; state && state->BloodthirsterStacks)
+    State* state = player ? Find(player) : nullptr;
+    if (!state)
+        return;
+    if (state->BloodthirsterStacks)
     {
         state->BloodthirsterStacks = uint8(state->BloodthirsterStacks / 2);
         ShowBloodthirster(player, *state);
     }
+    // Mejai's Soulstealer, Sword of the Occult: a third of the stacks lost.
+    state->MejaiStacks = uint8(state->MejaiStacks - state->MejaiStacks / 3);
+    state->OccultStacks = uint8(state->OccultStacks - state->OccultStacks / 3);
+    ShowStacks(player, SPELL_MEJAI_STACK, state->MejaiStacks);
+    ShowStacks(player, SPELL_OCCULT_STACK, state->OccultStacks);
+}
+
+void ItemGoldTick(Player* player, uint32 diff)
+{
+    if (!player)
+        return;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State* state = Find(player);
+    if (!state)
+        return;
+    float const per10 = state->Unique[size_t(RiftLeague::Unique::GoldPer10)];
+    if (per10 <= 0.0f)
+        return;
+    state->GoldOwed += per10 * float(diff) / 10000.0f;
+    if (uint32 const whole = uint32(state->GoldOwed); whole)
+    {
+        state->GoldOwed -= float(whole);
+        AddGold(player, whole, false);
+    }
+}
+
+float ArmorPenetration(Player const* player)
+{
+    if (!player || player->GetMapId() != RIFT_MAP_ID)
+        return {};
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = Find(player);
+    return state ? state->Unique[size_t(RiftLeague::Unique::ArmorPen)] : 0.0f;
+}
+
+float MagicPenetrationPct(Player const* player)
+{
+    if (!player || player->GetMapId() != RIFT_MAP_ID)
+        return {};
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = Find(player);
+    return state ? std::min(100.0f, state->Unique[size_t(RiftLeague::Unique::MagicPenPct)]) : 0.0f;
+}
+
+float SlowResist(Player const* player)
+{
+    if (!player || player->GetMapId() != RIFT_MAP_ID)
+        return {};
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = Find(player);
+    return state ? std::min(100.0f, state->Unique[size_t(RiftLeague::Unique::SlowResist)]) : 0.0f;
+}
+
+// Tenacity (Mercury's Treads, Spirit of the Ancient Golem): off League's crowd
+// control - stuns, slows, taunts, fears, silences, blinds, immobilizes, and in
+// WoW's terms charms, sleeps, polymorphs, horrors and saps.
+float Tenacity(Player const* player, SpellInfo const* spellInfo, uint32 effectMask)
+{
+    if (!player || !spellInfo || player->GetMapId() != RIFT_MAP_ID)
+        return 0.0f;
+    uint32 constexpr CC_MECHANICS = (1u << MECHANIC_CHARM) | (1u << MECHANIC_DISORIENTED) | (1u << MECHANIC_FEAR)
+        | (1u << MECHANIC_ROOT) | (1u << MECHANIC_SILENCE) | (1u << MECHANIC_SLEEP) | (1u << MECHANIC_SNARE)
+        | (1u << MECHANIC_STUN) | (1u << MECHANIC_FREEZE) | (1u << MECHANIC_KNOCKOUT) | (1u << MECHANIC_POLYMORPH)
+        | (1u << MECHANIC_HORROR) | (1u << MECHANIC_DAZE) | (1u << MECHANIC_SAPPED);
+    bool control = (uint32(spellInfo->GetSpellMechanicMaskByEffectMask(effectMask)) & CC_MECHANICS) != 0;
+    for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        if (!control && (effectMask & (1u << effect.EffectIndex)))
+            for (AuraType type : { SPELL_AURA_MOD_STUN, SPELL_AURA_MOD_ROOT, SPELL_AURA_MOD_FEAR, SPELL_AURA_MOD_CONFUSE,
+                SPELL_AURA_MOD_SILENCE, SPELL_AURA_MOD_PACIFY_SILENCE, SPELL_AURA_MOD_DECREASE_SPEED, SPELL_AURA_MOD_TAUNT,
+                SPELL_AURA_MOD_CHARM })
+                if (effect.IsAura(type))
+                    control = true;
+    if (!control)
+        return 0.0f;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = Find(player);
+    return state ? std::min(100.0f, state->Unique[size_t(RiftLeague::Unique::Tenacity)]) : 0.0f;
+}
+
+ItemHooks ItemHooksOf(Player const* player)
+{
+    ItemHooks out;
+    if (!player || player->GetMapId() != RIFT_MAP_ID)
+        return {};
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = Find(player);
+    if (!state)
+        return out;
+    using RiftLeague::Unique;
+    auto const own = [state](Unique stat) { return state->Unique[size_t(stat)]; };
+    out.InMatch = true;
+    out.BasicBlockPct = own(Unique::BasicBlockPct);
+    out.ChampionBasicBlock = own(Unique::ChampionBasicBlock);
+    out.OnHitHeal = own(Unique::OnHitHeal);
+    out.Maim = own(Unique::Maim);
+    out.Butcher = own(Unique::Butcher);
+    out.HealAmp = own(Unique::HealAmp);
+    out.ChampionHitRegen = own(Unique::ChampionHitRegen);
+    out.ColdSteelAs = own(Unique::ColdSteelAs);
+    out.ColdSteelMs = own(Unique::ColdSteelMs);
+    out.SpellVamp = own(Unique::SpellVamp) + state->ReceivedSpellVamp;
+    out.Scale = state->MatchScale > 0.0f ? state->MatchScale : 1.0f;
+    return out;
 }
 
 float BaseAttackDamage(Player const* player)
@@ -2975,6 +3416,56 @@ uint8 BuildRole(Player const* player)
     return state ? uint8(RoleOf(player, *state)) : 0;
 }
 
+// The shop's buy request (CENTURION_Rift, "RIFTBUY:<entry>"): what the vendor
+// window did, without it - a 3.3.5 vendor lists 150 items at most
+// (MAX_VENDOR_ITEMS) and League's shop is longer than that. At the fountain only;
+// League's build path prices it, the components held go into it.
+void HandleBuyRequest(Player* player, std::string_view argument)
+{
+    if (!player)
+        return;
+    Optional<uint32> const entry = Trinity::StringTo<uint32>(argument);
+    if (!entry || !IsShopItem(*entry) || !IsInMatch(player))
+        return;
+    ChatHandler chat(player->GetSession());
+    Battleground* bg = player->GetBattleground();
+    // League: at the fountain, or anywhere while dead
+    if (!bg || bg->GetTypeID(true) != BATTLEGROUND_SRF || (player->IsAlive() && !static_cast<BattlegroundSRF const*>(bg)->IsAtBase(player)))
+    {
+        chat.SendSysMessage("The shop sells at your base: return to your fountain.");
+        return;
+    }
+    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(*entry);
+    if (!proto || !(proto->AllowableClass & player->GetClassMask()))
+        return;
+    std::vector<uint32> consumed;
+    uint32 const price = ShopPrice(player, *entry, uint32(proto->BuyPrice), consumed);
+    if (!HasRoomFor(player, *entry, consumed))
+    {
+        chat.SendSysMessage("Your six item slots are full: sell something first.");
+        return;
+    }
+    if (!player->HasEnoughMoney(price))
+    {
+        player->SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, nullptr, *entry, 0);
+        return;
+    }
+    ItemPosCountVec dest;
+    InventoryResult const result = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, *entry, 1);
+    if (result != EQUIP_ERR_OK)
+    {
+        player->SendEquipError(result, nullptr, nullptr, *entry);
+        return;
+    }
+    Item* item = player->StoreNewItem(dest, *entry, true);
+    if (!item)
+        return;
+    player->ModifyMoney(-int32(price));
+    player->SendNewItem(item, 1, true, false);
+    TakeComponents(player, consumed);
+    SyncItems(player);
+}
+
 void HandlePickRequest(Player* player, std::string_view argument)
 {
     if (!player)
@@ -2992,10 +3483,19 @@ void HandlePickRequest(Player* player, std::string_view argument)
             uint32 const first = state->SpellToChain.at(*spellId);
             bool const firstUnlock = ++state->Unlocked[first] == 1;
             // A talent's trained rank the match reset put aside (disabled with
-            // the talent) is learned again now, alone.
+            // the talent) is learned again now, alone; one the character never
+            // trained is taught for the match only (dependent: never written down).
             auto const known = player->GetSpellMap().find(*spellId);
-            if (known != player->GetSpellMap().end() && known->second.disabled)
-                player->LearnSpell(*spellId, false);
+            if (known != player->GetSpellMap().end() && known->second.state != PLAYERSPELL_REMOVED)
+            {
+                if (known->second.disabled)
+                    player->LearnSpell(*spellId, false);
+            }
+            else
+            {
+                player->LearnSpell(*spellId, true);
+                state->MatchRanks.insert(*spellId);
+            }
             if (firstUnlock)
                 PlaceUnlockedSpell(player, *state, first, *spellId);
             PublishBars(player, *state);

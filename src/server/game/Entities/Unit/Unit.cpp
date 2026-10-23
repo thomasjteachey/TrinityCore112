@@ -2486,9 +2486,15 @@ void Unit::HandleEmoteCommand(Emote emoteId)
             // no more than 100%
             RoundToInterval(arpPct, 0.f, 100.f);
 
-            // League's armor penetration: that share of the armor, uncapped.
+            // League's armor penetration: that share of the armor, uncapped, then
+            // the flat (The Brutalizer, Youmuu's, The Black Cleaver), League's points
+            // in WoW's armor at the match's level (RiftLeague::ToWowArmor).
             if (league)
+            {
                 armor -= CalculatePct(armor, arpPct);
+                if (float const flat = RiftProgression::ArmorPenetration(attacker->ToPlayer()); flat > 0.0f)
+                    armor -= flat * RiftLeague::ArmorConstant(league->GetLeagueCombatLevel()) / 100.0f;
+            }
             else
             {
                 float maxArmorPen = 0.f;
@@ -2668,6 +2674,10 @@ void Unit::HandleEmoteCommand(Emote emoteId)
     if (league)
     {
         float m = RiftLeague::FromWowResist(victimResistance);
+        // Void Staff: a share of it ignored, before the flat penetration (League).
+        if (Player const* penetrator = casterOwner ? casterOwner : casterUnit ? casterUnit->ToPlayer() : nullptr)
+            if (float const pct = RiftProgression::MagicPenetrationPct(penetrator); pct > 0.0f && m > 0.0f)
+                m -= CalculatePct(m, pct);
         if (casterOwner)
             m = std::max(m - RiftProgression::MagicPenetration(casterOwner), 0.0f);
         else if (casterUnit && casterUnit->ToPlayer())
@@ -9410,6 +9420,12 @@ uint32 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, u
     if (maxval)
         AddPct(TakenTotalMod, maxval);
 
+    // Summoner's Rift: Spirit Visage amplifies the champion's healing of itself
+    // (its life steal, spell vamp and regeneration: RiftProgression).
+    if (caster == this && GetTypeId() == TYPEID_PLAYER)
+        if (float const amp = RiftProgression::ItemHooksOf(ToPlayer()).HealAmp; amp > 0.0f)
+            AddPct(TakenTotalMod, amp);
+
     // Nourish cast
     if (spellProto->SpellFamilyName == SPELLFAMILY_DRUID && spellProto->SpellFamilyFlags[1] & 0x2000000)
     {
@@ -10630,6 +10646,10 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
 
     // Apply strongest slow aura mod to speed
     int32 slow = GetMaxNegativeAuraModifier(SPELL_AURA_MOD_DECREASE_SPEED);
+    // Summoner's Rift: Boots of Swiftness take their share off every slow.
+    if (slow && GetTypeId() == TYPEID_PLAYER)
+        if (float const resist = RiftProgression::SlowResist(ToPlayer()); resist > 0.0f)
+            slow = int32(std::lround(float(slow) * (1.0f - resist / 100.0f)));
     if (slow)
         AddPct(speed, slow);
     else

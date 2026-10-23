@@ -18,6 +18,8 @@
 // The CENTURION_Rift addon's requests, answered by RiftProgression (game/):
 //   CCGAMEREQ\tRIFTPICK:<spellId>   learn or rank up that spell with a skill pick
 //   CCGAMEREQ\tRIFTSTATE:           send the match state again (after a /reload)
+//   CCGAMEREQ\tRIFTBUY:<entry>      buy that shop item, at the fountain (League's shop
+//                                   lists more items than a 3.3.5 vendor can)
 //
 // League's lane minions (npc_rift_minion, creature_template 922110-922117) never
 // evade. The stock AI evades the moment its target dies: it turns immune, walks
@@ -54,8 +56,12 @@
 #include "ScriptedGossip.h"
 #include "Spell.h"
 #include "SpellHistory.h"
+#include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellScript.h"
+#include "ThreatManager.h"
+#include "Containers.h"
+#include <unordered_map>
 #include <cmath>
 
 namespace
@@ -376,15 +382,221 @@ private:
     uint32 _attackTimer = 0;
 };
 
+// League Season 3's Baron Nashor (creature_template 922141; the wiki, mid-2013): rooted,
+// immune to crowd control, and ranged - nothing within 955 League units of it is safe.
+// It attacks the nearest champion that has fought it ("Baron primarily attacks the
+// target closest to him"). Each attack is Wrath of the Ancients - ten acid bolts half a
+// second apart, each a stack of +25% magic damage taken, never at someone stealthed -
+// unless that champion is hurting it mostly with physical damage and is not under
+// Voracious Corrosion; then it is Corrosion, with Wrath between. Every 12-16 sec it mixes
+// in Sweeping Blow, when anyone is close, or Propelled. BattlegroundSRF makes the shots.
+struct npc_rift_baron : public ScriptedAI
+{
+    explicit npc_rift_baron(Creature* creature) : ScriptedAI(creature) { }
+
+    static uint8 constexpr WRATH_BOLTS = 10;
+    static uint32 constexpr WRATH_INTERVAL = 500;
+    static uint32 constexpr SPECIAL_MIN = 12000, SPECIAL_MAX = 16000;
+    static uint32 constexpr DAMAGE_DECAY_TICK = 1000;
+
+    BattlegroundSRF* Rift() const
+    {
+        BattlegroundMap* map = me->GetMap() ? me->GetMap()->ToBattlegroundMap() : nullptr;
+        Battleground* bg = map ? map->GetBG() : nullptr;
+        return bg && bg->GetTypeID(true) == BATTLEGROUND_SRF ? static_cast<BattlegroundSRF*>(bg) : nullptr;
+    }
+
+    // Never a swing: it does not reach, and it does not move.
+    void AttackStart(Unit* who) override
+    {
+        if (who)
+            me->Attack(who, false);
+    }
+
+    void Reset() override
+    {
+        _attackTimer = 0;
+        _wrathLeft = 0;
+        _wrathTimer = 0;
+        _specialTimer = urand(SPECIAL_MIN, SPECIAL_MAX);
+        _decayTimer = DAMAGE_DECAY_TICK;
+        _lastWasCorrosion = false;
+        _physical.clear();
+        _magic.clear();
+    }
+
+    // Voracious Corrosion halves what its target (and that one's pet) deals Baron;
+    // what each deals, physical or not, decides when it is used.
+    void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType /*damageType*/, SpellInfo const* spellInfo) override
+    {
+        if (!attacker || !damage)
+            return;
+        Unit* source = attacker->GetCharmerOrOwnerOrSelf();
+        if (source->HasAura(BG_SRF_SPELL_BARON_CORROSION, me->GetGUID()) || attacker->HasAura(BG_SRF_SPELL_BARON_CORROSION, me->GetGUID()))
+            damage /= 2;
+        bool const physical = !spellInfo || (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_NORMAL);
+        (physical ? _physical : _magic)[source->GetGUID()] += float(damage);
+    }
+
+    void UpdateAI(uint32 diff) override
+    {
+        if (!UpdateVictim())
+            return;
+        BattlegroundSRF* rift = Rift();
+        if (!rift)
+            return;
+
+        // the last five seconds or so of who hit it with what
+        if (_decayTimer <= diff)
+        {
+            _decayTimer = DAMAGE_DECAY_TICK;
+            for (auto* tally : { &_physical, &_magic })
+                for (auto& [guid, amount] : *tally)
+                    amount *= 0.8f;
+        }
+        else
+            _decayTimer -= diff;
+
+        _attackTimer = _attackTimer > diff ? _attackTimer - diff : 0;
+        _specialTimer = _specialTimer > diff ? _specialTimer - diff : 0;
+
+        // the stream under way
+        if (_wrathLeft)
+        {
+            if (_wrathTimer > diff)
+            {
+                _wrathTimer -= diff;
+                return;
+            }
+            _wrathTimer = WRATH_INTERVAL;
+            Unit* target = ObjectAccessor::GetUnit(*me, _wrathTarget);
+            if (!target || !Valid(target, rift, true))
+            {
+                _wrathLeft = 0;
+                return;
+            }
+            --_wrathLeft;
+            me->SetFacingToObject(target);
+            rift->BaronWrath(me, target);
+            return;
+        }
+
+        if (!_specialTimer)
+        {
+            _specialTimer = urand(SPECIAL_MIN, SPECIAL_MAX);
+            if (Special(rift))
+                return;
+        }
+
+        if (_attackTimer || me->HasUnitState(UNIT_STATE_CASTING))
+            return;
+        Unit* target = Nearest(rift, false);
+        if (!target)
+            return;
+        me->SetFacingToObject(target);
+        _attackTimer = me->GetAttackTime(BASE_ATTACK);
+        if (WantsCorrosion(target))
+        {
+            _lastWasCorrosion = true;
+            rift->BaronCorrosion(me, target);
+            return;
+        }
+        _lastWasCorrosion = false;
+        if (Stealthed(target))
+            return;
+        _wrathTarget = target->GetGUID();
+        _wrathLeft = WRATH_BOLTS;
+        _wrathTimer = 0;
+    }
+
+private:
+    static bool Stealthed(Unit const* unit)
+    {
+        return unit->HasStealthAura() || unit->HasInvisibilityAura();
+    }
+
+    // Alive, attackable, seen, and within its reach, edge to edge as League measures it.
+    bool Valid(Unit* unit, BattlegroundSRF const* rift, bool wrath) const
+    {
+        if (!unit->IsAlive() || !me->IsValidAttackTarget(unit) || !me->CanSeeOrDetect(unit) || (wrath && Stealthed(unit)))
+            return false;
+        return me->GetExactDist2d(unit) - me->GetCombatReach() - unit->GetCombatReach() <= rift->BaronRange();
+    }
+
+    // The nearest one that has fought it.
+    Unit* Nearest(BattlegroundSRF const* rift, bool wrath) const
+    {
+        Unit* best = nullptr;
+        for (ThreatReference const* ref : me->GetThreatManager().GetUnsortedThreatList())
+            if (Unit* unit = ref->GetVictim())
+                if (Valid(unit, rift, wrath) && (!best || me->GetExactDist2d(unit) < me->GetExactDist2d(best)))
+                    best = unit;
+        return best;
+    }
+
+    // Corrosion when its target hurts it mostly physically and is not under it (or it
+    // is about to run out) - and never twice running: Wrath goes between.
+    bool WantsCorrosion(Unit* target) const
+    {
+        if (_lastWasCorrosion)
+            return false;
+        Unit* source = target->GetCharmerOrOwnerOrSelf();
+        auto const tally = [source](std::unordered_map<ObjectGuid, float> const& map)
+        {
+            auto const itr = map.find(source->GetGUID());
+            return itr != map.end() ? itr->second : 0.0f;
+        };
+        float const physical = tally(_physical), magic = tally(_magic);
+        if (physical <= 0.0f || physical < magic)
+            return false;
+        Aura const* corroded = target->GetAura(BG_SRF_SPELL_BARON_CORROSION, me->GetGUID());
+        return !corroded || corroded->GetDuration() < int32(me->GetAttackTime(BASE_ATTACK));
+    }
+
+    // Sweeping Blow when a champion is close, else Propelled under one in reach.
+    bool Special(BattlegroundSRF* rift)
+    {
+        std::vector<Unit*> inReach;
+        bool close = false;
+        for (ThreatReference const* ref : me->GetThreatManager().GetUnsortedThreatList())
+            if (Unit* unit = ref->GetVictim())
+                if (unit->GetTypeId() == TYPEID_PLAYER && Valid(unit, rift, false))
+                {
+                    inReach.push_back(unit);
+                    if (me->GetExactDist2d(unit) - me->GetCombatReach() - unit->GetCombatReach() <= rift->BaronSweepReach())
+                        close = true;
+                }
+        if (inReach.empty())
+            return false;
+        if (close)
+            rift->BaronSweep(me);
+        else
+            rift->BaronPropel(me, Trinity::Containers::SelectRandomContainerElement(inReach));
+        return true;
+    }
+
+    uint32 _attackTimer = 0;
+    uint32 _wrathTimer = 0;
+    uint32 _specialTimer = 0;
+    uint32 _decayTimer = 0;
+    uint8 _wrathLeft = 0;
+    bool _lastWasCorrosion = false;
+    ObjectGuid _wrathTarget;
+    std::unordered_map<ObjectGuid, float> _physical;
+    std::unordered_map<ObjectGuid, float> _magic;
+};
+
 void AddSC_custom_rift_progression()
 {
     new custom_rift_contribution_unit();
     new custom_rift_contribution_player();
     AddonRequestRoutes::Register("RIFTPICK", &RiftProgression::HandlePickRequest);
     AddonRequestRoutes::Register("RIFTSTATE", &RiftProgression::HandleStateRequest);
+    AddonRequestRoutes::Register("RIFTBUY", &RiftProgression::HandleBuyRequest);
     RegisterSpellScript(spell_rift_recall);
     RegisterSpellScript(spell_rift_recall_league);
     RegisterCreatureAI(npc_rift_minion);
     RegisterCreatureAI(npc_rift_dragon);
+    RegisterCreatureAI(npc_rift_baron);
     RegisterCreatureAI(npc_rift_armsmaster);
 }

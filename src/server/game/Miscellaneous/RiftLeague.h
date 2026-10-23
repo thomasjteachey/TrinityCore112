@@ -22,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // Summoner's Rift plays League's numbers (Season 3): every unit, champion and
 // item stat is League's own, from three world tables -
@@ -89,11 +90,60 @@ namespace RiftLeague
         float LifeSteal = 0.0f;   // percent of a basic attack's damage, back as health
     };
 
+    // An item's League UNIQUE effects (world `rift_league_item_unique`), as the
+    // stats RiftProgression gives them: the highest of a name's rows counts and
+    // different names add up; an empty name is the item's own (a second copy
+    // adds nothing), "*" counts every copy held. The Aura stats are what the
+    // holder gives the champions near it, allies or enemies; a name never
+    // stacks there either, from however many holders.
+    enum class Unique : uint8
+    {
+        CooldownReduction,      // percent; with the Crest and Mejai's, capped at 40
+        ArmorPen,               // flat, League armor
+        MagicPen,               // flat, League magic resist (a unique: Eyes of Pain)
+        MagicPenPct,            // percent, before the flat
+        SpellVamp,              // percent of an ability's damage as health (a third for an area one)
+        Tenacity,               // percent off crowd control
+        GoldPer10,              // League gold every 10 sec
+        Greed,                  // League gold for a unit killed
+        SlowResist,             // percent off slows
+        OutOfCombatSpeed,       // League flat move speed out of combat (Boots of Mobility)
+        BasicBlockPct,          // percent off basic attacks taken (Ninja Tabi)
+        ChampionBasicBlock,     // League damage off champions' basic attacks (Doran's Shield)
+        OnHitHeal,              // League health a basic attack (Doran's Blade)
+        Maim,                   // League magic damage a basic attack does monsters
+        Butcher,                // percent more damage to monsters
+        AdPerHealth,            // percent of League maximum health as attack damage (Atma's)
+        ManaFont,               // mana regeneration +1% for every 1% of mana missing
+        HealAmp,                // percent more self-healing, regeneration, life steal, spell vamp
+        ChampionHitRegen,       // League health regen per 5 sec for 10 sec after an enemy champion's damage
+        UnitKillArmorAp,        // League armor and ability power a unit kill, 30 stacks (Seeker's)
+        TakedownAp,             // League ability power a stack, 20 stacks (Mejai's)
+        TakedownAd,             // League attack damage a stack, 20 stacks (Sword of the Occult)
+        TakedownManaPct,        // percent of maximum mana on a kill or assist (Athene's)
+        ColdSteelAs,            // percent attack speed off a basic attacker, 1 sec
+        ColdSteelMs,            // percent move speed off it (Randuin's)
+        AuraAllyMr, AuraAllyHp5, AuraAllyMp5, AuraAllyAp, AuraAllySpellVamp, AuraAllyAd, AuraAllyLs,
+        AuraEnemyMr,            // League magic resist off nearby enemies
+        AuraEnemyAs,            // percent attack speed off nearby enemies
+        Count
+    };
+    inline bool IsAura(Unique stat) { return stat >= Unique::AuraAllyMr && stat < Unique::Count; }
+    inline bool IsEnemyAura(Unique stat) { return stat == Unique::AuraEnemyMr || stat == Unique::AuraEnemyAs; }
+
+    struct ItemUnique
+    {
+        std::string Name;
+        Unique Stat = Unique::Count;
+        float Value = 0.0f;
+    };
+
     struct Tables
     {
         std::unordered_map<std::string, UnitStats> Units;
         std::unordered_map<uint8, ChampionStats> Champions;
         std::unordered_map<uint32, ItemStats> Items;
+        std::unordered_map<uint32, std::vector<ItemUnique>> Uniques;
     };
 
     // Reads the three tables (world startup, and every Rift match as it is set up,
@@ -122,6 +172,10 @@ namespace RiftLeague
     TC_GAME_API float ArmorMultiplier(float wowArmor, uint8 level);
     // League's attack speed cap.
     float constexpr ATTACK_SPEED_CAP = 2.5f;
+    // League units to yards on the Rift's map (BattlegroundSRF lays the map out at
+    // this scale: 1.5 x League's, 50 units a yard).
+    float constexpr YARDS_PER_UNIT = 1.5f / 50.0f;
+    constexpr float Yards(float units) { return units * YARDS_PER_UNIT; }
 }
 
 #endif

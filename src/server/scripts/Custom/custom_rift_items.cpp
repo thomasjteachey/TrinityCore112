@@ -36,8 +36,20 @@
 //   94136  Rage (Phage / Trinity Force): DBC proc, nothing here
 //   94133  Stasis (Zhonya's Hourglass), 94138-94140: DBC auras, nothing here
 //   94141  Valor's Reward: RiftProgression::OnLevelChanged
-//   94161  Crest of the Ancient Golem: its cooldown reduction, a modifier
-//          RiftProgression::CrestCooldownMod builds
+//   94170  the champion's cooldown reduction - the items', the Crest of the Ancient
+//          Golem's, Mejai's at 20 stacks - one modifier RiftProgression::CooldownMod
+//          builds from the carrier's amount
+//
+// League's UNIQUE item effects (world `rift_league_item_unique`, summed by
+// RiftProgression, read here through ItemHooksOf) on basic attacks and damage:
+//   Ninja Tabi        a share of every basic attack's damage blocked
+//   Doran's Shield    League damage blocked off each champion's basic attack
+//   Doran's Blade     League health back on each basic attack
+//   Maim              League magic damage (94171) on each basic attack at a monster
+//   Butcher           a share more damage to monsters, from anything the champion does
+//   Cold Steel        a basic attacker slowed (94172): attack speed, Randuin's run speed too
+//   Spectre's Cowl    League health regeneration (94173) for 10 sec after an enemy
+//                     champion's damage (Spirit Visage's as well)
 
 #include "CellImpl.h"
 #include "GridNotifiers.h"
@@ -73,6 +85,15 @@ namespace
     uint32 constexpr ITEM_TRINITY_FORCE       = 991035;
     uint32 constexpr RIFT_ITEM_SPELL_FIRST    = 94120;
     uint32 constexpr RIFT_ITEM_SPELL_LAST     = 94141;
+    uint32 constexpr SPELL_MAIM               = 94171;
+    uint32 constexpr SPELL_COLD_STEEL         = 94172;
+    uint32 constexpr SPELL_SPECTRE_REGEN      = 94173;
+    // The jungle's monsters (BattlegroundSRF.h: Blue Sentinel 922130 .. Baron Nashor 922141).
+    uint32 constexpr RIFT_MONSTER_FIRST       = 922130;
+    uint32 constexpr RIFT_MONSTER_LAST        = 922141;
+    // Spectre's Cowl is put on again only once its 10 sec have run down to this:
+    // a champion's damage comes many times a second.
+    int32 constexpr SPECTRE_REFRESH_BELOW     = 9000;
 
     float constexpr IMMOLATE_RANGE = 10.0f;
     Milliseconds constexpr SPELLBLADE_COOLDOWN = 2000ms;
@@ -144,6 +165,62 @@ namespace
         }
         return weapon;
     }
+
+    bool IsMonster(Unit const* unit)
+    {
+        return unit && unit->GetTypeId() == TYPEID_UNIT && unit->GetEntry() >= RIFT_MONSTER_FIRST && unit->GetEntry() <= RIFT_MONSTER_LAST;
+    }
+
+    // Butcher: the champion's damage to a monster, a share more.
+    template <typename T>
+    void Butcher(Unit* attacker, Unit* target, T& damage)
+    {
+        if (!(damage > 0) || !IsMonster(target))
+            return;
+        Player const* champion = attacker ? attacker->ToPlayer() : nullptr;
+        if (!champion)
+            return;
+        RiftProgression::ItemHooks const hooks = RiftProgression::ItemHooksOf(champion);
+        if (hooks.Butcher > 0.0f)
+            damage = T(std::lround(float(damage) * (1.0f + hooks.Butcher / 100.0f)));
+    }
+
+    // A champion healing itself from an item, League's way: Spirit Visage adds its
+    // share, healing cuts (Mortal Strike's, as Grievous Wounds) take theirs.
+    void HealChampion(Player* player, float heal, float healAmp)
+    {
+        if (!player->IsAlive())
+            return;
+        heal *= 1.0f + healAmp / 100.0f;
+        if (int32 const cut = player->GetMaxNegativeAuraModifier(SPELL_AURA_MOD_HEALING_PCT))
+            AddPct(heal, cut);
+        if (heal < 1.0f)
+            return;
+        HealInfo info(player, player, uint32(heal), nullptr, SPELL_SCHOOL_MASK_NORMAL);
+        Unit::DealHeal(info);
+    }
+
+    // Cold Steel on whoever struck the holder with a basic attack: one at a time on
+    // an attacker, whoever's (a UNIQUE); the holder's own is put on afresh.
+    void ColdSteel(Player* holder, Unit* attacker, RiftProgression::ItemHooks const& hooks)
+    {
+        if (Aura const* other = attacker->GetAura(SPELL_COLD_STEEL); other && other->GetCasterGUID() != holder->GetGUID())
+            return;
+        int32 const attackSpeed = int32(std::lround(hooks.ColdSteelAs));
+        int32 const moveSpeed = int32(std::lround(hooks.ColdSteelMs));
+        ObjectGuid const attackerGuid = attacker->GetGUID();
+        holder->m_Events.AddEventAtOffset([holder, attackerGuid, attackSpeed, moveSpeed]()
+        {
+            Unit* back = ObjectAccessor::GetUnit(*holder, attackerGuid);
+            if (!back || !back->IsAlive() || !holder->IsAlive())
+                return;
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.AddSpellMod(SPELLVALUE_BASE_POINT0, -attackSpeed - 1);   // the row's die adds 1
+            args.AddSpellMod(SPELLVALUE_BASE_POINT1, -attackSpeed - 1);
+            args.AddSpellMod(SPELLVALUE_BASE_POINT2, -moveSpeed - 1);
+            holder->CastSpell(back, SPELL_COLD_STEEL, args);
+        }, 1ms);
+    }
 }
 
 // Spellblade's charge, and its spending; Thornmail's reflection - on every basic
@@ -159,14 +236,18 @@ public:
         BasicAttack(target, attacker, damage, BASE_ATTACK);
     }
 
-    // Banshee's Veil: damage from an enemy champion (or its pet) holds the spell
-    // shield back for another 25 sec and starts the regeneration.
+    // Damage from an enemy champion (or its pet): Banshee's Veil holds the spell
+    // shield back for another 25 sec and starts its regeneration; Spectre's Cowl
+    // (and Spirit Visage) start theirs.
     void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
     {
-        if (!damage || !attacker || !victim || attacker == victim || victim->GetTypeId() != TYPEID_PLAYER || !victim->HasAura(SPELL_BANSHEE))
+        if (!damage || !attacker || !victim || attacker == victim || victim->GetTypeId() != TYPEID_PLAYER)
             return;
         Player* champion = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
         if (!champion || champion == victim || !champion->IsHostileTo(victim))
+            return;
+        SpectreRegen(victim->ToPlayer());
+        if (!victim->HasAura(SPELL_BANSHEE))
             return;
         if (!victim->HasAura(SPELL_SPELL_SHIELD))
             victim->GetSpellHistory()->AddCooldown(SPELL_SPELL_SHIELD, 0, SPELL_SHIELD_RECHARGE);
@@ -187,14 +268,45 @@ public:
 
     void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo) override
     {
-        if (!spellInfo || damage <= 0 || !IsRangedBasicAttack(spellInfo))
+        if (!spellInfo || damage <= 0)
             return;
+        if (!IsRangedBasicAttack(spellInfo))
+        {
+            Butcher(attacker, target, damage);
+            return;
+        }
         uint32 dealt = uint32(damage);
         BasicAttack(target, attacker, dealt, RANGED_ATTACK);
         damage = int32(dealt);
     }
 
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override
+    {
+        Butcher(attacker, target, damage);
+    }
+
 private:
+    // Spectre's Cowl, Spirit Visage: League health regeneration for 10 sec after an
+    // enemy champion's damage, as Banshee's Veil's is put on.
+    static void SpectreRegen(Player* victim)
+    {
+        RiftProgression::ItemHooks const hooks = RiftProgression::ItemHooksOf(victim);
+        if (hooks.ChampionHitRegen <= 0.0f)
+            return;
+        if (Aura const* regen = victim->GetAura(SPELL_SPECTRE_REGEN); regen && regen->GetDuration() > SPECTRE_REFRESH_BELOW)
+            return;
+        int32 const amount = std::max(1, int32(std::lround(0.4f * hooks.Scale * hooks.ChampionHitRegen * (1.0f + hooks.HealAmp / 100.0f))));
+        ObjectGuid const guid = victim->GetGUID();
+        victim->m_Events.AddEventAtOffset([victim, guid, amount]()
+        {
+            if (!victim->IsAlive() || victim->GetGUID() != guid)
+                return;
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.AddSpellMod(SPELLVALUE_BASE_POINT0, amount - 1);   // the row's die adds 1
+            victim->CastSpell(victim, SPELL_SPECTRE_REGEN, args);
+        }, 1ms);
+    }
+
     static void BasicAttack(Unit* target, Unit* attacker, uint32& damage, WeaponAttackType attackType)
     {
         if (!attacker || !target || attacker == target)
@@ -207,6 +319,45 @@ private:
             damage += uint32(champion ? RiftProgression::BaseAttackDamage(champion) * times : WeaponAverage(attacker, attackType) * times);
             attacker->RemoveAurasDueToSpell(SPELL_SPELLBLADE_CHARGED);
             attacker->GetSpellHistory()->AddCooldown(SPELL_SPELLBLADE_CHARGED, 0, SPELLBLADE_COOLDOWN);
+        }
+
+        // League's UNIQUE item effects on a basic attack: the attacker's, then the struck champion's.
+        if (Player* champion = attacker->ToPlayer(); champion && damage)
+        {
+            RiftProgression::ItemHooks const hooks = RiftProgression::ItemHooksOf(champion);
+            if (hooks.InMatch)
+            {
+                Butcher(champion, target, damage);
+                if (hooks.OnHitHeal > 0.0f)
+                    HealChampion(champion, hooks.OnHitHeal * hooks.Scale, hooks.HealAmp);
+                if (hooks.Maim > 0.0f && IsMonster(target))
+                {
+                    uint32 const maim = uint32(std::lround(hooks.Maim * hooks.Scale));
+                    ObjectGuid const targetGuid = target->GetGUID();
+                    champion->m_Events.AddEventAtOffset([champion, targetGuid, maim]()
+                    {
+                        if (Unit* struck = ObjectAccessor::GetUnit(*champion, targetGuid))
+                            if (champion->IsAlive())
+                                DealItemDamage(champion, struck, SPELL_MAIM, maim);
+                    }, 1ms);
+                }
+            }
+        }
+        if (Player* struck = target->ToPlayer(); struck && damage)
+        {
+            RiftProgression::ItemHooks const hooks = RiftProgression::ItemHooksOf(struck);
+            if (hooks.InMatch)
+            {
+                if (hooks.BasicBlockPct > 0.0f)
+                    damage = uint32(std::lround(float(damage) * std::max(0.0f, 1.0f - hooks.BasicBlockPct / 100.0f)));
+                if (hooks.ChampionBasicBlock > 0.0f && attacker->GetTypeId() == TYPEID_PLAYER)
+                {
+                    uint32 const block = uint32(std::lround(hooks.ChampionBasicBlock * hooks.Scale));
+                    damage = damage > block ? damage - block : 0;
+                }
+                if ((hooks.ColdSteelAs > 0.0f || hooks.ColdSteelMs > 0.0f) && attacker->IsAlive())
+                    ColdSteel(struck, attacker, hooks);
+            }
         }
 
         // Icy: put on a moment later too.
@@ -330,21 +481,22 @@ class spell_rift_lizard_burn : public AuraScript
     }
 };
 
-// 94161 Crest of the Ancient Golem: the cooldown reduction (its first effect's
-// amount) is a SPELLMOD_COOLDOWN pct modifier on the holder's class spells, so
-// the client shows and times the shorter cooldowns itself.
-class spell_rift_crest : public AuraScript
+// 94170 the champion's cooldown reduction (its first effect's amount, which
+// RiftProgression::SetChampionCarriers keeps): a SPELLMOD_COOLDOWN pct modifier
+// on the holder's class spells, so the client shows and times the shorter
+// cooldowns itself.
+class spell_rift_cdr : public AuraScript
 {
-    PrepareAuraScript(spell_rift_crest);
+    PrepareAuraScript(spell_rift_cdr);
 
     void CalcSpellMod(AuraEffect const* aurEff, SpellModifier*& spellMod)
     {
-        RiftProgression::CrestCooldownMod(aurEff, spellMod);
+        RiftProgression::CooldownMod(aurEff, spellMod);
     }
 
     void Register() override
     {
-        DoEffectCalcSpellMod += AuraEffectCalcSpellModFn(spell_rift_crest::CalcSpellMod, EFFECT_0, SPELL_AURA_DUMMY);
+        DoEffectCalcSpellMod += AuraEffectCalcSpellModFn(spell_rift_cdr::CalcSpellMod, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -511,7 +663,7 @@ void AddSC_custom_rift_items()
     RegisterSpellScript(spell_rift_item_immolate);
     RegisterSpellScript(spell_rift_lizard_burn);
     RegisterSpellScript(spell_rift_dragon_burn);
-    RegisterSpellScript(spell_rift_crest);
+    RegisterSpellScript(spell_rift_cdr);
     RegisterSpellScript(spell_rift_item_warmog);
     RegisterSpellScript(spell_rift_item_rod_of_ages);
     RegisterSpellScript(spell_rift_item_guardian_angel);

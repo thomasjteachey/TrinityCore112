@@ -182,13 +182,14 @@ namespace RiftProgression
     // The Blessing of the Lizard Elder's slow and burn on whoever a champion's
     // basic attack struck (OnBasicAttackDamage).
     TC_GAME_API void LizardBurn(Player* attacker, Unit* victim, bool ranged);
-    // League's cooldown reduction on the champion's own class spells (the Crest
-    // of the Ancient Golem) is a real SPELLMOD_COOLDOWN pct modifier, so the
-    // client works the shortened cooldowns out itself - tooltips, timers, its
-    // "not ready" check - as Violet Hold's Boon of Alacrity does. The Crest's
-    // aura script builds it here (DoEffectCalcSpellMod), on a mask that gives
+    // League's cooldown reduction on the champion's own class spells - the items',
+    // the Crest of the Ancient Golem's and Mejai's at 20 stacks, 40% at most - is a
+    // real SPELLMOD_COOLDOWN pct modifier, so the client works the shortened
+    // cooldowns out itself - tooltips, timers, its "not ready" check - as Violet
+    // Hold's Boon of Alacrity does. The carrier's aura script (94170, spell_rift_cdr)
+    // builds it here (DoEffectCalcSpellMod), from its amount, on a mask that gives
     // each class spell one bit (the client adds a modifier once per bit).
-    TC_GAME_API void CrestCooldownMod(AuraEffect const* crest, SpellModifier*& mod);
+    TC_GAME_API void CooldownMod(AuraEffect const* carrier, SpellModifier*& mod);
     // What SpellHistory::StartCooldown still takes off itself: the share, 0 for
     // none, for the few class spells the modifier cannot reach. `clientMisreads`
     // is set when the client's own cooldown will be wrong (a spell left out, or
@@ -203,9 +204,40 @@ namespace RiftProgression
     // Polymorph, a Fear) miss outright (WorldObject::MagicSpellHitResult). 0 outside a match.
     TC_GAME_API float GearMagicResist(Player const* player);
     // BattlegroundSRF: a champion killed a unit (minion, monster, champion), and a
-    // champion died - the Bloodthirster's stacks.
+    // champion died - the Bloodthirster's stacks, Seeker's Armguard's, Greed's gold,
+    // Mejai's and the Sword of the Occult's losses.
     TC_GAME_API void OnUnitKill(Player* player);
     TC_GAME_API void OnDeath(Player* player);
+    // BattlegroundSRF: a champion's kill (`kill`) or assist on an enemy champion -
+    // Mejai's Soulstealer and Sword of the Occult (2 stacks, 1), Athene's mana.
+    TC_GAME_API void OnChampionTakedown(Player* player, bool kill);
+    // BattlegroundSRF's passive gold tick: the items' gold every 10 sec (Philosopher's
+    // Stone, Kage's Lucky Pick, Avarice Blade) for `diff` ms.
+    TC_GAME_API void ItemGoldTick(Player* player, uint32 diff);
+
+    // League's item effects the core asks for, 0 outside the Rift: flat armor
+    // penetration in League's points (Unit::CalcArmorReducedDamage), percent magic
+    // penetration (before the flat: Unit::CalculateAverageResistReduction), percent
+    // off slows (Unit::UpdateSpeed) and tenacity, percent off a crowd-control spell's
+    // duration (WorldObject::ModSpellDuration).
+    TC_GAME_API float ArmorPenetration(Player const* player);
+    TC_GAME_API float MagicPenetrationPct(Player const* player);
+    TC_GAME_API float SlowResist(Player const* player);
+    TC_GAME_API float Tenacity(Player const* player, SpellInfo const* spellInfo, uint32 effectMask);
+    // And what custom_rift_items.cpp's hooks need, in League's numbers (Scale makes
+    // them WoW's): basic attacks blocked, health on hit, monsters maimed and butchered,
+    // healing amplified, regeneration after a champion's damage, Cold Steel, spell vamp.
+    struct ItemHooks
+    {
+        bool InMatch = false;
+        float BasicBlockPct = 0.0f, ChampionBasicBlock = 0.0f, OnHitHeal = 0.0f, Maim = 0.0f, Butcher = 0.0f;
+        float HealAmp = 0.0f, ChampionHitRegen = 0.0f, ColdSteelAs = 0.0f, ColdSteelMs = 0.0f, SpellVamp = 0.0f;
+        float Scale = 1.0f;
+    };
+    TC_GAME_API ItemHooks ItemHooksOf(Player const* player);
+    // Spell vamp: an ability's damage back as health (a third of it for an area one),
+    // from OnBasicAttackDamage and the periodic damage hook.
+    TC_GAME_API void SpellVamp(Player* player, Unit* victim, uint32 damage, SpellInfo const* spell);
     // League's base attack damage at the champion's League level (no runes, no
     // items) in WoW's numbers: what Sheen's and Trinity Force's Spellblade add.
     TC_GAME_API float BaseAttackDamage(Player const* player);
@@ -227,6 +259,9 @@ namespace RiftProgression
     // addon asking for the current state, e.g. after /reload).
     TC_GAME_API void HandlePickRequest(Player* player, std::string_view argument);
     TC_GAME_API void HandleStateRequest(Player* player, std::string_view argument);
+    // CCGAMEREQ "RIFTBUY:<entry>": the shop's purchase, at the fountain (a 3.3.5
+    // vendor lists 150 items at most, League's shop more).
+    TC_GAME_API void HandleBuyRequest(Player* player, std::string_view argument);
     // Tells CENTURION_Rift whether the character is in its fountain ("RIFTBASE:1"
     // / "RIFTBASE:0"): the pick panel only shows there, and walking in opens the
     // talent frame when there are points to spend. BattlegroundSRF sends it on

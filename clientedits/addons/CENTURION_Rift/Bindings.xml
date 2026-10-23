@@ -2,4 +2,7 @@
 	<Binding name="CENTURIONRIFT_SCORE" runOnUp="true" header="CENTURIONRIFT">
 		CENTURION_RiftScore_Key(keystate);
 	</Binding>
+	<Binding name="CENTURIONRIFT_SHOP">
+		CENTURION_RiftShop_Toggle();
+	</Binding>
 </Bindings>

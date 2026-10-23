@@ -119,8 +119,46 @@ void Load()
         } while (rows->NextRow());
     }
 
-    TC_LOG_INFO("server.loading", ">> Summoner's Rift League numbers: {} unit kind(s), {} class(es), {} item(s).",
-        tables->Units.size(), tables->Champions.size(), tables->Items.size());
+    // The items' UNIQUE effects (rift_shop.py, gen_league_sql.py). A realm without
+    // the table plays the items' plain stats only.
+    size_t uniques = 0;
+    if (HasTable("rift_league_item_unique"))
+        if (QueryResult rows = WorldDatabase.Query("SELECT entry, name, stat, value FROM rift_league_item_unique"))
+        {
+            static std::unordered_map<std::string, Unique> const names =
+            {
+                { "cdr", Unique::CooldownReduction }, { "armor_pen", Unique::ArmorPen }, { "magic_pen", Unique::MagicPen },
+                { "magic_pen_pct", Unique::MagicPenPct }, { "spell_vamp", Unique::SpellVamp }, { "tenacity", Unique::Tenacity },
+                { "gold10", Unique::GoldPer10 }, { "greed", Unique::Greed }, { "slow_resist", Unique::SlowResist },
+                { "ms_ooc", Unique::OutOfCombatSpeed }, { "basic_block_pct", Unique::BasicBlockPct },
+                { "champ_basic_block", Unique::ChampionBasicBlock }, { "on_hit_heal", Unique::OnHitHeal }, { "maim", Unique::Maim },
+                { "butcher", Unique::Butcher }, { "ad_per_health", Unique::AdPerHealth }, { "mana_font", Unique::ManaFont },
+                { "heal_amp", Unique::HealAmp }, { "champ_hit_regen", Unique::ChampionHitRegen },
+                { "unit_kill_armor_ap", Unique::UnitKillArmorAp }, { "takedown_ap", Unique::TakedownAp },
+                { "takedown_ad", Unique::TakedownAd }, { "takedown_mana_pct", Unique::TakedownManaPct },
+                { "cold_steel_as", Unique::ColdSteelAs }, { "cold_steel_ms", Unique::ColdSteelMs },
+                { "aura_ally_mr", Unique::AuraAllyMr }, { "aura_ally_hp5", Unique::AuraAllyHp5 }, { "aura_ally_mp5", Unique::AuraAllyMp5 },
+                { "aura_ally_ap", Unique::AuraAllyAp }, { "aura_ally_spell_vamp", Unique::AuraAllySpellVamp },
+                { "aura_ally_ad", Unique::AuraAllyAd }, { "aura_ally_ls", Unique::AuraAllyLs },
+                { "aura_enemy_mr", Unique::AuraEnemyMr }, { "aura_enemy_as", Unique::AuraEnemyAs },
+            };
+            do
+            {
+                Field* f = rows->Fetch();
+                auto const stat = names.find(f[2].GetString());
+                if (stat == names.end())
+                {
+                    TC_LOG_ERROR("server.loading", "rift_league_item_unique: item {} has stat `{}`, which RiftProgression does not know - skipped.",
+                        f[0].GetUInt32(), f[2].GetString());
+                    continue;
+                }
+                tables->Uniques[f[0].GetUInt32()].push_back({ f[1].GetString(), stat->second, f[3].GetFloat() });
+                ++uniques;
+            } while (rows->NextRow());
+        }
+
+    TC_LOG_INFO("server.loading", ">> Summoner's Rift League numbers: {} unit kind(s), {} class(es), {} item(s), {} unique effect(s).",
+        tables->Units.size(), tables->Champions.size(), tables->Items.size(), uniques);
     std::lock_guard<std::mutex> lock(TablesMutex);
     Current = std::move(tables);
 }

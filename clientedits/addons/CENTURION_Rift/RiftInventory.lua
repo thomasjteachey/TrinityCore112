@@ -14,7 +14,7 @@
 -- another slot to reorder. The slot order is the bag order.
 
 local RIFT_ZONE = "Summoner's Rift";
-local SHOP_FIRST, SHOP_LAST = 991000, 991099;
+local SHOP_FIRST, SHOP_LAST = 991000, 991299;
 local ITEM_SLOTS = 6;
 
 local SLOT = 44;

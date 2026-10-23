@@ -118,7 +118,13 @@ enum BG_SRF_Spells
     // Chaos turret shot's Fireball missile, renamed - and the burn it leaves.
     BG_SRF_SPELL_DRAGON_BURN = 94168, // "Dragon Fire": true damage (spell_rift_dragon_burn), 20% less attack speed
     BG_SRF_SPELL_DRAGON_FIRE = 94169, // "Dragon Fire": the missile, its damage set per cast
-    BG_SRF_SPELL_BARON_BUFF  = 94164  // "Exalted with Baron Nashor": damage, ability power, regeneration
+    BG_SRF_SPELL_BARON_BUFF  = 94164, // "Exalted with Baron Nashor": damage, ability power, regeneration
+    // The Season 3 Baron Nashor (npc_rift_baron, Baron*): its attacks' missiles, their
+    // damage set per cast, and Propelled's puddle and slow.
+    BG_SRF_SPELL_BARON_WRATH     = 94177, // "Wrath of the Ancients": magic, a stack of +25% magic damage taken
+    BG_SRF_SPELL_BARON_CORROSION = 94178, // "Voracious Corrosion": physical; half damage to Baron after it
+    BG_SRF_SPELL_BARON_PUDDLE    = 94179, // "Propelled": the ooze on the ground before the knock-up
+    BG_SRF_SPELL_BARON_PROPELLED = 94180  // "Propelled": the slow after it
 };
 
 enum BG_SRF_TrinityStrings
@@ -265,6 +271,16 @@ public:
     // and the shot itself.
     float DragonRange() const;
     void DragonAttack(Creature* dragon, Unit* victim);
+    // The Season 3 Baron Nashor's, timed by its AI (npc_rift_baron): reach, a bolt of
+    // Wrath of the Ancients, Voracious Corrosion, Sweeping Blow (every champion close
+    // by knocked away) and Propelled (the puddle under `victim` now, the knock-up and
+    // slow of whoever stands in it a second later).
+    float BaronRange() const;
+    float BaronSweepReach() const;
+    void BaronWrath(Creature* baron, Unit* victim);
+    void BaronCorrosion(Creature* baron, Unit* victim);
+    void BaronSweep(Creature* baron);
+    void BaronPropel(Creature* baron, Unit* victim);
     // League's lobby: a seat is taken before the match, never during it (owner
     // 2026-10-22: "like arenas ... not join late").
     bool TakesSeatsInPreparationOnly() const override { return true; }

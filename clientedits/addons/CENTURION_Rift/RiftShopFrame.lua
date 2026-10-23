@@ -8,8 +8,18 @@
 -- - with its price for you and a Purchase button. Right-click an item to buy
 -- it at once; sell from the inventory (right-click an item there). The prices
 -- are League's build-path prices (RiftShop.lua, the server's ShopPrice).
+--
+-- The grid is every item the class may buy (RiftItems.lua), not the vendor's
+-- list: a 3.3.5 vendor holds 150 items at most and League's shop is longer. An
+-- item on the vendor's list is bought through it; any other goes to the server
+-- as "RIFTBUY:<entry>" (RiftProgression::HandleBuyRequest: at the fountain, or
+-- anywhere while dead, as League). /riftshop (or its key) opens the shop away
+-- from the shopkeeper - to browse, and to buy while dead.
 
-local SHOP_FIRST, SHOP_LAST = 991000, 991099;
+local SHOP_FIRST, SHOP_LAST = 991000, 991299;
+local REQUEST_PREFIX = "CCGAME" .. "REQ";
+local CLASS_MASK = { WARRIOR = 1, PALADIN = 2, HUNTER = 4, ROGUE = 8, PRIEST = 16, DEATHKNIGHT = 32,
+	SHAMAN = 64, MAGE = 128, WARLOCK = 256, DRUID = 1024 };
 local RIFT_ZONE = "Summoner's Rift";
 local COPPER = 10000;
 local ITEMS = CENTURION_RIFT_ITEMS or {};
@@ -29,6 +39,15 @@ local CATEGORIES = {
 local TIERS = { { "basic", "Basic" }, { "epic", "Epic" }, { "legendary", "Legendary" } };
 
 local function Shop() return CENTURION_RiftShop; end
+
+-- An item the character's class may buy (the insignias are each one class's).
+local function ForMe(item)
+	if ( not item.classes ) then
+		return true;
+	end
+	local _, class = UnitClass("player");
+	return bit.band(item.classes, CLASS_MASK[class or ""] or 0) ~= 0;
+end
 local function YourCost(id) return Shop() and Shop().Cost(id) or (ITEMS[id] and ITEMS[id].gold or 0); end
 local function Held() return Shop() and Shop().Held() or {}; end
 
@@ -87,7 +106,9 @@ goldText:SetTextColor(1, 0.82, 0.25);
 
 local close = CreateFrame("Button", nil, shop, "UIPanelCloseButton");
 close:SetPoint("TOPRIGHT", shop, "TOPRIGHT", 2, 2);
-close:SetScript("OnClick", function() CloseMerchant(); end);
+close:SetScript("OnClick", function()
+	if ( MerchantFrame and MerchantFrame:IsShown() ) then CloseMerchant(); else shop:Hide(); end
+end);
 
 local searchBox = CreateFrame("EditBox", "CENTURION_RiftShopSearch", shop, "InputBoxTemplate");
 searchBox:SetWidth(180);
@@ -128,11 +149,18 @@ local function Price(fs, id)
 end
 
 local function Buy(id)
-	local index = merchantIndex[id];
-	if ( not index ) then
+	if ( not id ) then
 		return;
 	end
-	BuyMerchantItem(index, 1);
+	local index = merchantIndex[id];
+	if ( index and MerchantFrame and MerchantFrame:IsShown() ) then
+		BuyMerchantItem(index, 1);
+		return;
+	end
+	local me = UnitName("player");
+	if ( SendAddonMessage and me ) then
+		SendAddonMessage(REQUEST_PREFIX, "RIFTBUY:" .. id, "WHISPER", me);
+	end
 end
 
 local function ItemButton(parent, size)
@@ -157,7 +185,7 @@ local function ItemButton(parent, size)
 	b:SetScript("OnEnter", function(self)
 		if ( not self.item ) then return; end
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT");
-		if ( merchantIndex[self.item] ) then
+		if ( merchantIndex[self.item] and MerchantFrame and MerchantFrame:IsShown() ) then
 			GameTooltip:SetMerchantItem(merchantIndex[self.item]);
 		else
 			GameTooltip:SetHyperlink("item:" .. self.item);
@@ -223,7 +251,7 @@ local function Matches(id, item)
 	if ( search ~= "" and not string.find(string.lower(item.name), string.lower(search), 1, true) ) then
 		return false;
 	end
-	return merchantIndex[id] ~= nil;
+	return ForMe(item);
 end
 
 -- ------------------------------------------------------------------ detail
@@ -277,7 +305,7 @@ purchase:SetScript("OnClick", function() if ( selected ) then Buy(selected); end
 
 local hint = shop:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall");
 hint:SetPoint("BOTTOMLEFT", shop, "BOTTOMLEFT", 16, 16);
-hint:SetText("Right-click an item to buy it.  Sell from your inventory.");
+hint:SetText("Right-click an item to buy it.  Sell from your inventory at the shopkeeper.");
 
 -- Lay the tree out: the item, its components under it, theirs under them.
 local function Tree(held)
@@ -350,15 +378,25 @@ Refresh = function()
 	wipe(merchantIndex);
 	-- By link, else by name - and an item the client has not cached yet has
 	-- neither: the shopkeepers sell the shop in entry order (rift_shop.py writes
-	-- npc_vendor that way), so slot i is entry SHOP_FIRST + i - 1. New items were
-	-- left off the grid until they happened to be cached.
-	for i = 1, GetMerchantNumItems() do
-		local id = tonumber(string.match(GetMerchantItemLink(i) or "", "item:(%d+)")) or idByName[GetMerchantItemInfo(i) or ""];
-		if ( not id and ITEMS[SHOP_FIRST + i - 1] ) then
-			id = SHOP_FIRST + i - 1;
+	-- npc_vendor that way) less the items for other classes, which a vendor does
+	-- not list (WorldSession::SendListInventory), so slot i is the i-th entry this
+	-- class may buy. New items were left off the grid until they happened to be cached.
+	if ( MerchantFrame and MerchantFrame:IsShown() ) then
+		local order = {};
+		for id, item in pairs(ITEMS) do
+			if ( ForMe(item) ) then
+				table.insert(order, id);
+			end
 		end
-		if ( id ) then
-			merchantIndex[id] = i;
+		table.sort(order);
+		for i = 1, GetMerchantNumItems() do
+			local id = tonumber(string.match(GetMerchantItemLink(i) or "", "item:(%d+)")) or idByName[GetMerchantItemInfo(i) or ""];
+			if ( not id and order[i] ) then
+				id = order[i];
+			end
+			if ( id ) then
+				merchantIndex[id] = i;
+			end
 		end
 	end
 	local held = Held();
@@ -451,7 +489,7 @@ Refresh = function()
 		end
 		for k = #into + 1, #intoButtons do intoButtons[k]:Hide(); end
 		purchase:SetText(string.format("Purchase  (%d gold)", cost));
-		if ( GetMoney() >= cost * COPPER and merchantIndex[selected] ) then purchase:Enable(); else purchase:Disable(); end
+		if ( GetMoney() >= cost * COPPER ) then purchase:Enable(); else purchase:Disable(); end
 		purchase:Show();
 	else
 		dIcon:Hide();
@@ -504,7 +542,30 @@ events:SetScript("OnEvent", function(self, event)
 	elseif ( event == "MERCHANT_CLOSED" ) then
 		shop:Hide();
 		RestoreMerchant();
+	elseif ( event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" ) then
+		if ( GetRealZoneText() ~= RIFT_ZONE ) then
+			shop:Hide();
+		end
 	else
 		Refresh();
 	end
 end);
+events:RegisterEvent("PLAYER_ENTERING_WORLD");
+events:RegisterEvent("ZONE_CHANGED_NEW_AREA");
+
+-- League's shop key: open it anywhere in the Rift (buying is the server's to
+-- allow - at the fountain, or while dead); again to close it.
+function CENTURION_RiftShop_Toggle()
+	if ( shop:IsShown() ) then
+		if ( MerchantFrame and MerchantFrame:IsShown() ) then CloseMerchant(); else shop:Hide(); end
+		return;
+	end
+	if ( GetRealZoneText() ~= RIFT_ZONE ) then
+		DEFAULT_CHAT_FRAME:AddMessage("|cffc8a86fThe shop opens in Summoner's Rift.|r");
+		return;
+	end
+	shop:Show();
+end
+BINDING_NAME_CENTURIONRIFT_SHOP = "Shop";
+SLASH_CENTURIONRIFTSHOP1 = "/riftshop";
+SlashCmdList["CENTURIONRIFTSHOP"] = function() CENTURION_RiftShop_Toggle(); end

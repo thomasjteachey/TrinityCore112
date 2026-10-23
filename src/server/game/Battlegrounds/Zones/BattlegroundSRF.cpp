@@ -404,6 +404,19 @@ float constexpr SRF_SIEGE_RANGE         = Yards(450.0f);
 float constexpr SRF_DRAGON_RANGE        = Yards(350.0f);
 float constexpr SRF_DRAGON_BURN         = 60.0f;            // League's, over the burn's 4 ticks
 float constexpr SRF_DRAGON_FIRE_SPEED   = 36.0f;            // yd/s: the Fireball missile (94144's)
+// League Season 3's Baron Nashor (the wiki, mid-2013): ranged, 955; Wrath of the Ancients
+// 70 magic a bolt; Voracious Corrosion is its physical attack (rift_league_unit's 460);
+// Sweeping Blow knocks every champion 600 away; Propelled is Cho'Gath's Rupture (175 round).
+// Who Sweeping Blow reaches and the puddle's second are this realm's numbers: the wiki has none.
+float constexpr SRF_BARON_RANGE          = Yards(955.0f);
+float constexpr SRF_BARON_WRATH          = 70.0f;
+float constexpr SRF_BARON_SWEEP_REACH    = Yards(350.0f);   // edge to edge
+float constexpr SRF_BARON_SWEEP_DISTANCE = Yards(600.0f);   // from Baron's edge, where they land
+float constexpr SRF_BARON_PUDDLE_RADIUS  = Yards(175.0f);
+uint32 constexpr SRF_BARON_PUDDLE_MS     = 1000;
+float constexpr SRF_KNOCK_GRAVITY        = 19.2911f;         // the client's (Movement::gravity)
+float constexpr SRF_SWEEP_SPEED_Z        = 7.0f;             // a 0.73 sec flight
+float constexpr SRF_PROPEL_SPEED_Z       = 9.65f;            // a second in the air
 // League's minion kinds (Season 3). Waves are three melee and three casters, a
 // siege minion every third wave until 35:00 and every second after; a lane whose
 // enemy inhibitor is down sends a super minion instead of the siege minion every
@@ -2291,8 +2304,10 @@ void BattlegroundSRF::HandleKillPlayer(Player* victim, Player* killer)
     {
         ++_stats[ally->GetGUID()].Assists;
         RiftProgression::AddGold(ally, std::max<uint32>(1, gold / 2 / uint32(assists.size())), true);
+        RiftProgression::OnChampionTakedown(ally, false);
     }
     RiftProgression::AddGold(killer, gold, true);
+    RiftProgression::OnChampionTakedown(killer, true);
     AwardKillExperience(killerTeam, victim, killer);
 
     // One announcement a kill, League's order: a multikill, a shutdown, first
@@ -2754,7 +2769,10 @@ void BattlegroundSRF::UpdateProgression(uint32 diff)
         if (_wavesSpawned)
             for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
                 for (Player* player : TeamPlayers(team))
+                {
                     RiftProgression::AddGold(player, SRF_GOLD_PASSIVE);
+                    RiftProgression::ItemGoldTick(player, SRF_PASSIVE_GOLD_TICK);   // gold-per-10 items
+                }
     }
 
     _maintainTimer += diff;
@@ -3491,6 +3509,90 @@ void BattlegroundSRF::DragonAttack(Creature* dragon, Unit* victim)
         args.AddSpellMod(SPELLVALUE_BASE_POINT2, tick - 1);   // the row's die adds 1
         dragon->CastSpell(struck, BG_SRF_SPELL_DRAGON_BURN, args);
     }, Milliseconds(flight));
+}
+
+float BattlegroundSRF::BaronRange() const
+{
+    return SRF_BARON_RANGE;
+}
+
+float BattlegroundSRF::BaronSweepReach() const
+{
+    return SRF_BARON_SWEEP_REACH;
+}
+
+// One bolt of the stream: League's 70 magic at the match's scale. The bolt's own
+// second effect is the stack; League's magic resist takes its share as for any
+// spell in the Rift (Unit::CalculateAverageResistReduction).
+void BattlegroundSRF::BaronWrath(Creature* baron, Unit* victim)
+{
+    if (!baron || !victim)
+        return;
+    FireBolt(baron, victim, BG_SRF_SPELL_BARON_WRATH, std::max<int32>(1, int32(std::lround(UnitScale() * SRF_BARON_WRATH))));
+}
+
+// Its physical attack, League's 460 (the weapon ApplyLeagueStats gave it); the
+// target's League armor takes its share (a physical spell: Unit::CalcArmorReducedDamage).
+void BattlegroundSRF::BaronCorrosion(Creature* baron, Unit* victim)
+{
+    if (!baron || !victim)
+        return;
+    float const hit = (baron->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE) + baron->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE)) / 2.0f;
+    FireBolt(baron, victim, BG_SRF_SPELL_BARON_CORROSION, std::max<int32>(1, int32(std::lround(hit))));
+}
+
+// Sweeping Blow: every champion close by, out to 600 League units from Baron.
+void BattlegroundSRF::BaronSweep(Creature* baron)
+{
+    if (!baron || !baron->IsAlive())
+        return;
+    float const flight = 2.0f * SRF_SWEEP_SPEED_Z / SRF_KNOCK_GRAVITY;
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+        for (Player* player : TeamPlayers(team))
+        {
+            if (!player->IsAlive() || !baron->IsValidAttackTarget(player))
+                continue;
+            float const gap = baron->GetExactDist2d(player) - baron->GetCombatReach() - player->GetCombatReach();
+            if (gap > SRF_BARON_SWEEP_REACH)
+                continue;
+            float const push = std::max(1.0f, SRF_BARON_SWEEP_DISTANCE - std::max(0.0f, gap));
+            player->KnockbackFrom(baron->GetPositionX(), baron->GetPositionY(), push / flight, SRF_SWEEP_SPEED_Z);
+        }
+}
+
+// Propelled: the ooze shows under the target, and a second later whoever stands in
+// it is thrown up and slowed - there is time to step out (the wiki: "easy to spot
+// and subsequently dodge"). The marker is a turret eye, invisible, for the puddle.
+void BattlegroundSRF::BaronPropel(Creature* baron, Unit* victim)
+{
+    if (!baron || !victim)
+        return;
+    Position const spot = victim->GetPosition();
+    if (TempSummon* marker = baron->SummonCreature(BG_SRF_ENTRY_TURRET_EYE, spot, TEMPSUMMON_TIMED_DESPAWN, Milliseconds(SRF_BARON_PUDDLE_MS + 500)))
+    {
+        marker->SetFaction(baron->GetFaction());
+        marker->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
+        marker->AddAura(BG_SRF_SPELL_BARON_PUDDLE, marker);
+    }
+    ObjectGuid const baronGuid = baron->GetGUID();
+    baron->m_Events.AddEventAtOffset([baron, baronGuid, spot]()
+    {
+        // the match from Baron's map, not `this`: the event outlives nothing, but says so
+        BattlegroundMap* map = baron->GetMap() ? baron->GetMap()->ToBattlegroundMap() : nullptr;
+        Battleground* bg = map ? map->GetBG() : nullptr;
+        if (!bg || bg->GetTypeID(true) != BATTLEGROUND_SRF || !baron->IsAlive() || baron->GetGUID() != baronGuid)
+            return;
+        BattlegroundSRF const* rift = static_cast<BattlegroundSRF const*>(bg);
+        for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+            for (Player* player : rift->TeamPlayers(team))
+            {
+                if (!player->IsAlive() || !baron->IsValidAttackTarget(player)
+                    || player->GetExactDist2d(&spot) > SRF_BARON_PUDDLE_RADIUS + player->GetCombatReach())
+                    continue;
+                player->KnockbackFrom(spot.GetPositionX(), spot.GetPositionY(), 0.0f, SRF_PROPEL_SPEED_Z);
+                baron->CastSpell(player, BG_SRF_SPELL_BARON_PROPELLED, true);
+            }
+    }, Milliseconds(SRF_BARON_PUDDLE_MS));
 }
 
 float BattlegroundSRF::FlatHonorMultiplier() const
