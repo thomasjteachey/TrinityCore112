@@ -442,10 +442,15 @@ namespace
             {
                 return sSpellMgr->GetSpellRank(a) < sSpellMgr->GetSpellRank(b);
             });
-            // Off the core list: out of the match altogether.
+            // Off the core list: out of the match altogether. A talent's chain is not
+            // the list's to drop - the talent point is its gate, and only the trained
+            // ranks after it are in the chain. The lists name almost none of them
+            // (Trueshot Aura, Aimed Shot, Mortal Strike), so a talent learned in the
+            // match stayed at rank 1 (owner, 2026-10-23: "i should be able to learn
+            // trueshot aura 2/3 with skillpoints").
             SpellInfo const* first = sSpellMgr->GetSpellInfo(itr->first);
             int32 const status = first ? WhitelistStatus(player->GetClass(), first) : -1;
-            if (status == 0)
+            if (status == 0 && !GetTalentSpellPos(itr->first))
             {
                 state.Removed.insert(chain.Ranks.begin(), chain.Ranks.end());
                 itr = state.Chains.erase(itr);
