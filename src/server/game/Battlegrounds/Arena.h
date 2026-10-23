@@ -133,10 +133,12 @@ class TC_GAME_API Arena : public Battleground
         std::vector<ObjectGuid> GetSquadFeedMembers(uint8 squad) const;
         std::string BuildSquadFeedRoster(uint8 squad, std::vector<ObjectGuid> const& members, SquadFeedPlayers const& players) const;
         std::string BuildSquadFeedStates(uint8 squad, std::vector<ObjectGuid> const& members, SquadFeedPlayers const& players) const;
+        std::string BuildSquadFeedWins(uint8 squad, std::vector<ObjectGuid> const& members) const;
         std::string BuildSquadFeedWinner() const;
         void BroadcastSquadFeedLine(std::string const& line, SquadFeedPlayers const& players) const;
         std::string _squadFeedRoster[MAX_BATTLEGROUND_SQUADS];
         std::string _squadFeedStates[MAX_BATTLEGROUND_SQUADS];
+        std::string _squadFeedWins[MAX_BATTLEGROUND_SQUADS];
         bool _squadFeedWinnerSent = false;
         // Squads that had people when the gates opened and have since been
         // wiped out, in the order they fell.

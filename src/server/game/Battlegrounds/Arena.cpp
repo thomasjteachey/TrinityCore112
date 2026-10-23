@@ -203,6 +203,8 @@ void Arena::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& pa
 //                             <health%>.<power%>.<power type>, or d (dead),
 //                             s (stealthed or invisible), o (not on the map)
 //   SQW:<s> / SQW:-           the winning squad, or a draw, once it is over
+//   SQV:<s>:<wins>            Buffle Shuffle only: the same members' rounds won
+//                             so far, comma-separated (the scoreboard's Wins)
 //
 // A line goes out when it changes, looked at every BATTLEGROUND_SQUAD_FEED_INTERVAL;
 // a client that has just loaded asks for all of it (CCGAMEREQ SQUADS). A member
@@ -328,6 +330,22 @@ std::string Arena::BuildSquadFeedStates(uint8 squad, std::vector<ObjectGuid> con
     return line;
 }
 
+std::string Arena::BuildSquadFeedWins(uint8 squad, std::vector<ObjectGuid> const& members) const
+{
+    std::string line = Trinity::StringFormat("SQV:{}:", squad);
+    bool first = true;
+    for (ObjectGuid guid : members)
+    {
+        if (!first)
+            line += ',';
+        first = false;
+
+        auto const wins = _shuffleWins.find(guid);
+        line += std::to_string(wins != _shuffleWins.end() ? wins->second : 0);
+    }
+    return line;
+}
+
 std::string Arena::BuildSquadFeedWinner() const
 {
     // A shuffle's "winning squad" is everyone who won more rounds than they
@@ -387,6 +405,7 @@ void Arena::UpdateSquadFeed()
             _squadFeedRoster[squad] = std::move(roster);
             // The states are read in the roster's order, so they follow it out.
             _squadFeedStates[squad].clear();
+            _squadFeedWins[squad].clear();
             BroadcastSquadFeedLine(_squadFeedRoster[squad], players);
         }
 
@@ -395,6 +414,16 @@ void Arena::UpdateSquadFeed()
         {
             _squadFeedStates[squad] = std::move(states);
             BroadcastSquadFeedLine(_squadFeedStates[squad], players);
+        }
+
+        if (IsSoloShuffle())
+        {
+            std::string wins = BuildSquadFeedWins(squad, members);
+            if (wins != _squadFeedWins[squad])
+            {
+                _squadFeedWins[squad] = std::move(wins);
+                BroadcastSquadFeedLine(_squadFeedWins[squad], players);
+            }
         }
     }
 
@@ -427,6 +456,8 @@ void Arena::SendSquadFeedTo(Player* player)
         std::vector<ObjectGuid> const members = GetSquadFeedMembers(squad);
         SendSquadFeedLine(player, BuildSquadFeedRoster(squad, members, players));
         SendSquadFeedLine(player, BuildSquadFeedStates(squad, members, players));
+        if (IsSoloShuffle())
+            SendSquadFeedLine(player, BuildSquadFeedWins(squad, members));
     }
 
     if (_squadFeedWinnerSent)
