@@ -16,6 +16,7 @@
  */
 
 #include "Miscellaneous/TournamentMode.h"
+#include "Miscellaneous/RiftProgression.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CharacterCache.h"
@@ -1441,6 +1442,10 @@ bool AlwaysMaxWeaponSkill(Player const* player)
 {
     if (IsTournamentCharacter(player))
         return Config.MaxWeaponSkill;
+    // Summoner's Rift: a world character's weapons as a tournament character's while
+    // it plays a match; RiftProgression puts its real skills back afterwards.
+    if (RiftProgression::UsesMatchSkills(player))
+        return true;
 
     return sWorld->getBoolConfig(CONFIG_ALWAYS_MAXSKILL);
 }
@@ -1449,6 +1454,8 @@ bool AlwaysMaxSkillForLevel(Player const* player)
 {
     if (IsTournamentCharacter(player))
         return Config.MaxSkillForLevel;
+    if (RiftProgression::UsesMatchSkills(player))
+        return true;
 
     return sWorld->getBoolConfig(CONFIG_ALWAYS_MAX_SKILL_FOR_LEVEL);
 }

@@ -74,6 +74,10 @@ namespace RiftProgression
 
     // True while this character is playing a Rift match under these rules.
     TC_GAME_API bool IsInMatch(Player const* player);
+    // A world character in a match: its skills follow the tournament's rules there
+    // (Tournament::AlwaysMaxWeaponSkill, AlwaysMaxSkillForLevel), its real ones come back
+    // on the way out. Safe to ask from anywhere: it takes no lock but its own.
+    TC_GAME_API bool UsesMatchSkills(Player const* player);
 
     // BattlegroundSRF::AddPlayer; Battleground::RemovePlayerAtLeave, before the
     // gear comes back (it needs the real level to be worn).

@@ -31,6 +31,7 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "Pet.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "Player.h"
 #include "SpellAuraEffects.h"
@@ -172,6 +173,18 @@ namespace
     };
     using UniqueStats = std::array<float, size_t(RiftLeague::Unique::Count)>;
 
+    struct SavedSkill
+    {
+        uint16 Id = 0, Step = 0, Value = 0, Max = 0;
+    };
+
+    struct PetRank
+    {
+        uint32 Original = 0;     // the rank the pet really knows
+        uint32 Current = 0;      // the rank it has in the match, 0 for none yet
+        uint8 Active = 0;        // the original's ActiveStates, for its pet_spell row
+    };
+
     struct State
     {
         uint8 RealLevel = 1;
@@ -240,6 +253,15 @@ namespace
         // A talent's trained ranks the character never trained, picked in the match
         // (HandlePickRequest): taught the same way, taken back the same way.
         std::unordered_set<uint32> MatchRanks;
+        // A world character's level-ranged skills (weapons, defense, lockpicking) as they
+        // were before the match raised them to its level's maximum (UsesMatchSkills), put
+        // back on the way out (owner, 2026-10-23: "just like tournament characters in this
+        // mode (but get their skills deranked again at the end)").
+        std::vector<SavedSkill> RealSkills;
+        // A hunter pet's abilities held at the rank its match level allows (SyncPetRanks),
+        // by pet number and first rank: the rank it really knows, and the one it has now
+        // (0: none yet at this level). Put back on the way out.
+        std::map<uint32, std::map<uint32, PetRank>> PetRanks;
         // League's UNIQUE item effects (HeldItemEffects): the champion's own, the auras its
         // items give the champions near it, and the spell vamp it gets from its allies'
         // (SetChampionCarriers), for the hooks outside SyncItems.
@@ -265,6 +287,24 @@ namespace
     // be protected while it loads.
     std::unordered_set<ObjectGuid::LowType> Stashed;
     bool StoragePresent = false;
+    // custom_rift_stash's `skills` and `pet_spells` columns (2026-10-23): without them the
+    // real skills and pet ranks are put back from memory only, never after a crash.
+    bool StashSkillsColumn = false;
+    bool StashPetColumn = false;
+    // The characters whose skills follow the tournament's rules while they are in a match
+    // (Tournament::AlwaysMaxWeaponSkill / AlwaysMaxSkillForLevel ask UsesMatchSkills): a
+    // leaf lock of its own, never held while calling out, because those are asked from
+    // deep inside Player code that other locks may already be wrapped around.
+    std::mutex MatchSkillMutex;
+    std::unordered_set<ObjectGuid::LowType> MatchSkillPlayers;
+    void SetMatchSkills(Player const* player, bool on)
+    {
+        std::lock_guard<std::mutex> lock(MatchSkillMutex);
+        if (on)
+            MatchSkillPlayers.insert(player->GetGUID().GetCounter());
+        else
+            MatchSkillPlayers.erase(player->GetGUID().GetCounter());
+    }
     bool WeaponTablePresent = false;   // `custom_rift_weapons`: the armsmaster's choice, kept
 
     // The core abilities (world `rift_ability_whitelist`): per class, the class
@@ -461,6 +501,172 @@ namespace
         for (LearnedTalent const& t : talents)
             player->LearnTalent(t.Id, t.Rank);
         player->SendTalentsInfoData(false);
+    }
+
+    // ---- a world character's skills (SavedSkill): every level-ranged one it knows, as
+    // Player::UpdateSkillsForLevel would raise it - weapons, defense, lockpicking.
+    std::vector<SavedSkill> SnapshotSkills(Player const* player)
+    {
+        std::vector<SavedSkill> out;
+        for (SkillLineEntry const* skill : sSkillLineStore)
+        {
+            if (!skill || !player->HasSkill(skill->ID))
+                continue;
+            SkillRaceClassInfoEntry const* rc = GetSkillRaceClassInfo(skill->ID, player->GetRace(), player->GetClass());
+            if (!rc || GetSkillRangeType(rc) != SKILL_RANGE_LEVEL)
+                continue;
+            out.push_back({ uint16(skill->ID), player->GetSkillStep(skill->ID), player->GetPureSkillValue(skill->ID),
+                player->GetPureMaxSkillValue(skill->ID) });
+        }
+        return out;
+    }
+
+    void RestoreSkills(Player* player, std::vector<SavedSkill> const& skills)
+    {
+        for (SavedSkill const& s : skills)
+            if (s.Value && player->HasSkill(s.Id))
+                player->SetSkill(s.Id, s.Step, s.Value, s.Max);
+    }
+
+    std::string SkillsToString(std::vector<SavedSkill> const& skills)
+    {
+        std::string out;
+        for (SavedSkill const& s : skills)
+            out += Trinity::StringFormat("{}{}:{}:{}:{}", out.empty() ? "" : ",", s.Id, s.Step, s.Value, s.Max);
+        return out;
+    }
+
+    std::vector<SavedSkill> SkillsFromString(std::string const& text)
+    {
+        std::vector<SavedSkill> out;
+        for (std::string_view entry : Trinity::Tokenize(text, ',', false))
+        {
+            std::vector<std::string_view> f = Trinity::Tokenize(entry, ':', false);
+            if (f.size() != 4)
+                continue;
+            Optional<uint16> id = Trinity::StringTo<uint16>(f[0]), step = Trinity::StringTo<uint16>(f[1]),
+                value = Trinity::StringTo<uint16>(f[2]), max = Trinity::StringTo<uint16>(f[3]);
+            if (id && step && value && max)
+                out.push_back({ *id, *step, *value, *max });
+        }
+        return out;
+    }
+
+    // ---- a hunter pet's ranks (PetRank). This tree's hunter pets keep what Beast
+    // Training taught them (Pet::InitLevelupSpellsForLevel learns nothing for them), so a
+    // character's level-60 pet brought rank 8 Bite into a level-10 match (owner,
+    // 2026-10-23: "my pets know max rank bite and other things"). In a match each ability
+    // is held at the highest rank of the pet's own whose level the pet has reached.
+    std::string PetRanksToString(std::map<uint32, std::map<uint32, PetRank>> const& pets)
+    {
+        std::string out;
+        for (auto const& [number, chains] : pets)
+            for (auto const& [first, r] : chains)
+                if (r.Current != r.Original)
+                    out += Trinity::StringFormat("{}{}:{}:{}:{}:{}", out.empty() ? "" : ",", number, first, r.Original, r.Current, uint32(r.Active));
+        return out;
+    }
+
+    std::map<uint32, std::map<uint32, PetRank>> PetRanksFromString(std::string const& text)
+    {
+        std::map<uint32, std::map<uint32, PetRank>> out;
+        for (std::string_view entry : Trinity::Tokenize(text, ',', false))
+        {
+            std::vector<std::string_view> f = Trinity::Tokenize(entry, ':', false);
+            if (f.size() != 5)
+                continue;
+            Optional<uint32> number = Trinity::StringTo<uint32>(f[0]), first = Trinity::StringTo<uint32>(f[1]),
+                original = Trinity::StringTo<uint32>(f[2]), current = Trinity::StringTo<uint32>(f[3]);
+            Optional<uint8> active = Trinity::StringTo<uint8>(f[4]);
+            if (number && first && original && current && active)
+                out[*number][*first] = { *original, *current, *active };
+        }
+        return out;
+    }
+
+    // The ranks back: on the pet, when it is out, else in its pet_spell rows (it was
+    // saved with the match's ranks when it was dismissed or stabled).
+    void PutBackPetRanks(Player* player, std::map<uint32, std::map<uint32, PetRank>> const& pets)
+    {
+        Pet* pet = player->GetPet();
+        for (auto const& [number, chains] : pets)
+        {
+            bool const live = pet && pet->IsInWorld() && pet->GetCharmInfo() && pet->GetCharmInfo()->GetPetNumber() == number;
+            for (auto const& [first, r] : chains)
+            {
+                if (r.Current == r.Original)
+                    continue;
+                if (live)
+                {
+                    if (r.Current)
+                        pet->unlearnSpell(r.Current, false, false);
+                    pet->learnSpell(r.Original);
+                    continue;
+                }
+                // at once: a pet loading next (a login) must read the real ranks
+                if (r.Current)
+                    CharacterDatabase.DirectPExecute("DELETE FROM pet_spell WHERE guid = {} AND spell = {}", number, r.Current);
+                CharacterDatabase.DirectPExecute("REPLACE INTO pet_spell (guid, spell, active) VALUES ({}, {}, {})", number, r.Original, uint32(r.Active));
+            }
+            if (live)
+                player->PetSpellInitialize();
+        }
+    }
+
+    void StashPetRanks(Player const* player, State const& state)
+    {
+        if (StashPetColumn && state.Persistent)
+            CharacterDatabase.PExecute("UPDATE custom_rift_stash SET pet_spells = '{}' WHERE guid = {}",
+                PetRanksToString(state.PetRanks), player->GetGUID().GetCounter());
+    }
+
+    // The pet out now, at its level: each ability it knows with ranks held at the highest
+    // of them the pet has reached - none yet, below the first rank's level - raised as it
+    // levels. A pet first seen here is written down as it really is.
+    void SyncPetRanks(Player* player, State& state)
+    {
+        Pet* pet = player->GetPet();
+        if (!pet || pet->getPetType() != HUNTER_PET || !pet->IsInWorld() || !pet->GetCharmInfo())
+            return;
+        std::map<uint32, PetRank>& chains = state.PetRanks[pet->GetCharmInfo()->GetPetNumber()];
+        for (auto const& [spellId, known] : pet->m_spells)
+        {
+            if (known.state == PETSPELL_REMOVED || known.type != PETSPELL_NORMAL)
+                continue;
+            uint32 const first = sSpellMgr->GetFirstSpellInChain(spellId);
+            if (!first || (first == spellId && !sSpellMgr->GetNextSpellInChain(spellId)))
+                continue;                          // no ranks: nothing to hold back
+            auto const added = chains.try_emplace(first);
+            if (added.second)
+                added.first->second = { spellId, spellId, uint8(known.active) };
+        }
+        uint8 const level = pet->GetLevel();
+        bool changed = false;
+        for (auto& [first, r] : chains)
+        {
+            uint32 want = r.Original;
+            while (want)
+            {
+                SpellInfo const* info = sSpellMgr->GetSpellInfo(want);
+                if (info && info->SpellLevel <= level)
+                    break;
+                want = sSpellMgr->GetPrevSpellInChain(want);
+            }
+            if (want == r.Current)
+                continue;
+            // the bar keeps the button for the rank that replaces it, and loses it when none does
+            if (r.Current)
+                pet->unlearnSpell(r.Current, false, want == 0);
+            if (want)
+                pet->learnSpell(want);
+            r.Current = want;
+            changed = true;
+        }
+        if (changed)
+        {
+            player->PetSpellInitialize();
+            StashPetRanks(player, state);
+        }
     }
 
     std::string ButtonsToString(std::vector<SavedButton> const& buttons)
@@ -751,7 +957,7 @@ namespace
     uint32 constexpr SPELL_CHAMPION_C = 94154;    // melee and ranged attack speed, spell damage
     uint32 constexpr SPELL_CHAMPION_D = 94155;    // healing, mana, health regeneration
     uint32 constexpr SPELL_CHAMPION_E = 94156;    // mana regeneration, (0: magic penetration is MagicPenetration), run speed
-    uint32 constexpr SPELL_CHAMPION_F = 94157;    // the boots' run speed; life steal (tenths of a percent)
+    uint32 constexpr SPELL_CHAMPION_F = 94157;    // the boots' run speed; life steal (tenths of a percent); spell crit
     uint32 constexpr CHAMPION_CARRIERS[] = { SPELL_CHAMPION_A, SPELL_CHAMPION_B, SPELL_CHAMPION_C,
         SPELL_CHAMPION_D, SPELL_CHAMPION_E, SPELL_CHAMPION_F };
     // The stat spells on the items are only their tooltips' lines (rift_shop.py's
@@ -1261,7 +1467,9 @@ namespace
         SetCarrier(player, SPELL_CHAMPION_C, { meleeHaste, rangedHaste, spellPower });
         SetCarrier(player, SPELL_CHAMPION_D, { spellPower, mana, healthRegen });
         SetCarrier(player, SPELL_CHAMPION_E, { manaRegen, 0, Round(it.MoveSpeed) });
-        SetCarrier(player, SPELL_CHAMPION_F, { Round(bootsSpeed), Round(it.LifeSteal * 10.0f) });
+        // the held items' crit is spell crit too: on top of the character's own,
+        // where the melee crit above replaces it
+        SetCarrier(player, SPELL_CHAMPION_F, { Round(bootsSpeed), Round(it.LifeSteal * 10.0f), Round(it.Crit) });
         SetCarrier(player, SPELL_COOLDOWN_CARRIER, { Round(state.CooldownReduction) });
     }
 
@@ -1857,10 +2065,25 @@ namespace
         // were, only the maximums grow.
         uint32 const health = player->GetHealth();
         uint32 const mana = player->GetPower(POWER_MANA);
+        // and the pet's: GiveLevel levels it too (Pet::SynchronizeLevelWithOwner), and a
+        // pet's new level filled its health (Guardian::InitStatsForLevel) - owner,
+        // 2026-10-23: "my pets are getting full healed on level up"
+        Pet* pet = player->GetPet();
+        bool const petAlive = pet && pet->IsAlive();
+        uint32 const petHealth = petAlive ? pet->GetHealth() : 0;
+        Powers const petPower = pet ? pet->GetPowerType() : POWER_MANA;
+        uint32 const petPowerValue = petAlive ? pet->GetPower(petPower) : 0;
         player->GiveLevel(state.MatchLevel, true);
         player->SetHealth(std::min(std::max<uint32>(health, 1), player->GetMaxHealth()));
         if (player->GetMaxPower(POWER_MANA))
             player->SetPower(POWER_MANA, std::min<uint32>(mana, player->GetMaxPower(POWER_MANA)));
+        if (petAlive && player->GetPet() == pet && pet->IsAlive())
+        {
+            pet->SetHealth(std::min(std::max<uint32>(petHealth, 1), pet->GetMaxHealth()));
+            if (pet->GetMaxPower(petPower))
+                pet->SetPower(petPower, std::min<uint32>(petPowerValue, pet->GetMaxPower(petPower)));
+        }
+        SyncPetRanks(player, state);
         CoatBotPoisons(player, state);
         ShowProgress(player, state);
         SendState(player, state);
@@ -1930,6 +2153,8 @@ void ProbeStorage()
 
     StoragePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash'") != nullptr;
     WeaponTablePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_weapons'") != nullptr;
+    StashSkillsColumn = CharacterDatabase.Query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash' AND COLUMN_NAME = 'skills'") != nullptr;
+    StashPetColumn = CharacterDatabase.Query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash' AND COLUMN_NAME = 'pet_spells'") != nullptr;
     if (!StoragePresent)
     {
         TC_LOG_INFO("server.loading", ">> Summoner's Rift progression off: `custom_rift_stash` is absent.");
@@ -1948,6 +2173,14 @@ bool IsInMatch(Player const* player)
 {
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
     return player && Find(player);
+}
+
+bool UsesMatchSkills(Player const* player)
+{
+    if (!player)
+        return false;
+    std::lock_guard<std::mutex> lock(MatchSkillMutex);
+    return MatchSkillPlayers.count(player->GetGUID().GetCounter()) != 0;
 }
 
 // The bots' side (further down, before Maintain), and the stash restore (with OnLogin).
@@ -2020,12 +2253,23 @@ void Enter(Player* player)
                 state.Weapons = { Tournament::RiftWeaponShape(f[0].GetUInt8()), f[1].GetInt32() };
         }
 
+    // A world character's skills follow the tournament's rules in the match - its weapons
+    // at the match level's maximum - and come back as they were (RestoreSkills).
+    if (!Tournament::IsTournamentCharacter(player))
+    {
+        state.RealSkills = SnapshotSkills(player);
+        SetMatchSkills(player, true);
+    }
+
     // Written down before anything changes: from here on every way out restores.
     if (state.Persistent)
     {
         CharacterDatabase.DirectPExecute("REPLACE INTO custom_rift_stash (guid, real_level, real_xp, money, talents, actions) VALUES ({}, {}, {}, {}, '{}', '{}')",
             player->GetGUID().GetCounter(), uint32(state.RealLevel), state.RealXp, state.RealMoney, TalentsToString(state.RealTalents),
             ButtonsToString(state.RealButtons));
+        if (StashSkillsColumn)
+            CharacterDatabase.DirectPExecute("UPDATE custom_rift_stash SET skills = '{}' WHERE guid = {}",
+                SkillsToString(state.RealSkills), player->GetGUID().GetCounter());
         Stashed.insert(player->GetGUID().GetCounter());
     }
 
@@ -2044,6 +2288,7 @@ void Enter(Player* player)
         state.Unlocked[first] = uint8(state.Chains.at(first).Ranks.size());
     state.PendingPicks = PICKS_PER_LEVEL;
     player->GiveLevel(state.StartLevel, true);
+    SyncPetRanks(player, state);
     if (!state.Persistent)
     {
         BotSpendPicks(player, state);
@@ -2092,7 +2337,10 @@ void Leave(Player* player)
     TakeRecallButtons(player);
     ForgetPoisons(player, state);
     TakeNoAmmo(player);
+    SetMatchSkills(player, false);
     player->GiveLevel(state.RealLevel, true);
+    RestoreSkills(player, state.RealSkills);
+    PutBackPetRanks(player, state.PetRanks);
     player->SetUInt32Value(PLAYER_XP, state.RealXp);
     RestoreTalents(player, state.RealTalents);
     RestoreButtons(player, state.RealButtons);
@@ -2137,7 +2385,9 @@ namespace
     // copy of the real build while a match holds the character.
     bool RestoreFromStash(Player* player)
     {
-    QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money, talents, actions FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
+    QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money, talents, actions, {}, {} FROM custom_rift_stash WHERE guid = {}",
+        StashSkillsColumn ? "skills" : "''", StashPetColumn ? "pet_spells" : "''", player->GetGUID().GetCounter());
+    SetMatchSkills(player, false);
     {
         std::lock_guard<std::recursive_mutex> lock(StateMutex);
         States.erase(player->GetGUID().GetCounter());
@@ -2159,6 +2409,8 @@ namespace
     TakeRecallButtons(player);
     TakeNoAmmo(player);
     player->GiveLevel(realLevel, true);
+    RestoreSkills(player, SkillsFromString(fields[5].GetString()));
+    PutBackPetRanks(player, PetRanksFromString(fields[6].GetString()));
     player->SetUInt32Value(PLAYER_XP, fields[1].GetUInt32());
     player->SetMoney(fields[2].GetUInt32());
     RestoreTalents(player, TalentsFromString(fields[3].GetString()));
@@ -3397,6 +3649,12 @@ void Maintain(Player* player)
     // anyone still wearing the no-ammo aura an earlier build handed out
     if (player->HasAura(SPELL_NO_AMMO))
         TakeNoAmmo(player);
+    // a hunter pet called (or brought back) since the last tick: its ranks for its level
+    {
+        std::lock_guard<std::recursive_mutex> lock(StateMutex);
+        if (State* state = Find(player))
+            SyncPetRanks(player, *state);
+    }
     if (!IsTransient(player) || !CanSpendPoints(player, false))
         return;
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
