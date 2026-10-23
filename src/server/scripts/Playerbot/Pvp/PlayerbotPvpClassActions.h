@@ -109,6 +109,14 @@ public:
     // dispatcher both reach for this fallback, and a ladder kept in two places
     // is a ladder that drifts.
     static int32 FreeRefreshmentAmount(Player const* player, bool drink);
+
+    // A map that refuses those two outright (Summoner's Rift keeps outside food
+    // and drink out of a match: SPELL_FAILED_SPELL_UNAVAILABLE) is not asked
+    // again while the bot is on it. The bot stopped to sit down before every
+    // refusal, and the selector offers food whenever mana is short of full, so a
+    // bot out of combat stood frozen at its fountain or stuttered along its route.
+    static void NoteRefreshmentRefused(Player const* player);
+    static bool IsRefreshmentRefused(Player const* player);
 };
 }
 

@@ -2807,12 +2807,15 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
     if (IsInHazardousLiquidForRecovery(player) || player->IsInWater())
         return decision;
 
+    // A map that refused the free eat/drink (PvpClassActions::IsRefreshmentRefused)
+    // offers neither: the bot keeps walking instead of stopping to sit down again.
+    bool const refreshmentRefused = playerbot::PvpClassActions::IsRefreshmentRefused(player);
     bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;
     float const manaPct = usesMana ? player->GetPowerPct(POWER_MANA) : 100.0f;
-    bool const needsDrink = usesMana && manaPct < 100.0f;
+    bool const needsDrink = !refreshmentRefused && usesMana && manaPct < 100.0f;
     bool const keepDrinkingFloor = usesMana && manaPct < 50.0f;
     bool const urgentlyNeedsDrink = needsDrink && (player->GetPowerPct(POWER_MANA) < 35.0f || IsLowOrOutOfManaForFallback(player));
-    bool const needsFood = player->GetHealthPct() < 100.0f;
+    bool const needsFood = !refreshmentRefused && player->GetHealthPct() < 100.0f;
     bool const hasEatAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
     bool const hasDrinkAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
 

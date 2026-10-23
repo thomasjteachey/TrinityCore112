@@ -5620,6 +5620,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                  (castResult == SPELL_FAILED_OUT_OF_RANGE && target && maxRange > 0.0f && player->IsWithinDistInMap(target, maxRange))))
                 playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotChargePathRefusedToken, kPlayerbotChargePathRefusedHold);
 
+            // The free eat/drink refused by the map itself, not by the moment.
+            if (isFoodOrDrinkSpell && (castResult == SPELL_FAILED_SPELL_UNAVAILABLE || castResult == SPELL_FAILED_NOT_KNOWN ||
+                castResult == SPELL_FAILED_NOT_HERE))
+                playerbot::PvpClassActions::NoteRefreshmentRefused(player);
+
             NotifySpellCastFailureToDiagnosticObservers(player, context, castResult);
             EnumText const reasonText = EnumUtils::ToString(castResult);
             failureReason = reasonText.Title;
@@ -6334,6 +6339,35 @@ bool PvpClassActions::IssueFollowMovement(Player* player, Unit* target, float de
 void PvpClassActions::CommandPetAttack(Player* player, Unit* target)
 {
     CommandPetAttackTarget(player, target);
+}
+
+namespace
+{
+    // bot -> the map instance that refused its refreshment ((map id << 32) | instance id)
+    std::unordered_map<uint64, uint64> g_refreshmentRefusedOn;
+
+    uint64 MapInstanceKey(Player const* player)
+    {
+        return (uint64(player->GetMapId()) << 32) | uint64(player->GetInstanceId());
+    }
+}
+
+void PvpClassActions::NoteRefreshmentRefused(Player const* player)
+{
+    if (!player)
+        return;
+    playerbot::LockedGetOrCreate(g_refreshmentRefusedOn, player->GetGUID().GetRawValue()) = MapInstanceKey(player);
+    TC_LOG_INFO("playerbots.pvp.class", "Bot {} cannot eat or drink on map {} (instance {}): no more refreshments here.",
+        player->GetName(), player->GetMapId(), player->GetInstanceId());
+}
+
+bool PvpClassActions::IsRefreshmentRefused(Player const* player)
+{
+    if (!player)
+        return false;
+    uint64 refusedOn = 0;
+    return playerbot::LockedGetCopy(g_refreshmentRefusedOn, player->GetGUID().GetRawValue(), refusedOn) &&
+        refusedOn == MapInstanceKey(player);
 }
 
 int32 PvpClassActions::FreeRefreshmentAmount(Player const* player, bool drink)
