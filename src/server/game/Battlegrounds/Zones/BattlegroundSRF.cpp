@@ -300,8 +300,9 @@ float constexpr SRF_MINION_LEASH        = Yards(1100.0f);
 uint32 constexpr SRF_REPORT_TICK        = 30 * IN_MILLISECONDS;
 float constexpr SRF_FOUNTAIN_HEAL_RANGE = Yards(600.0f);
 // League's brush (BattlegroundSRFBrush.h): attacking from it reveals for a moment.
-uint32 constexpr SRF_BRUSH_TICK         = 250;
+uint32 constexpr SRF_BRUSH_TICK         = 250;      // idle combat and the free-turret cache (the brush: every update)
 uint32 constexpr SRF_BRUSH_REVEAL       = 1500;
+uint32 constexpr SRF_BRUSH_PROJECT_MS   = 500;      // a running client's heartbeat interval: no further than that
 // Centurion spell 94142 "Brush": the buff a hidden champion wears, so they can see it.
 uint32 constexpr SRF_SPELL_BRUSH        = 94142;
 // Centurion spell 94153 "Summoner's Focus": every champion's match aura, +5% hit
@@ -854,10 +855,12 @@ void BattlegroundSRF::PostUpdateImpl(uint32 diff)
     UpdateProgression(diff);
     Report(diff);
 
+    // The brush every update (owner, 2026-10-23: "it takes a second for it to register"
+    // going in and coming out - it ran every 250 ms on positions up to half a second old).
+    UpdateBrush(diff);
     _brushTimer += diff;
     if (_brushTimer >= SRF_BRUSH_TICK)
     {
-        UpdateBrush(_brushTimer);
         ReleaseIdleCombat();
         RefreshFreeTurrets();
         _brushTimer = 0;
@@ -891,6 +894,39 @@ void BattlegroundSRF::SyncChampions(uint32 diff)
         }
 }
 
+// Where a champion is now, as near as the server can tell. A client running straight
+// reports its position only with its heartbeat, twice a second, so between reports the
+// last one is carried on along the way it is moving (its heading and strafe flags) at
+// its speed, for as long as no new one came - half a second at most. A stop is reported
+// at once, so a champion that stopped is never carried on.
+static Position ProjectedPosition(Player const* player, uint32 unchangedMs)
+{
+    Position pos = player->GetPosition();
+    uint32 const flags = player->GetUnitMovementFlags();
+    if (!unchangedMs || (flags & (MOVEMENTFLAG_ROOT | MOVEMENTFLAG_FALLING)))
+        return pos;
+    float ahead = 0.0f, left = 0.0f;
+    if (flags & MOVEMENTFLAG_FORWARD)
+        ahead += 1.0f;
+    if (flags & MOVEMENTFLAG_BACKWARD)
+        ahead -= 1.0f;
+    if (flags & MOVEMENTFLAG_STRAFE_LEFT)
+        left += 1.0f;
+    if (flags & MOVEMENTFLAG_STRAFE_RIGHT)
+        left -= 1.0f;
+    float const length = std::sqrt(ahead * ahead + left * left);
+    if (length < 0.5f)
+        return pos;
+    UnitMoveType const type = ahead < 0.0f ? MOVE_RUN_BACK : (flags & MOVEMENTFLAG_WALKING) ? MOVE_WALK : MOVE_RUN;
+    float const distance = player->GetSpeed(type) * float(std::min(unchangedMs, SRF_BRUSH_PROJECT_MS)) / 1000.0f;
+    float const o = pos.GetOrientation();
+    ahead /= length;
+    left /= length;
+    pos.Relocate(pos.GetPositionX() + (ahead * std::cos(o) - left * std::sin(o)) * distance,
+        pos.GetPositionY() + (ahead * std::sin(o) + left * std::cos(o)) * distance, pos.GetPositionZ());
+    return pos;
+}
+
 void BattlegroundSRF::UpdateBrush(uint32 elapsed)
 {
     for (auto const& [guid, bgPlayer] : GetPlayers())
@@ -904,7 +940,15 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
         if (player->IsAlive() && !player->HasAura(SRF_SPELL_FOCUS))
             player->AddAura(SRF_SPELL_FOCUS, player);
         BrushState& st = _brush[guid];
-        uint8 const patch = player->IsAlive() ? BrushPatchAt(player->GetPosition()) : 0;
+        if (std::fabs(player->GetPositionX() - st.LastX) > 0.01f || std::fabs(player->GetPositionY() - st.LastY) > 0.01f)
+        {
+            st.LastX = player->GetPositionX();
+            st.LastY = player->GetPositionY();
+            st.UnchangedMs = 0;
+        }
+        else
+            st.UnchangedMs = std::min(st.UnchangedMs + elapsed, SRF_BRUSH_PROJECT_MS);
+        uint8 const patch = player->IsAlive() ? BrushPatchAt(ProjectedPosition(player, st.UnchangedMs)) : 0;
         if (patch && AttackOf(player))
             st.RevealMs = SRF_BRUSH_REVEAL;
         else
@@ -3060,9 +3104,9 @@ void BattlegroundSRF::Report(uint32 diff)
         Unit* ordered = !st.Orders.Target.IsEmpty() ? ObjectAccessor::GetUnit(*bot, st.Orders.Target) : nullptr;
         Unit* victim = bot->GetVictim();
         static char const* const ROLE_NAMES[SRF_ROLE_COUNT] = { "top", "jungle", "mid", "carry", "support" };
-        TC_LOG_INFO("bg.battleground", "Summoner's Rift {} bot {} (class {}): {}, lane {}, {}{}, {:.0f} yd from post, ordered {}, victim {}, hp {:.0f}%, casting {}.",
+        TC_LOG_INFO("bg.battleground", "Summoner's Rift {} bot {} (class {}): {}, lane {}, {}{}, at {:.0f} {:.0f}, {:.0f} yd from post, ordered {}, victim {}, hp {:.0f}%, casting {}.",
             GetInstanceID(), bot->GetName(), uint32(bot->GetClass()), st.Assigned ? ROLE_NAMES[st.Role % SRF_ROLE_COUNT] : "unassigned", uint32(st.Lane),
-            st.HasOrders ? "orders" : "NO ORDERS", st.Orders.Retreat ? " (retreating)" : "",
+            st.HasOrders ? "orders" : "NO ORDERS", st.Orders.Retreat ? " (retreating)" : "", bot->GetPositionX(), bot->GetPositionY(),
             bot->GetExactDist2d(&st.Orders.Post), ordered ? ordered->GetName() : std::string("nothing"),
             victim ? victim->GetName() : std::string("nothing"), bot->GetHealthPct(),
             bot->HasUnitState(UNIT_STATE_CASTING) ? "yes" : "no");

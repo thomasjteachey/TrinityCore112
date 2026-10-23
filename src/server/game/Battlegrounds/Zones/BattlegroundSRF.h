@@ -449,6 +449,10 @@ private:
         uint32 RevealMs = 0;       // attacked from the brush: seen until this runs out
         bool Hidden = false;
         int8 AtBase = -1;          // in its fountain at the last tick (-1: not known yet)
+        // Where the server last saw it, and for how long that has not changed: a client
+        // running straight reports its position only twice a second (UpdateBrush).
+        float LastX = 0.0f, LastY = 0.0f;
+        uint32 UnchangedMs = 0;
     };
     std::unordered_map<ObjectGuid, BrushState> _brush;
     uint32 _itemSyncTimer = 0;
