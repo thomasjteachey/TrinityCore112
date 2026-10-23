@@ -1305,35 +1305,6 @@ namespace
         return player->GetCreateStat(STAT_AGILITY) / per;
     }
 
-    // Nor spell crit: WoW's from the class's base and base intellect comes off -
-    // Player::GetSpellCritFromIntellect's own table and formula, at the create stat
-    // - so a spell crits on the items' crit (Phantom Dancer's 30%), with talents,
-    // buffs and gear on top as with melee.
-    float BaseIntellectSpellCrit(Player const* player)
-    {
-        struct SpellCritData { float base, rate0, rate1; };
-        static constexpr SpellCritData DATA[MAX_CLASSES] =
-        {
-            { 0.0f,  0.0f,  10.0f },    // unused
-            { 0.0f,  0.0f,  10.0f },    // warrior
-            { 3.70f, 14.77f, 0.65f },   // paladin
-            { 0.0f,  0.0f,  10.0f },    // hunter
-            { 0.0f,  0.0f,  10.0f },    // rogue
-            { 2.97f, 10.03f, 0.82f },   // priest
-            { 0.0f,  0.0f,  10.0f },    // unused (death knight)
-            { 3.54f, 11.51f, 0.80f },   // shaman
-            { 3.70f, 14.77f, 0.65f },   // mage
-            { 3.18f, 11.30f, 0.82f },   // warlock
-            { 0.0f,  0.0f,  10.0f },    // unused
-            { 3.33f, 12.41f, 0.79f },   // druid
-        };
-        uint8 const cls = player->GetClass();
-        if (cls >= MAX_CLASSES)
-            return 0.0f;
-        float const ratio = DATA[cls].rate0 + DATA[cls].rate1 * float(player->GetLevel());
-        return DATA[cls].base + player->GetCreateStat(STAT_INTELLECT) / ratio;
-    }
-
     // League's champion, in WoW's numbers: the class's League base stats at its
     // League level, its rune page and the held items' stats (world
     // `rift_league_champion`, `rift_league_item`), converted at the match's scale
@@ -1496,10 +1467,9 @@ namespace
         SetCarrier(player, SPELL_CHAMPION_C, { meleeHaste, rangedHaste, spellPower });
         SetCarrier(player, SPELL_CHAMPION_D, { spellPower, mana, healthRegen });
         SetCarrier(player, SPELL_CHAMPION_E, { manaRegen, 0, Round(it.MoveSpeed) });
-        // the held items' crit is spell crit too, in place of the character's own
-        // (owner, 2026-10-23: "phantom dancer should grant spell crit")
-        SetCarrier(player, SPELL_CHAMPION_F, { Round(bootsSpeed), Round(it.LifeSteal * 10.0f),
-            Round(it.Crit - BaseIntellectSpellCrit(player)) });
+        // the held items' crit is spell crit too: on top of the character's own,
+        // where the melee crit above replaces it
+        SetCarrier(player, SPELL_CHAMPION_F, { Round(bootsSpeed), Round(it.LifeSteal * 10.0f), Round(it.Crit) });
         SetCarrier(player, SPELL_COOLDOWN_CARRIER, { Round(state.CooldownReduction) });
     }
 
