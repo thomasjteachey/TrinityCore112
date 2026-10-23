@@ -567,6 +567,8 @@ BattlegroundSRF::BattlegroundSRF()
     _unstuckPlaced = 0;
     _matchClock = 0;
     _respawnAt.clear();
+    _championPet.clear();
+    _petRevive.clear();
 }
 
 void BattlegroundSRF::AddPlayer(Player* player)
@@ -595,6 +597,8 @@ void BattlegroundSRF::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*tea
 {
     _brush.erase(guid);
     _bots.erase(guid);
+    _championPet.erase(guid);
+    _petRevive.erase(guid);
     if (player)
     {
         player->RemoveAurasDueToSpell(SRF_SPELL_BRUSH);
@@ -650,6 +654,8 @@ void BattlegroundSRF::Reset()
     _combatLevel = SRF_UNIT_BASE_LEVEL;
     _unitScale = 0.0f;
     _respawnAt.clear();
+    _championPet.clear();
+    _petRevive.clear();
     _ringsSentAt.clear();
     _contributions.clear();
     _stats.clear();
@@ -2441,7 +2447,18 @@ void BattlegroundSRF::UpdateRespawns()
         if (player->IsAlive())
         {
             if (itr != _respawnAt.end())
+            {
+                // back by some other resurrection (Reincarnation, a priest's): its pet too
                 _respawnAt.erase(itr);
+                if (uint32 const number = _championPet[guid])
+                    _petRevive[guid] = { number, now, false };
+            }
+            else if (!_petRevive.count(guid))
+            {
+                // the pet out now, alive or dead - a summon that runs out (an Infernal) is not kept
+                Pet* pet = player->GetPet();
+                _championPet[guid] = pet && !pet->isTemporarySummoned() && pet->GetCharmInfo() ? pet->GetCharmInfo()->GetPetNumber() : 0;
+            }
             continue;
         }
         if (itr == _respawnAt.end())
@@ -2459,6 +2476,70 @@ void BattlegroundSRF::UpdateRespawns()
         player->SpawnCorpseBones(false);
         Position const at = FountainPos(GetTeamIndexByTeamId(GetPlayerTeam(player->GetGUID())));
         player->NearTeleportTo(at.GetPositionX(), at.GetPositionY(), at.GetPositionZ(), at.GetOrientation());
+        if (uint32 const number = _championPet[guid])
+            _petRevive[guid] = { number, now, false };
+    }
+    RevivePets();
+}
+
+// A champion back from the dead brings back the pet it had out (owner, 2026-10-23:
+// "rezzing should also rez pets"): called from its stable once the champion stands at
+// the fountain - LoadPetFromDB answers a moment later - then stood up, alive, at full
+// health and power, as the arena brings a pet back
+// (Player::ResummonPetTemporaryUnSummonedIfAny). One the champion called itself first
+// is stood up the same way.
+void BattlegroundSRF::RevivePets()
+{
+    uint32 constexpr SRF_PET_REVIVE_GIVE_UP_MS = 10 * IN_MILLISECONDS;
+    uint32 const now = GameTime::GetGameTimeMS();
+    for (auto itr = _petRevive.begin(); itr != _petRevive.end();)
+    {
+        Player* player = ObjectAccessor::FindPlayer(itr->first);
+        PetRevive& revive = itr->second;
+        if (!player || player->GetBattleground() != this || !player->IsAlive() || now - revive.Since > SRF_PET_REVIVE_GIVE_UP_MS)
+        {
+            itr = _petRevive.erase(itr);
+            continue;
+        }
+        if (player->IsBeingTeleported())
+        {
+            ++itr;
+            continue;
+        }
+        Pet* pet = player->GetPet();
+        if (!pet)
+        {
+            if (!revive.Loading)
+            {
+                revive.Loading = true;
+                Pet* loading = new Pet(player);
+                if (!loading->LoadPetFromDB(player, 0, revive.Number, false))
+                {
+                    delete loading;
+                    itr = _petRevive.erase(itr);
+                    continue;
+                }
+            }
+            ++itr;
+            continue;
+        }
+        if (!pet->IsInWorld())
+        {
+            ++itr;
+            continue;
+        }
+        if (!pet->IsAlive())
+        {
+            pet->ReplaceAllDynamicFlags(UNIT_DYNFLAG_NONE);
+            pet->RemoveUnitFlag(UNIT_FLAG_SKINNABLE);
+            pet->setDeathState(ALIVE);
+            pet->ClearUnitState(UNIT_STATE_ALL_ERASABLE);
+        }
+        pet->SetFullHealth();
+        for (uint8 i = POWER_MANA; i < MAX_POWERS; ++i)
+            if (Powers const power = Powers(i); power != POWER_HAPPINESS && pet->GetMaxPower(power))
+                pet->SetPower(power, pet->GetMaxPower(power));
+        itr = _petRevive.erase(itr);
     }
 }
 

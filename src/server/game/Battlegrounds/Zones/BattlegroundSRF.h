@@ -442,6 +442,18 @@ private:
     uint32 _lastRefusal;
     uint32 _matchClock;            // ms since the gates opened (wave cadence)
     std::unordered_map<ObjectGuid, uint32> _respawnAt;   // game time (ms) a dead champion is back
+    // The pet a champion had out (alive or lying dead) while it lived, by pet number:
+    // its death puts the pet away (Player::setDeathState), and its respawn brings that
+    // one back, alive and full (UpdateRespawns, RevivePets).
+    std::unordered_map<ObjectGuid, uint32> _championPet;
+    struct PetRevive
+    {
+        uint32 Number = 0;
+        uint32 Since = 0;          // game time (ms) the champion respawned
+        bool Loading = false;      // LoadPetFromDB asked: the pet arrives a moment later
+    };
+    std::unordered_map<ObjectGuid, PetRevive> _petRevive;
+    void RevivePets();
 
     struct BrushState
     {
