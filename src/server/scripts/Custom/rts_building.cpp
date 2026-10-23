@@ -36,6 +36,7 @@
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "GameObject.h"
+#include "Log.h"
 #include "ObjectAccessor.h"
 #include "RiftProgression.h"
 #include "ScriptMgr.h"
@@ -146,11 +147,15 @@ struct RtsBuildingAI : public CreatureAI
     // the other area heals jump to the most hurt friendly unit in reach - a
     // turret its lane had nearly brought down - so a Chaos healer near the mid
     // turret kept lifting it from 1 health back to half, again and again.
-    void HealReceived(Unit* /*healer*/, uint32& heal) override
+    void HealReceived(Unit* healer, uint32& heal) override
     {
         uint32 const entry = me->GetEntry();
-        if (entry >= RIFT_STRUCTURE_FIRST && entry <= RIFT_STRUCTURE_LAST)
+        if (entry >= RIFT_STRUCTURE_FIRST && entry <= RIFT_STRUCTURE_LAST && heal)
+        {
+            TC_LOG_INFO("bg.battleground", "Summoner's Rift: {} ({}) at {}/{} refused {} healing from {}.", me->GetName(),
+                me->GetGUID().ToString(), me->GetHealth(), me->GetMaxHealth(), heal, healer ? healer->GetName() : "nobody");
             heal = 0;
+        }
     }
 
     void UpdateAI(uint32 diff) override

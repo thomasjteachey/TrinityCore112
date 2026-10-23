@@ -298,6 +298,10 @@ private:
         bool Vulnerable = false;
         uint32 RespawnTimer = 0;   // inhibitors only
         bool Backdoor = false;     // League's backdoor plating on: no enemy minion near
+        // what UpdateStructures last saw, to log a structure's health rising (nothing heals
+        // one in League: the mid Chaos turret was seen going from 1 health to half, 2026-10-22)
+        uint32 LastHealth = 0;
+        uint32 LastMaxHealth = 0;
     };
 
     struct Minion

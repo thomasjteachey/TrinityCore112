@@ -991,7 +991,18 @@ void BattlegroundSRF::UpdateStructures()
             OnStructureDestroyed(slot);
             if (GetStatus() != STATUS_IN_PROGRESS)
                 return;
+            continue;
         }
+        // A rise of 5% or more: nothing should ever do it (a heal is refused,
+        // RtsBuildingAI::HealReceived; ApplyLeagueStats keeps the share).
+        StructureState& st = _structures[slot];
+        uint32 const health = creature->GetHealth(), maxHealth = creature->GetMaxHealth();
+        if (st.LastHealth && maxHealth && health > st.LastHealth && (health - st.LastHealth) * 20 >= maxHealth)
+            TC_LOG_INFO("bg.battleground", "Summoner's Rift {}: structure slot {} ({}) health ROSE {}/{} -> {}/{}, {}attackable, in combat {}, level {}.",
+                GetInstanceID(), uint32(slot), creature->GetGUID().ToString(), st.LastHealth, st.LastMaxHealth, health, maxHealth,
+                creature->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE) ? "NOT " : "", creature->IsInCombat() ? "yes" : "no", uint32(creature->GetLevel()));
+        st.LastHealth = health;
+        st.LastMaxHealth = maxHealth;
     }
 }
 
