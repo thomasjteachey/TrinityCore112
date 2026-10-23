@@ -2500,6 +2500,8 @@ void BattlegroundSRF::CheckAce(TeamId deadTeam)
 }
 
 // The Tab scoreboard: one line per champion to everyone, held items in slot order.
+// The level is the champion's WoW level in the match, not League's 1-18 (owner,
+// 2026-10-23: "have the scorescreen display the wow level of the player").
 void BattlegroundSRF::SendScores()
 {
     std::vector<std::string> lines;
@@ -2511,7 +2513,7 @@ void BattlegroundSRF::SendScores()
             for (uint32 entry : RiftProgression::HeldShopItems(player))
                 items += (items.empty() ? "" : ",") + std::to_string(entry);
             lines.push_back(Trinity::StringFormat("RIFTSCORE:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}", player->GetGUID().GetCounter(),
-                GetPlayerDisplayName(player), uint32(team), uint32(player->GetClass()), uint32(RiftProgression::GetLeagueLevel(player)),
+                GetPlayerDisplayName(player), uint32(team), uint32(player->GetClass()), uint32(player->GetLevel()),
                 st.Kills, st.Deaths, st.Assists, st.Minions, items));
         }
     for (std::string const& line : lines)
