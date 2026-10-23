@@ -8212,13 +8212,14 @@ void Spell::DelayedChannel()
     // Partially interrupt persistent area auras. If pushback consumed the
     // entire remaining channel, remove the dynamic object now: the following
     // update finishes the spell normally and does not run cancel() cleanup.
-    if (DynamicObject* dynObj = playerCaster->GetDynObject(m_spellInfo->Id))
-    {
-        if (m_timer == 0)
-            dynObj->Remove();
-        else
+    // Touch every object of this spell, not just the first: a recast right after
+    // the last channel ended can leave the old one alive for a tick, and it sits
+    // first in the caster's list.
+    if (m_timer == 0)
+        playerCaster->RemoveDynObject(m_spellInfo->Id);
+    else
+        for (DynamicObject* dynObj : playerCaster->GetDynObjects(m_spellInfo->Id))
             dynObj->Delay(delaytime);
-    }
 
     SendChannelUpdate(m_timer);
 }

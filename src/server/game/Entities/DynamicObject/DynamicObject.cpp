@@ -202,7 +202,14 @@ void DynamicObject::SetDuration(int32 newDuration)
 
 void DynamicObject::Delay(int32 delaytime)
 {
-    SetDuration(GetDuration() - delaytime);
+    int32 const duration = GetDuration();
+    if (duration < 0) // permanent
+        return;
+
+    // Never push below zero. An aura only counts down while its duration is
+    // positive and only expires at exactly zero, so a negative value would
+    // leave the object (and its ground visual) in the world forever.
+    SetDuration(std::max(duration - delaytime, 0));
 }
 
 void DynamicObject::SetAura(Aura* aura)
