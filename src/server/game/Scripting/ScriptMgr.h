@@ -66,6 +66,7 @@ class WorldSession;
 struct AchievementCriteriaData;
 struct AreaTriggerEntry;
 struct AuctionEntry;
+struct CleanDamage;
 struct ConditionSourceInfo;
 struct Condition;
 struct CreatureTemplate;
@@ -78,6 +79,7 @@ namespace Trinity::ChatCommands { struct ChatCommandBuilder; }
 
 enum BattlegroundTypeId : uint32;
 enum ContentLevels : uint8;
+enum DamageEffectType : uint8;
 enum Difficulty : uint8;
 enum DuelCompleteType : uint8;
 enum Emote : uint32;
@@ -392,6 +394,10 @@ class TC_GAME_API UnitScript : public ScriptObject
 
         // Called when a unit deals damage to another unit
         virtual void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
+        // The same call with how the damage came: its kind (a weapon blow, a spell's
+        // own hit, a damage-over-time tick...) and what the shields took
+        // (cleanDamage, may be null). By default it hands on to the call above.
+        virtual void OnDamage(Unit* attacker, Unit* victim, uint32& damage, DamageEffectType damagetype, CleanDamage const* cleanDamage);
 
         // Called when DoT's Tick Damage is being Dealt
         virtual void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
@@ -1178,6 +1184,7 @@ class TC_GAME_API ScriptMgr
 
         void OnHeal(Unit* healer, Unit* reciever, uint32& gain);
         void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
+        void OnDamage(Unit* attacker, Unit* victim, uint32& damage, DamageEffectType damagetype, CleanDamage const* cleanDamage);
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo);
         void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);

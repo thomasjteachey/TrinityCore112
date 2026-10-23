@@ -372,6 +372,36 @@ ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", function(self, event, message
 	return false;
 end);
 
+-- Level-up spam (owner, 2026-10-23: "remove the level up spam (skill increases
+-- and stat increases) from the chatlog during summoners rift"). A match levels a
+-- champion every few minutes and raises its skills with each level, and leaving
+-- puts the real level and skills back: none of it belongs in the chat. Same
+-- window as the spellbook lines above - in the Rift, and for a while after.
+local function RiftQuiet()
+	return GetRealZoneText() == RIFT_ZONE or inRift or GetTime() - quietSince <= QUIET_AFTER;
+end
+for _, fmt in ipairs({ SKILL_RANK_UP, ERR_SKILL_GAINED_S, ERR_SKILL_UP_SI }) do
+	if ( fmt ) then
+		local pattern = string.gsub(fmt, "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1");
+		pattern = string.gsub(pattern, "%%%%[sd]", ".+");
+		table.insert(spellbookSpam, "^" .. pattern .. "$");
+	end
+end
+ChatFrame_AddMessageEventFilter("CHAT_MSG_SKILL", function()
+	return RiftQuiet();
+end);
+-- PLAYER_LEVEL_UP is printed straight from ChatFrame_SystemEventHandler (the
+-- level, hit points and mana, talent points, the five stats), not through a
+-- message event a filter sees, so the handler is wrapped: ChatFrame_OnEvent
+-- calls it by name. CHARACTER_POINTS_CHANGED is its "free professions" line.
+local systemEventHandler = ChatFrame_SystemEventHandler;
+function ChatFrame_SystemEventHandler(self, event, ...)
+	if ( (event == "PLAYER_LEVEL_UP" or event == "CHARACTER_POINTS_CHANGED") and RiftQuiet() ) then
+		return true;
+	end
+	return systemEventHandler(self, event, ...);
+end
+
 local function Split(text, sep)
 	local out = {};
 	for part in string.gmatch(text, "([^" .. sep .. "]+)") do

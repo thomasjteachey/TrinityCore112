@@ -1373,7 +1373,7 @@ static bool IsDuelOpponentsBlow(Unit const* attacker, Player const* opponent)
         attackerAI->DamageDealt(victim, damage, damagetype);
 
     // Hook for OnDamage Event
-    sScriptMgr->OnDamage(attacker, victim, damage);
+    sScriptMgr->OnDamage(attacker, victim, damage, damagetype, cleanDamage);
 
     // Signal to pets that their owner was attacked - except when DOT.
     if (attacker != victim && damagetype != DOT)

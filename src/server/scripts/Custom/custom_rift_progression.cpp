@@ -258,12 +258,13 @@ public:
 };
 
 // The Rift's mounts - the shop's two steeds and the Tauren's Plainsrunning - come
-// off at any hit, whoever or whatever deals it (a champion, a minion, a turret, a
-// monster, the enemy fountain; a blow the shields took whole too), a mount being
-// cast is broken off, and a mount waits 5 sec before it can be ridden again: from
-// the moment it is mounted, and from the hit that knocked the champion off (owner,
+// off at a direct hit from anyone else (a champion, a minion, a turret, a monster,
+// the enemy fountain; a blow the shields took whole too), a mount being cast is
+// broken off, and a mount waits 5 sec before it can be ridden again: from the
+// moment it is mounted, and from the hit that knocked the champion off (owner,
 // 2026-10-23: "getting hit for any reason should dismount and mounting should have
-// a 5 second cooldown (summoner's rift). plainstriding needs to be considered too").
+// a 5 second cooldown (summoner's rift). plainstriding needs to be considered too";
+// then "it should only dismount on direct hits").
 namespace
 {
     // 94150 Summoner's Steed, 94151 Swift Summoner's Steed, 89153 Plainsrunning
@@ -290,10 +291,16 @@ class custom_rift_mount_unit : public UnitScript
 public:
     custom_rift_mount_unit() : UnitScript("custom_rift_mount_unit") { }
 
-    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage, DamageEffectType damagetype, CleanDamage const* cleanDamage) override
     {
-        // a hit: damage taken, or a blow from someone else that the shields took whole
-        if (!damage && (!attacker || attacker == victim))
+        // A direct hit: a weapon blow or a spell's own impact from someone else that
+        // landed, all of it on the shields included. Not a damage-over-time tick, a
+        // miss, a fall, or anything the champion did to itself.
+        if (!attacker || attacker == victim)
+            return;
+        if (damagetype != DIRECT_DAMAGE && damagetype != SPELL_DIRECT_DAMAGE)
+            return;
+        if (!damage && !(cleanDamage && cleanDamage->absorbed_damage))
             return;
         if (!RiftOfVictim(victim))
             return;
@@ -319,10 +326,20 @@ class custom_rift_mount_player : public PlayerScript
 public:
     custom_rift_mount_player() : PlayerScript("custom_rift_mount_player") { }
 
+    // This hook runs as the cast bar completes but BEFORE the cast's last check
+    // (Spell::_cast), so a cooldown put on the mounts here refused the very cast that
+    // set it: "ability isn't ready yet" at the end of every mount's cast bar. The
+    // cooldown starts once the cast has mounted the champion, on its next update.
     void OnSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
     {
-        if (spell && IsRiftMountSpell(spell->GetSpellInfo()->Id) && RiftOf(player))
-            StartRiftMountCooldown(player);
+        if (!spell || !IsRiftMountSpell(spell->GetSpellInfo()->Id) || !RiftOf(player))
+            return;
+        uint32 const mount = spell->GetSpellInfo()->Id;
+        player->m_Events.AddEventAtOffset([player, mount]()
+        {
+            if (RiftOf(player) && player->HasAura(mount))
+                StartRiftMountCooldown(player);
+        }, 1ms);
     }
 };
 
