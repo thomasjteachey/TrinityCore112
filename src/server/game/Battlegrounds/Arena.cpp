@@ -1719,7 +1719,35 @@ void Arena::SendToShuffleStart(Player* player)
         if (unit && unit->GetTypeId() != TYPEID_PLAYER && !unit->IsTotem() && unit->IsInWorld() && unit->IsAlive() && unit->GetMapId() == GetMapId())
             unit->NearTeleportTo(start->GetPositionX(), start->GetPositionY(), start->GetPositionZ(), start->GetOrientation());
 
-    player->TeleportTo(GetMapId(), start->GetPositionX(), start->GetPositionY(), start->GetPositionZ(), start->GetOrientation());
+    bool const sent = player->TeleportTo(GetMapId(), start->GetPositionX(), start->GetPositionY(), start->GetPositionZ(), start->GetOrientation());
+
+    // Who is sent where between rounds, to settle reports of people landing at
+    // the other side's start (Nefarian's Arena, 2026-10-23). WhereShuffleStands
+    // below checks where they actually are when the gates open.
+    TC_LOG_DEBUG("bg.battleground", "Buffle Shuffle: instance {} round {}: {} ({}) on {} sent={} from ({:.1f}, {:.1f}) to ({:.1f}, {:.1f}).",
+        GetInstanceID(), uint32(_shuffleRound), GetPlayerDisplayName(player), player->GetGUID().GetCounter(),
+        player->GetBGTeam() == ALLIANCE ? "gold" : "green", sent ? 1 : 0,
+        player->GetPositionX(), player->GetPositionY(), start->GetPositionX(), start->GetPositionY());
+}
+
+void Arena::LogWhereShuffleStands() const
+{
+    Position const* gold = GetTeamStartPosition(TEAM_ALLIANCE);
+    Position const* green = GetTeamStartPosition(TEAM_HORDE);
+    for (auto const& [guid, player] : GetSquadFeedPlayers())
+    {
+        if (!IsPlayerInBattleground(guid))
+            continue;
+
+        bool const isGold = GetPlayerTeam(guid) == ALLIANCE;
+        float const toOwn = player->GetExactDist2d(isGold ? gold : green);
+        float const toOther = player->GetExactDist2d(isGold ? green : gold);
+        TC_LOG_DEBUG("bg.battleground", "Buffle Shuffle: instance {} round {} gates open: {} ({}) seat {} bgteam {} faction {} at ({:.1f}, {:.1f}) - {:.1f} yd from own start, {:.1f} from the other{}{}.",
+            GetInstanceID(), uint32(_shuffleRound), GetPlayerDisplayName(player), guid.GetCounter(),
+            isGold ? "gold" : "green", player->GetBGTeam() == ALLIANCE ? "gold" : "green", player->GetFaction(),
+            player->GetPositionX(), player->GetPositionY(), toOwn, toOther,
+            player->IsBeingTeleportedNear() ? " (teleport not acked)" : "", toOther < toOwn ? " WRONG SIDE" : "");
+    }
 }
 
 void Arena::PrepareShuffleRound()
@@ -1772,6 +1800,7 @@ void Arena::PrepareShuffleRound()
 
 void Arena::StartShuffleRound()
 {
+    LogWhereShuffleStands();
     StartingEventOpenDoors();
     if (StartMessageIds[BG_STARTING_EVENT_FOURTH])
         SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FOURTH], CHAT_MSG_BG_SYSTEM_NEUTRAL);

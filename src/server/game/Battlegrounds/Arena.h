@@ -177,6 +177,7 @@ class TC_GAME_API Arena : public Battleground
         void RedealRemainingShuffleRounds();
         uint32 GetShuffleSideMask() const;
         void SendToShuffleStart(Player* player);
+        void LogWhereShuffleStands() const;
         std::string GetShuffleTeams(uint32 team) const;
         std::string GetShuffleStandings() const;
         bool WonSoloShuffle(ObjectGuid guid) const;
