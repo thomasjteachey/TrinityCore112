@@ -1820,8 +1820,12 @@ SpellCastResult SpellInfo::CheckLocation(uint32 map_id, uint32 zone_id, uint32 a
             if (!mapEntry->IsBattleArena())
                 return SPELL_FAILED_REQUIRES_AREA;
 
+            // A Buffle Shuffle shuts its gates again before every round after the
+            // first, while the match itself stays in progress. Without this the
+            // cast in Arena::PrepareShuffleRound failed, and the bots - which
+            // read this aura as "not fighting yet" - fought through the break.
             Battleground* bg = player->GetBattleground();
-            return bg && bg->GetStatus() == STATUS_WAIT_JOIN ? SPELL_CAST_OK : SPELL_FAILED_REQUIRES_AREA;
+            return bg && (bg->GetStatus() == STATUS_WAIT_JOIN || bg->IsBetweenRounds()) ? SPELL_CAST_OK : SPELL_FAILED_REQUIRES_AREA;
         }
     }
 
