@@ -8,10 +8,10 @@
  * BG_VHR_QUARTER_RAMP_LAST_WAVE every cleared wave adds a QUARTER of a clone,
  * expressed as one extra clone carrying the Diminished debuff at 75, 50 or 25
  * stacks before it finally joins at full strength on the fourth step; from the
- * wave after that it is one WHOLE clone per wave and there is no partial one.
- * See BG_VHR_QUARTERS_PER_CLONE for the table. Clearing continues until a wave
- * would need more than BG_VHR_MAX_ENEMIES clones, at which point the party has
- * won - reached after clearing wave 46 with a full ten, 51 with five, 55 solo.
+ * wave after that the partial clone is gone and the wave climbs evenly to
+ * BG_VHR_MAX_ENEMIES clones on BG_VHR_FINAL_WAVE, whatever the party size.
+ * See BG_VHR_QUARTERS_PER_CLONE for the table. Clearing BG_VHR_FINAL_WAVE (30)
+ * wins the run.
  * Deeper waves also reinforce every clone that is not a copy of a party member
  * (BG_VHR_REINFORCE_FROM_WAVE), while clones OF a party member carry that
  * member's boons.
@@ -134,8 +134,10 @@ enum BG_VHR_Creatures
 
 enum BG_VHR_Constants
 {
-    // A wave needing more clones than this ends the run as a win.
+    // The final wave's clone count, for every party size, and the most any
+    // wave ever fields. Clearing BG_VHR_FINAL_WAVE wins the run.
     BG_VHR_MAX_ENEMIES = 40,
+    BG_VHR_FINAL_WAVE  = 30,
 
     // Cells hold at most ten players each in the stock instance, so a late
     // wave has to be spread over several. One cell per ten clones, rounded up,
@@ -190,19 +192,21 @@ enum BG_VHR_Constants
     //   wave 3  party + a 50%-power clone   wave 7  party + 1 + a 50% clone
     //   wave 4  party + a 75%-power clone   ...
     //
-    //   wave 21 party + 5    wave 22 party + 6    wave 23 party + 7 ...
-    //
     // The partial clone is held back by the Diminished debuff, whose stack
     // count is the percentage taken off its size, health, damage and healing -
     // so a clone at 25% power carries 75 stacks.
     //
-    // That quarter-step ramp only runs to BG_VHR_QUARTER_RAMP_LAST_WAVE. From
-    // the wave after it the curve is a WHOLE extra clone per wave and there is
-    // no partial one any more, so a deep run climbs to the BG_VHR_MAX_ENEMIES
-    // finish in tens of waves rather than hundreds.
+    // That quarter-step ramp only runs to BG_VHR_QUARTER_RAMP_LAST_WAVE, where
+    // the wave stands at party + 3 and a 50% clone. From the wave after it
+    // there is no partial clone any more and the wave climbs evenly to
+    // BG_VHR_MAX_ENEMIES on BG_VHR_FINAL_WAVE (GetFullStrengthCountForWave):
+    //
+    //   solo      wave 16: 7    wave 20: 16    wave 25: 28    wave 30: 40
+    //   party 5   wave 16: 11   wave 20: 19    wave 25: 30    wave 30: 40
+    //   party 10  wave 16: 15   wave 20: 22    wave 25: 31    wave 30: 40
     BG_VHR_QUARTERS_PER_CLONE = 4,
     BG_VHR_SPELL_DIMINISHED   = 90201,
-    BG_VHR_QUARTER_RAMP_LAST_WAVE = 20,
+    BG_VHR_QUARTER_RAMP_LAST_WAVE = 15,
 
     // Past this wave every clone that is NOT a copy of a party member walks in
     // carrying BG_VHR_SPELL_REINFORCED at (wave - this) stacks - +5% Stamina
@@ -591,7 +595,7 @@ private:
 
     // Party size captured when the gates first open. Every wave is sized from
     // it - a quarter of a clone per wave elapsed up to
-    // BG_VHR_QUARTER_RAMP_LAST_WAVE, a whole one per wave after that - so this
+    // BG_VHR_QUARTER_RAMP_LAST_WAVE, then an even climb to the final wave - so this
     // fixes the whole difficulty curve and must not drift when someone dies or
     // leaves.
     uint32 _partySize;

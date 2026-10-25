@@ -339,11 +339,15 @@ uint32 BattlegroundVHR::GetFullStrengthCountForWave(uint32 wave) const
     if (wave <= BG_VHR_QUARTER_RAMP_LAST_WAVE)
         return _partySize + (wave - 1) / BG_VHR_QUARTERS_PER_CLONE;
 
-    // Past the ramp: a whole clone per wave, counted on top of where the ramp
-    // left off, so the step from its last wave to the next one is the usual
-    // quarter-to-whole promotion and nothing jumps.
+    // Past the ramp: an even climb from where the ramp left off to
+    // BG_VHR_MAX_ENEMIES on BG_VHR_FINAL_WAVE, whatever the party size. A solo
+    // run climbs 36 clones over 15 waves (2-3 a wave), a full ten 27 (1-2 a
+    // wave). Rounded up, so the last wave is exactly the cap.
     uint32 const atRampEnd = _partySize + (BG_VHR_QUARTER_RAMP_LAST_WAVE - 1) / BG_VHR_QUARTERS_PER_CLONE;
-    return atRampEnd + (wave - BG_VHR_QUARTER_RAMP_LAST_WAVE);
+    uint32 const finalCount = std::max<uint32>(BG_VHR_MAX_ENEMIES, atRampEnd);
+    uint32 const climbWaves = BG_VHR_FINAL_WAVE - BG_VHR_QUARTER_RAMP_LAST_WAVE;
+    uint32 const climbed = std::min<uint32>(wave, BG_VHR_FINAL_WAVE) - BG_VHR_QUARTER_RAMP_LAST_WAVE;
+    return atRampEnd + ((finalCount - atRampEnd) * climbed + climbWaves - 1) / climbWaves;
 }
 
 uint8 BattlegroundVHR::GetPartialCloneStacks(uint32 wave)
@@ -386,8 +390,9 @@ void BattlegroundVHR::BeginWave()
     uint32 const nextWave = _waveNumber + 1;
     uint32 const enemyCount = GetEnemyCountForWave(nextWave);
 
-    // Surviving a wave that would need more than the cap is the win condition.
-    if (enemyCount > BG_VHR_MAX_ENEMIES)
+    // Clearing BG_VHR_FINAL_WAVE is the win condition. The cap test is only a
+    // guard: the curve lands on exactly BG_VHR_MAX_ENEMIES at the final wave.
+    if (nextWave > BG_VHR_FINAL_WAVE || enemyCount > BG_VHR_MAX_ENEMIES)
     {
         EndBattleground(_humanTeam);
         return;
