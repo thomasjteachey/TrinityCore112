@@ -2481,9 +2481,11 @@ public:
 
             // The ported arenas are a contiguous id range, so they are walked
             // rather than listed: adding one needs no edit here. Four Corners
-            // sits inside the range but has its own battlemaster.
+            // sits inside the range but has its own battlemaster, and Baradin
+            // Hold's map is played only as Four Corners, never as a two-team
+            // arena (its All Arenas and Buffle Shuffle pool rows are off too).
             for (uint32 type = BATTLEGROUND_CUSTOM_ARENA_FIRST; type <= BATTLEGROUND_CUSTOM_ARENA_LAST; ++type)
-                if (type != BATTLEGROUND_BHF)
+                if (type != BATTLEGROUND_BHF && type != BATTLEGROUND_BHA)
                     offerArena(BattlegroundTypeId(type),
                         ACTION_SELECT_CUSTOM_ARENA_BASE + (type - BATTLEGROUND_CUSTOM_ARENA_FIRST));
 
@@ -2666,7 +2668,7 @@ public:
             {
                 BattlegroundTypeId const bgTypeId =
                     BattlegroundTypeId(BATTLEGROUND_CUSTOM_ARENA_FIRST + (action - ACTION_SELECT_CUSTOM_ARENA_BASE));
-                if (bgTypeId == BATTLEGROUND_BHF)
+                if (bgTypeId == BATTLEGROUND_BHF || bgTypeId == BATTLEGROUND_BHA)
                     return true;
                 manager.SelectBattleground(player, bgTypeId, ARENA_TYPE_5v5);
                 ShowChromieMenu(player);
