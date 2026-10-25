@@ -450,6 +450,101 @@ void RecordGranted(Player* player, uint8 index, ObjectGuid itemGuid)
     WriteMarker(player, SPELL_CACHE_MARKER, slots);
 }
 
+// The hand slots (main hand, off hand, ranged) are indexed from the main hand
+// in Player::GetVioletHoldDisplacedWeapons.
+static_assert(EQUIPMENT_SLOT_OFFHAND == EQUIPMENT_SLOT_MAINHAND + 1 && EQUIPMENT_SLOT_RANGED == EQUIPMENT_SLOT_MAINHAND + 2,
+    "the displaced-weapon record assumes the three hand slots are consecutive");
+
+bool IsHandSlot(uint8 slot)
+{
+    return slot >= EQUIPMENT_SLOT_MAINHAND && slot <= EQUIPMENT_SLOT_RANGED;
+}
+
+bool IsGrantedItem(Player* player, Item const* item)
+{
+    for (uint8 i = 0; i < ITEM_GRANT_COUNT; ++i)
+        if (GetGrantedItem(player, i) == item)
+            return true;
+    return false;
+}
+
+// The broker's weapons arrive in the bags, and putting one on pushes the
+// character's own weapon into the bags in its place. Note which weapon that is
+// now, while it is still in hand, so StripAll can put it back on. A hand holding
+// an earlier broker weapon keeps its older record: that one is going away too.
+void RememberHandsBefore(Player* player, ItemTemplate const* proto)
+{
+    std::array<uint8, 2> slots{ NULL_SLOT, NULL_SLOT };
+    switch (proto->InventoryType)
+    {
+        case INVTYPE_2HWEAPON:
+            slots = { EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND };   // a two-hander empties the off hand too
+            break;
+        case INVTYPE_WEAPON:
+        case INVTYPE_WEAPONMAINHAND:
+            slots[0] = EQUIPMENT_SLOT_MAINHAND;
+            break;
+        case INVTYPE_SHIELD:
+        case INVTYPE_HOLDABLE:
+        case INVTYPE_WEAPONOFFHAND:
+            slots[0] = EQUIPMENT_SLOT_OFFHAND;
+            break;
+        case INVTYPE_RANGED:
+        case INVTYPE_RANGEDRIGHT:
+        case INVTYPE_THROWN:
+            slots[0] = EQUIPMENT_SLOT_RANGED;
+            break;
+        default:
+            return;
+    }
+
+    std::array<uint32, 3>& displaced = player->GetVioletHoldDisplacedWeapons();
+    for (uint8 slot : slots)
+    {
+        if (!IsHandSlot(slot))
+            continue;
+        Item* held = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!held || IsGrantedItem(player, held))
+            continue;
+        displaced[slot - EQUIPMENT_SLOT_MAINHAND] = uint32(held->GetGUID().GetCounter());
+    }
+}
+
+// Put the remembered weapons back into the hands a broker weapon just left
+// empty. Anything that no longer fits is left where it is: an item that is gone
+// (sold, destroyed, a tournament stand-in already taken back), sits in the bank,
+// or cannot be worn. A dead character is skipped - EquipItem adds no stats to
+// the dead, but the next unequip would still take them away.
+void ReequipDisplacedWeapons(Player* player, std::array<bool, 3> const& emptied)
+{
+    if (!player->IsAlive())
+        return;
+
+    std::array<uint32, 3> const& displaced = player->GetVioletHoldDisplacedWeapons();
+    for (uint8 i = 0; i < 3; ++i)
+    {
+        if (!emptied[i] || !displaced[i])
+            continue;
+
+        uint8 const slot = EQUIPMENT_SLOT_MAINHAND + i;
+        if (player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            continue;
+
+        Item* item = player->GetItemByGuid(ObjectGuid::Create<HighGuid::Item>(displaced[i]));
+        if (!item || item->IsEquipped() || Player::IsBankPos(item->GetPos()))
+            continue;
+
+        // not_loading false: the run is handing the weapon back, not the
+        // character changing it mid-fight.
+        uint16 dest = 0;
+        if (player->CanEquipItem(slot, dest, item, false, false) != EQUIP_ERR_OK)
+            continue;
+
+        player->RemoveItem(item->GetBagSlot(), item->GetSlot(), true);
+        player->EquipItem(dest, item, true);
+    }
+}
+
 // The character is about to drop back to `baseLevel`. Take back, newest
 // first, exactly as many run-spent talent ranks as needed for the spent total
 // to fit that level's allowance - so InitTalentForLevel finds nothing over
@@ -889,6 +984,9 @@ PickResult Take(Player* player, Offer offer)
         if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, info.itemEntry, 1) != EQUIP_ERR_OK)
             return PickResult::NoRoom;
 
+        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(info.itemEntry))
+            RememberHandsBefore(player, proto);
+
         Item* item = player->StoreNewItem(dest, info.itemEntry, true, GenerateItemRandomPropertyId(info.itemEntry));
         if (!item)
         {
@@ -1029,17 +1127,30 @@ void StripAll(Player* player)
 
     // Granted weapons go back, wherever they ended up (equipped, bags, bank).
     // Every copy of a run-only entry goes. There is only ever one, but the
-    // loop costs nothing and the guard keeps it finite.
+    // loop costs nothing and the guard keeps it finite. A hand one of them was
+    // held in is noted, so the weapon it pushed out can go back on - left
+    // empty, the next tournament match dressed that hand in the class's
+    // template weapon, which the player had never owned.
+    std::array<bool, 3> emptied{};
     for (uint8 i = 0; i < ITEM_GRANT_COUNT; ++i)
         for (uint8 guard = 0; guard < 8; ++guard)
         {
             Item* item = GetGrantedItem(player, i);
             if (!item)
                 break;
+            if (item->IsEquipped() && IsHandSlot(item->GetSlot()))
+            {
+                emptied[item->GetSlot() - EQUIPMENT_SLOT_MAINHAND] = true;
+                if (item->GetSlot() == EQUIPMENT_SLOT_MAINHAND && item->GetTemplate()->InventoryType == INVTYPE_2HWEAPON)
+                    emptied[EQUIPMENT_SLOT_OFFHAND - EQUIPMENT_SLOT_MAINHAND] = true;
+            }
             player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
             if (!kItemGrants[i].runOnly)
                 break;
         }
+
+    ReequipDisplacedWeapons(player, emptied);
+    player->GetVioletHoldDisplacedWeapons().fill(0);
 
     // Taught class spells: ONLY the chains the knowledge marker says the broker
     // taught (read before the marker goes), top rank first so RemoveSpell's

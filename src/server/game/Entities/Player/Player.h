@@ -1693,6 +1693,12 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void PopVioletHoldRunTalent();
         void ClearVioletHoldRunTalents();
 
+        // The weapon a Violet Hold legendary pushed out of each hand slot (main
+        // hand, off hand, ranged), by item guid low, so the run can put it back
+        // when it takes the legendary away. In memory only: a relog mid-run
+        // forgets it and the hand is simply left empty, as before.
+        std::array<uint32, 3>& GetVioletHoldDisplacedWeapons() { return m_vhrDisplacedWeapons; }
+
         // Dual Spec
         void UpdateSpecCount(uint8 count);
         uint32 GetActiveSpec() const { return m_activeSpec; }
@@ -2760,6 +2766,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         std::vector<VioletHoldRunTalent> m_vhrRunTalents;
         uint32 m_vhrRunTalentNextSeq{ 1 };
         bool m_vhrRunTalentsDirty{ false };
+        std::array<uint32, 3> m_vhrDisplacedWeapons{};
 
         std::vector<Item*> m_itemUpdateQueue;
         bool m_itemUpdateQueueBlocked;
