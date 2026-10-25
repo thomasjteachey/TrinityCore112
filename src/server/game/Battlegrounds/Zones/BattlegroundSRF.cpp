@@ -31,13 +31,14 @@
 
 namespace
 {
-// The Rift's size. League units become yards at SRF_MAP_SCALE / 50, the same mapping
-// the map, its terrain and every model were converted with (wow/import/rift/scripts/
-// rift_scale.py): change one, change both. Everything below is League's own
-// numbers - placements in League units, ranges and speeds as League has them - so
-// the battleground follows the map whatever its size.
-float constexpr SRF_MAP_SCALE = 1.5f;
-float constexpr SRF_YARDS_PER_UNIT = SRF_MAP_SCALE / 50.0f;
+// The Rift's size. League units become yards at RiftLeague::MAP_SCALE / 50, the same mapping
+// the map, its terrain and navmesh were converted with (wow/import/rift/scripts/
+// rift_scale.py): change one, change both. Everything below is
+// League's own numbers - placements in League units, ranges as League has them - so
+// the battleground follows the map whatever its size. The League models were
+// converted at 1.5; creature_template.scale and the shells' gameobject_template.size
+// shrink them to the map (0.75 at 1.125).
+float constexpr SRF_YARDS_PER_UNIT = RiftLeague::YARDS_PER_UNIT;
 float constexpr SRF_LEAGUE_CENTRE = 7400.0f;
 
 constexpr float Yards(float units) { return units * SRF_YARDS_PER_UNIT; }
@@ -286,10 +287,13 @@ SrfPoint constexpr SRF_BARRACKS[PVP_TEAMS_COUNT][BG_SRF_LANE_COUNT] =
 SrfPoint constexpr SRF_FOUNTAIN_AT[PVP_TEAMS_COUNT] = { { 394.0f, 171.0f, 461.0f }, { 14340.0f, 179.0f, 14391.0f } };
 float constexpr SRF_FOUNTAIN_FACING[PVP_TEAMS_COUNT] = { 5.4978f, 2.3562f };
 
-// A turret reaches 50 yards - past every class's own range (League's 750 units
-// would be 22.5 here, inside a caster's 30 or a hunter's 35, so a ranged champion
-// could siege it untouched; owner, 2026-10-20: "at least 50 yards"). Both shot
-// spells carry it: Ice Lance 43427 is unlimited, Fireball 22088 100 yards.
+// A turret reaches 45 yards - past every class's own range (League's 750 units
+// would be 16.9 here, inside a caster's 30 or a hunter's 35, so a ranged champion
+// could siege it untouched; owner, 2026-10-20: "at least 50 yards"). Yards, not
+// League units: it does not follow the map's scale (owner, 2026-10-25, shrinking the
+// map: "ensure the tower range still stays at 45 yards"). Both shot spells carry
+// it: Ice Lance 43427 is unlimited, Fireball 22088 100 yards. Measured centre to
+// centre (GetExactDist2d), so the turret's own size does not change it.
 float constexpr SRF_TURRET_RANGE        = 45.0f;   // owner, 2026-10-22 (50 before)
 float constexpr SRF_MINION_AGGRO_RANGE  = Yards(400.0f);
 // With no enemy unit near, a minion takes on an enemy structure in a turret's
@@ -312,7 +316,7 @@ uint32 constexpr SRF_ITEM_SYNC_MS       = 500;
 uint32 constexpr SRF_SCORE_TICK         = 2000;    // the scoreboard feed (RIFTSCORE)
 uint32 constexpr SRF_MAP_TICK           = 1000;    // the map feed (RIFTSTR, RIFTSEEN)
 // League's vision, for the map: how far a champion, a minion and a standing
-// turret see (1350 / 1200 / 1350 League units, about 27 / 24 / 27 yd, a little more).
+// turret see (1350 / 1200 / 1350 League units, about 30 / 27 / 30 yd on the 1.125 map).
 float constexpr SRF_VISION_CHAMPION    = 30.0f;
 float constexpr SRF_VISION_MINION      = 25.0f;
 float constexpr SRF_VISION_TURRET      = 30.0f;
@@ -493,8 +497,9 @@ uint32 constexpr SRF_LANE_SPLINE_ID     = 1;
 // A wave walks as League's does, strung out rather than stacked: melee in front,
 // casters behind, three files across the lane, each minion leaving the barracks
 // a moment after the one before it.
-float constexpr SRF_WAVE_FILE_SPACING   = 2.5f;     // yards between files, across the lane
-float constexpr SRF_WAVE_RANK_SPACING   = 3.0f;     // yards between ranks, along it
+// The spacing follows the map's scale, as the minions do (2.5 and 3 yards on the 1.5 map).
+float constexpr SRF_WAVE_FILE_SPACING   = Yards(83.33f);    // between files, across the lane
+float constexpr SRF_WAVE_RANK_SPACING   = Yards(100.0f);    // between ranks, along it
 uint32 constexpr SRF_WAVE_START_STAGGER = 792;      // ms between departures: League's 0.792 s
 
 // Its file's offset across the lane: -1, 0 or +1 files from the middle.

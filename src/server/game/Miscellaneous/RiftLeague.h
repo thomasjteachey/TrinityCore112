@@ -172,9 +172,13 @@ namespace RiftLeague
     TC_GAME_API float ArmorMultiplier(float wowArmor, uint8 level);
     // League's attack speed cap.
     float constexpr ATTACK_SPEED_CAP = 2.5f;
-    // League units to yards on the Rift's map (BattlegroundSRF lays the map out at
-    // this scale: 1.5 x League's, 50 units a yard).
-    float constexpr YARDS_PER_UNIT = 1.5f / 50.0f;
+    // League units to yards on the Rift's map: League's size x MAP_SCALE, 50 units a
+    // yard at 1. The one figure for the map's size on the server (BattlegroundSRF lays
+    // the map out with it); the map, its terrain and navmesh were converted with the
+    // same number (wow/import/rift/scripts/rift_scale.py): change one, change both.
+    // 1.5 from 2026-10-19, 1.125 (a quarter smaller) from 2026-10-25.
+    float constexpr MAP_SCALE = 1.125f;
+    float constexpr YARDS_PER_UNIT = MAP_SCALE / 50.0f;
     constexpr float Yards(float units) { return units * YARDS_PER_UNIT; }
 }
 

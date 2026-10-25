@@ -11,7 +11,9 @@ local PREFIX = "CCGAME";
 local ZONE = "Summoner's Rift";
 local MAP_AREA = 9535;                 -- WorldMapArea row; GetCurrentMapAreaID answers it + 1
 -- That row's rectangle, in world coordinates: Left/Right are y (west/east), Top/Bottom x.
-local LEFT, RIGHT, TOP, BOTTOM = 343.532, -339.702, 227.489, -227.096;
+-- It follows the map's size (wow/import/rift/scripts/build_rift_maps.py prints it): the
+-- 1.125 map since 2026-10-25 (343.532, -339.702, 227.489, -227.096 on the 1.5 map).
+local LEFT, RIGHT, TOP, BOTTOM = 257.649, -254.776, 170.617, -170.322;
 local PER_TEAM = 15;
 local KIND = { [0] = "Turret", [1] = "Inhibitor", [2] = "Nexus" };
 local TEAM_NAME = { [0] = "Order", [1] = "Chaos" };
