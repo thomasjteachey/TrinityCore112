@@ -39,6 +39,8 @@
 //   94170  the champion's cooldown reduction - the items', the Crest of the Ancient
 //          Golem's, Mejai's at 20 stacks - one modifier RiftProgression::CooldownMod
 //          builds from the carrier's amount
+//   94153  Summoner's Focus (the match aura): its third effect is the match's
+//          shorter ranges, one modifier RiftProgression::RangeMod builds
 //
 // League's UNIQUE item effects (world `rift_league_item_unique`, summed by
 // RiftProgression, read here through ItemHooksOf) on basic attacks and damage:
@@ -500,6 +502,24 @@ class spell_rift_cdr : public AuraScript
     }
 };
 
+// 94153 Summoner's Focus, every champion's match aura (BattlegroundSRF): its
+// third effect's amount is a SPELLMOD_RANGE pct modifier on the holder's class
+// spells cast at a range (RiftProgression::RangeMod); melee keeps its reach.
+class spell_rift_focus : public AuraScript
+{
+    PrepareAuraScript(spell_rift_focus);
+
+    void CalcSpellMod(AuraEffect const* aurEff, SpellModifier*& spellMod)
+    {
+        RiftProgression::RangeMod(aurEff, spellMod);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcSpellMod += AuraEffectCalcSpellModFn(spell_rift_focus::CalcSpellMod, EFFECT_2, SPELL_AURA_DUMMY);
+    }
+};
+
 // 94127 Warmog's Heart
 class spell_rift_item_warmog : public AuraScript
 {
@@ -664,6 +684,7 @@ void AddSC_custom_rift_items()
     RegisterSpellScript(spell_rift_lizard_burn);
     RegisterSpellScript(spell_rift_dragon_burn);
     RegisterSpellScript(spell_rift_cdr);
+    RegisterSpellScript(spell_rift_focus);
     RegisterSpellScript(spell_rift_item_warmog);
     RegisterSpellScript(spell_rift_item_rod_of_ages);
     RegisterSpellScript(spell_rift_item_guardian_angel);

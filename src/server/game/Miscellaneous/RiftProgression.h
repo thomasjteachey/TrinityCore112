@@ -194,6 +194,12 @@ namespace RiftProgression
     // builds it here (DoEffectCalcSpellMod), from its amount, on a mask that gives
     // each class spell one bit (the client adds a modifier once per bit).
     TC_GAME_API void CooldownMod(AuraEffect const* carrier, SpellModifier*& mod);
+    // The match's shorter ranges: Summoner's Focus (94153, spell_rift_focus) keeps a
+    // SPELLMOD_RANGE pct modifier of its third effect's amount (-30) on every
+    // champion, over the class spells cast at a range - melee spells keep theirs.
+    // The client is told it like any modifier (Player::AddSpellMod), so its own
+    // range checks and the bars' out-of-range red agree with the server's.
+    TC_GAME_API void RangeMod(AuraEffect const* carrier, SpellModifier*& mod);
     // What SpellHistory::StartCooldown still takes off itself: the share, 0 for
     // none, for the few class spells the modifier cannot reach. `clientMisreads`
     // is set when the client's own cooldown will be wrong (a spell left out, or

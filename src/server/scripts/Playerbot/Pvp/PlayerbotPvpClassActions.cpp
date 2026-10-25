@@ -1880,7 +1880,7 @@ bool IsSpellReadyAtCurrentPosition(Player* player, Unit* target, SpellInfo const
     if (!player->IsWithinLOSInMap(target))
         return false;
 
-    float const maxRange = spellInfo->GetMaxRange(false);
+    float const maxRange = playerbot::PvpCore::SpellMaxRange(player, spellInfo);
     if (maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
         return false;
 
@@ -4520,7 +4520,7 @@ bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget
     // an active range/LOS movement order before the bot can actually reach the
     // target it is trying to move toward.
     bool const genericLos = player->IsWithinLOSInMap(castTarget);
-    float const maxRange = spellInfo->GetMaxRange(false);
+    float const maxRange = playerbot::PvpCore::SpellMaxRange(player, spellInfo);
     float const minRange = spellInfo->GetMinRange(false);
     bool const maxOk = maxRange <= 0.0f || player->IsWithinDistInMap(castTarget, maxRange);
     bool const minOk = minRange <= 0.0f || !player->IsWithinDistInMap(castTarget, minRange);
@@ -4709,7 +4709,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 return false;
             }
 
-            float const maxRange = spellInfo->GetMaxRange(false);
+            float const maxRange = playerbot::PvpCore::SpellMaxRange(petCaster, spellInfo);
             if (maxRange > 0.0f && !petCaster->IsWithinDistInMap(target, maxRange))
             {
                 failureReason = "out_of_range";
@@ -4952,7 +4952,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    float const maxRange = spellInfo->GetMaxRange(false);
+    float const maxRange = playerbot::PvpCore::SpellMaxRange(player, spellInfo);
     bool const shouldUseMeleeApproachForEnemySpell =
         context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
         IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
@@ -6804,7 +6804,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 }
 
                 SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
-                float const maxRange = spellInfo ? spellInfo->GetMaxRange(false) : 0.0f;
+                float const maxRange = playerbot::PvpCore::SpellMaxRange(player, spellInfo);
                 bool const genericReady = spellInfo && IsSpellReadyAtCurrentPosition(player, recoveryTarget, spellInfo, context.targetMode);
                 bool const enemyMeleeSpacing =
                     context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&

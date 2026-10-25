@@ -310,7 +310,8 @@ uint32 constexpr SRF_BRUSH_PROJECT_MS   = 500;      // a running client's heartb
 // Centurion spell 94142 "Brush": the buff a hidden champion wears, so they can see it.
 uint32 constexpr SRF_SPELL_BRUSH        = 94142;
 // Centurion spell 94153 "Summoner's Focus": every champion's match aura, +5% hit
-// and +3% spell hit, a buff anyone can see.
+// and +3% spell hit, a buff anyone can see. Its third effect shortens the
+// champion's ranged class spells by 30% (spell_rift_focus, RiftProgression::RangeMod).
 uint32 constexpr SRF_SPELL_FOCUS        = 94153;
 uint32 constexpr SRF_ITEM_SYNC_MS       = 500;
 uint32 constexpr SRF_SCORE_TICK         = 2000;    // the scoreboard feed (RIFTSCORE)

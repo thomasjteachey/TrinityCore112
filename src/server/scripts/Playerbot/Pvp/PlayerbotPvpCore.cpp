@@ -1966,7 +1966,7 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
         if (!player->IsWithinLOSInMap(resolvedTarget))
             return false;
 
-        float const maxRange = spellInfo->GetMaxRange(false);
+        float const maxRange = playerbot::PvpCore::SpellMaxRange(player, spellInfo);
         if (maxRange > 0.0f && !player->IsWithinDistInMap(resolvedTarget, maxRange))
             return false;
 
@@ -3845,7 +3845,7 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
             return nullptr;
 
         float const minRange = spellInfo->GetMinRange(false);
-        float const maxRange = spellInfo->GetMaxRange(false);
+        float const maxRange = playerbot::PvpCore::SpellMaxRange(player, spellInfo);
 
         auto isCandidateUsable = [&](Unit const* candidate)
         {
@@ -8002,7 +8002,7 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         if (!target->IsAlive() || !player->IsValidAttackTarget(target, spellInfo))
             return false;
 
-        float const maxRange = spellInfo->GetMaxRange(false);
+        float const maxRange = playerbot::PvpCore::SpellMaxRange(player, spellInfo);
         float const minRange = spellInfo->GetMinRange(false);
         if ((maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange)) ||
             (minRange > 0.0f && player->IsWithinDistInMap(target, minRange)))
@@ -9085,6 +9085,17 @@ bool PvpCore::GetHunterAutoShotRange(Player const* player, Unit const* target, H
     return rangeInfo.minRange > 0.0f && rangeInfo.maxRange > rangeInfo.minRange;
 }
 
+float PvpCore::SpellMaxRange(Unit const* caster, SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return 0.0f;
+    float range = spellInfo->GetMaxRange(false);
+    if (caster && range > 0.0f)
+        if (Player* modOwner = caster->GetSpellModOwner())
+            modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_RANGE, range, nullptr);
+    return range;
+}
+
 bool PvpCore::CanMageBlinkOutOfControl(Player const* player)
 {
     return IsMageBlinkableControl(player) && IsSpellReady(player, 1953);
@@ -9847,7 +9858,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
         {
             if (SpellInfo const* pendingSpellInfo = sSpellMgr->GetSpellInfo(context.spellId))
             {
-                float const pendingMaxRange = pendingSpellInfo->GetMaxRange(false);
+                float const pendingMaxRange = playerbot::PvpCore::SpellMaxRange(player, pendingSpellInfo);
                 float const pendingMinRange = pendingSpellInfo->GetMinRange(false);
                 float const targetDistance = player->GetDistance(meleeTarget);
                 canCastOutsideMelee = pendingMaxRange > 0.0f && targetDistance <= pendingMaxRange &&
@@ -9892,7 +9903,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
             if (spellInfo && spacingTarget)
             {
                 float const distance = player->GetDistance(spacingTarget);
-                float const maxRange = spellInfo->GetMaxRange(false);
+                float const maxRange = playerbot::PvpCore::SpellMaxRange(player, spellInfo);
                 float const minRange = spellInfo->GetMinRange(false);
                 if (maxRange > 0.0f && distance > maxRange)
                 {

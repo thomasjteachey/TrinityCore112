@@ -24,6 +24,7 @@
 
 class Player;
 class GameObject;
+class SpellInfo;
 class Unit;
 
 namespace playerbot
@@ -286,6 +287,10 @@ public:
     static void LoadConfig();
     static PvpCoreConfig const& GetConfig();
     static bool GetHunterAutoShotRange(Player const* player, Unit const* target, HunterAutoShotRangeInfo& rangeInfo);
+    // A spell's hostile maximum range for `caster`, with its (or its owner's)
+    // SPELLMOD_RANGE modifiers - Hawk Eye, the Rift's Summoner's Focus - as
+    // Spell::GetMinMaxRange takes them, before combat reach.
+    static float SpellMaxRange(Unit const* caster, SpellInfo const* spellInfo);
 
     static PvpValues CollectValues(Player const* player);
     // PvE combat engagement: the PvE manager marks a bot as fighting creatures

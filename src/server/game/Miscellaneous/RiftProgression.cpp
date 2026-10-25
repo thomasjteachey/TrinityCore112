@@ -34,6 +34,7 @@
 #include "Pet.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "Player.h"
+#include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
@@ -2135,6 +2136,7 @@ namespace
 {
     struct CrestCover;
     CrestCover const& CrestCoverOf(uint8 classId);
+    CrestCover const& RangeCoverOf(uint8 classId);
 }
 
 void ProbeStorage()
@@ -2175,6 +2177,7 @@ void ProbeStorage()
     }
     RiftLeague::Load();
     CrestCoverOf(CLASS_WARRIOR);   // the Crest's cooldown modifiers, worked out once (CrestCooldownMod)
+    RangeCoverOf(CLASS_WARRIOR);   // and Summoner's Focus's range modifiers (RangeMod)
 
     StoragePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash'") != nullptr;
     WeaponTablePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_weapons'") != nullptr;
@@ -2585,9 +2588,9 @@ void LizardBurn(Player* attacker, Unit* victim, bool ranged)
 
 namespace
 {
-    // The Crest's cooldown modifier for one class: SpellId is a spell of the
-    // class's family (SpellInfo::IsAffectedBySpellMod matches a modifier to a
-    // family by its spell), Mask the class-mask bits it is on.
+    // A match modifier for one class (the Crest's cooldowns, Summoner's Focus's
+    // ranges): SpellId is a spell of the class's family (SpellInfo::IsAffectedBySpellMod
+    // matches a modifier to a family by its spell), Mask the class-mask bits it is on.
     struct CrestCover
     {
         uint32 SpellId = 0;
@@ -2612,6 +2615,95 @@ namespace
     // On 3.3.5's spells that misses Heroic Throw, Inner Focus, Fire Nova and
     // Ice Block (their bits are second bits of spells already reached); those
     // StartCooldown shortens itself (CooldownReduction).
+    // The classes that learn a spell: a trainer's or a talent's. With
+    // `weaponSkills`, a weapon skill's spell any class may have (Throw) counts
+    // for every class.
+    uint32 LearnerClasses(uint32 id, bool weaponSkills)
+    {
+        uint32 classMask = 0;
+        SkillLineAbilityMapBounds const bounds = sSpellMgr->GetSkillLineAbilityMapBounds(id);
+        for (auto itr = bounds.first; itr != bounds.second; ++itr)
+        {
+            uint32 lineClasses = itr->second->ClassMask;
+            if (!lineClasses && weaponSkills)
+                if (SkillLineEntry const* line = sSkillLineStore.LookupEntry(itr->second->SkillLine); line && line->CategoryID == SKILL_CATEGORY_WEAPON)
+                    lineClasses = ~0u;
+            classMask |= lineClasses;
+        }
+        if (TalentSpellPos const* pos = GetTalentSpellPos(id))
+            if (TalentEntry const* talent = sTalentStore.LookupEntry(pos->talent_id))
+                if (TalentTabEntry const* tab = sTalentTabStore.LookupEntry(talent->TabID))
+                    classMask |= tab->ClassMask;
+        return classMask;
+    }
+
+    flag96 MaskBit(uint8 bit)
+    {
+        return flag96(bit < 32 ? 1u << bit : 0, bit >= 32 && bit < 64 ? 1u << (bit - 32) : 0, bit >= 64 ? 1u << (bit - 64) : 0);
+    }
+
+    // A modifier's mask over one class's spells (`own`, their class masks) that
+    // gives as many of them as it can exactly one bit, off the `barred` bits. The
+    // spells with the fewest bits choose first, each taking the first bit of its
+    // own that no spell already reached carries, then single-bit flips are kept
+    // while they reach more. With `noDoubles` a spell left on two bits counts
+    // against the mask: the client would take the modifier off it twice.
+    flag96 BuildCover(std::vector<flag96>& own, flag96 const& barred, bool noDoubles)
+    {
+        flag96 mask;
+        auto reached = [&own, noDoubles](flag96 const& m)
+        {
+            int32 score = 0;
+            for (flag96 const& s : own)
+            {
+                uint32 const bits = MaskBits(s & m);
+                if (bits == 1)
+                    ++score;
+                else if (bits > 1 && noDoubles)
+                    score -= 1000;
+            }
+            return score;
+        };
+        std::stable_sort(own.begin(), own.end(), [](flag96 const& a, flag96 const& b) { return MaskBits(a) < MaskBits(b); });
+        for (flag96 const& spell : own)
+        {
+            if (spell & mask)
+                continue;
+            for (uint8 bit = 0; bit < 96; ++bit)
+            {
+                flag96 const one = MaskBit(bit);
+                if (!(spell & one) || (barred & one))
+                    continue;
+                if (std::none_of(own.begin(), own.end(), [&](flag96 const& s) { return (s & one) && (s & mask); }))
+                {
+                    mask |= one;
+                    break;
+                }
+            }
+        }
+        for (bool improved = true; improved; )
+        {
+            improved = false;
+            for (uint8 bit = 0; bit < 96; ++bit)
+            {
+                flag96 const one = MaskBit(bit);
+                if (barred & one)
+                    continue;
+                if (reached(mask ^ one) > reached(mask))
+                {
+                    mask ^= one;
+                    improved = true;
+                }
+            }
+        }
+        return mask;
+    }
+
+    uint32 ExactlyOnce(std::vector<flag96> const& own, flag96 const& mask)
+    {
+        return uint32(std::count_if(own.begin(), own.end(), [&mask](flag96 const& s) { return MaskBits(s & mask) == 1; }));
+    }
+
     std::array<CrestCover, MAX_CLASSES> BuildCrestCovers()
     {
         std::array<CrestCover, MAX_CLASSES> covers{};
@@ -2621,15 +2713,7 @@ namespace
             SpellInfo const* info = sSpellMgr->GetSpellInfo(id);
             if (!info || !info->SpellFamilyName || !info->SpellFamilyFlags || (!info->RecoveryTime && !info->CategoryRecoveryTime))
                 continue;
-            // the classes that learn it: a trainer's or a talent's
-            uint32 classMask = 0;
-            SkillLineAbilityMapBounds const bounds = sSpellMgr->GetSkillLineAbilityMapBounds(id);
-            for (auto itr = bounds.first; itr != bounds.second; ++itr)
-                classMask |= itr->second->ClassMask;
-            if (TalentSpellPos const* pos = GetTalentSpellPos(id))
-                if (TalentEntry const* talent = sTalentStore.LookupEntry(pos->talent_id))
-                    if (TalentTabEntry const* tab = sTalentTabStore.LookupEntry(talent->TabID))
-                        classMask |= tab->ClassMask;
+            uint32 const classMask = LearnerClasses(id, false);
             for (uint8 classId = CLASS_WARRIOR; classId < MAX_CLASSES; ++classId)
             {
                 ChrClassesEntry const* entry = sChrClassesStore.LookupEntry(classId);
@@ -2644,43 +2728,9 @@ namespace
         for (uint8 classId = CLASS_WARRIOR; classId < MAX_CLASSES; ++classId)
         {
             std::vector<flag96>& own = spells[classId];
-            flag96& mask = covers[classId].Mask;
-            auto reached = [&own](flag96 const& m)
-            {
-                return std::count_if(own.begin(), own.end(), [&m](flag96 const& s) { return MaskBits(s & m) == 1; });
-            };
-            std::stable_sort(own.begin(), own.end(), [](flag96 const& a, flag96 const& b) { return MaskBits(a) < MaskBits(b); });
-            for (flag96 const& spell : own)
-            {
-                if (spell & mask)
-                    continue;
-                for (uint8 bit = 0; bit < 96; ++bit)
-                {
-                    flag96 const one(bit < 32 ? 1u << bit : 0, bit >= 32 && bit < 64 ? 1u << (bit - 32) : 0, bit >= 64 ? 1u << (bit - 64) : 0);
-                    if (!(spell & one))
-                        continue;
-                    if (std::none_of(own.begin(), own.end(), [&](flag96 const& s) { return (s & one) && (s & mask); }))
-                    {
-                        mask |= one;
-                        break;
-                    }
-                }
-            }
-            for (bool improved = true; improved; )
-            {
-                improved = false;
-                for (uint8 bit = 0; bit < 96; ++bit)
-                {
-                    flag96 const one(bit < 32 ? 1u << bit : 0, bit >= 32 && bit < 64 ? 1u << (bit - 32) : 0, bit >= 64 ? 1u << (bit - 64) : 0);
-                    if (reached(mask ^ one) > reached(mask))
-                    {
-                        mask ^= one;
-                        improved = true;
-                    }
-                }
-            }
+            covers[classId].Mask = BuildCover(own, flag96(), false);
             TC_LOG_INFO("server.loading", "RiftProgression: the Crest's cooldown modifier for class {} reaches {} of its {} class spells with a cooldown.",
-                classId, reached(mask), own.size());
+                classId, ExactlyOnce(own, covers[classId].Mask), own.size());
         }
         return covers;
     }
@@ -2688,6 +2738,60 @@ namespace
     CrestCover const& CrestCoverOf(uint8 classId)
     {
         static std::array<CrestCover, MAX_CLASSES> const covers = BuildCrestCovers();
+        static CrestCover const none;
+        return classId < MAX_CLASSES ? covers[classId] : none;
+    }
+
+    // Summoner's Focus's range modifier: every class spell cast at a range, on
+    // one bit each. Melee spells (SPELL_RANGE_MELEE) keep their reach, so no bit
+    // of theirs is on the mask. Self-only and "anywhere" spells do not matter.
+    // On 3.3.5's spells that leaves out Heroic Throw, some ranks of the Blessings
+    // of Might and Wisdom, Divine Spirit, Fear Ward, Power Infusion, Polymorph:
+    // Rabbit and Curse of Doom's last ranks - they keep their range, both sides.
+    // Generic spells (wand and gun Shoot, a warrior's Throw) are not the class's
+    // family, which the client's modifiers never reach.
+    std::array<CrestCover, MAX_CLASSES> BuildRangeCovers()
+    {
+        std::array<CrestCover, MAX_CLASSES> covers{};
+        std::array<std::vector<flag96>, MAX_CLASSES> ranged;
+        std::array<flag96, MAX_CLASSES> melee{};
+        for (uint32 id = 1; id < sSpellMgr->GetSpellInfoStoreSize(); ++id)
+        {
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(id);
+            if (!info || !info->SpellFamilyName || !info->SpellFamilyFlags || !info->RangeEntry)
+                continue;
+            bool const isMelee = (info->RangeEntry->Flags & SPELL_RANGE_MELEE) != 0;
+            float const reach = std::max(info->RangeEntry->RangeMax[0], info->RangeEntry->RangeMax[1]);
+            if (!isMelee && (reach <= 0.0f || reach >= 50000.0f))
+                continue;
+            uint32 const classMask = LearnerClasses(id, true);
+            for (uint8 classId = CLASS_WARRIOR; classId < MAX_CLASSES; ++classId)
+            {
+                ChrClassesEntry const* entry = sChrClassesStore.LookupEntry(classId);
+                if (!entry || entry->SpellClassSet != info->SpellFamilyName || !(classMask & (1u << (classId - 1))))
+                    continue;
+                if (!covers[classId].SpellId)
+                    covers[classId].SpellId = id;
+                if (isMelee)
+                    melee[classId] |= info->SpellFamilyFlags;
+                else
+                    ranged[classId].push_back(info->SpellFamilyFlags);
+            }
+        }
+
+        for (uint8 classId = CLASS_WARRIOR; classId < MAX_CLASSES; ++classId)
+        {
+            std::vector<flag96>& own = ranged[classId];
+            covers[classId].Mask = BuildCover(own, melee[classId], true);
+            TC_LOG_INFO("server.loading", "RiftProgression: Summoner's Focus's range modifier for class {} reaches {} of its {} ranged class spells.",
+                classId, ExactlyOnce(own, covers[classId].Mask), own.size());
+        }
+        return covers;
+    }
+
+    CrestCover const& RangeCoverOf(uint8 classId)
+    {
+        static std::array<CrestCover, MAX_CLASSES> const covers = BuildRangeCovers();
         static CrestCover const none;
         return classId < MAX_CLASSES ? covers[classId] : none;
     }
@@ -2744,6 +2848,25 @@ void CooldownMod(AuraEffect const* carrier, SpellModifier*& mod)
         mod->mask = cover.Mask;
     }
     mod->value = -int32(std::min(float(std::max(carrier->GetAmount(), 0)), COOLDOWN_REDUCTION_CAP));
+}
+
+void RangeMod(AuraEffect const* carrier, SpellModifier*& mod)
+{
+    Player* player = carrier ? carrier->GetBase()->GetUnitOwner()->ToPlayer() : nullptr;
+    if (!player)
+        return;
+    if (!mod)
+    {
+        CrestCover const& cover = RangeCoverOf(player->GetClass());
+        if (!cover.SpellId || !cover.Mask)
+            return;
+        mod = new SpellModifier(carrier->GetBase());
+        mod->op = SPELLMOD_RANGE;
+        mod->type = SPELLMOD_PCT;
+        mod->spellId = cover.SpellId;
+        mod->mask = cover.Mask;
+    }
+    mod->value = carrier->GetAmount();
 }
 
 float CooldownReduction(Player const* player, SpellInfo const* spellInfo, bool* clientMisreads)
