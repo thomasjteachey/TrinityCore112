@@ -612,6 +612,123 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return hasControlState || hasHardCcState || hasCcAura;
     }
 
+    // Everybody still up on the other side of this arena is out of this bot's
+    // sight - and there is somebody. Only people seated in the match count
+    // (GetPlayerTeam is 0 for a spectator), and where they stand is never
+    // read: knowing a rogue is still up is what the arena frames tell
+    // everybody anyway. An enemy the bot CAN see but may not hit (Ice Block,
+    // Divine Shield) is a fight to wait out, not a reason to wander off.
+    bool OnlyHiddenArenaEnemiesRemain(Player* player, Battleground* battleground)
+    {
+        Map* map = player->FindMap();
+        if (!map)
+            return false;
+
+        bool hiddenEnemy = false;
+        TeamId const playerTeam = ResolveBotTeamId(player);
+        Map::PlayerList const& players = map->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            Player* candidate = itr->GetSource();
+            if (!candidate || candidate == player || !candidate->IsAlive() || candidate->IsGameMaster())
+                continue;
+            if (candidate->GetBattlegroundId() != player->GetBattlegroundId() ||
+                !battleground->GetPlayerTeam(candidate->GetGUID()))
+                continue;
+            if (battleground->IsSquadMatch() ? battleground->AreTeammates(player->GetGUID(), candidate->GetGUID()) :
+                ResolveBotTeamId(candidate) == playerTeam)
+                continue;
+            if (player->CanSeeOrDetect(candidate))
+                return false;
+            hiddenEnemy = true;
+        }
+
+        return hiddenEnemy;
+    }
+
+    // An arena bot that can see nobody while somebody on the other side is
+    // still up goes looking for them.
+    //
+    // The arena pursuit only ever chased an enemy it could see, so a fight
+    // that came down to people who cannot see each other - a rogue back in
+    // stealth against a cat in Prowl, two rogues, a Shadowmeld - stood still
+    // on both sides until the round's time limit: the stealthed bot waited for
+    // somebody to walk into it, and nobody walked anywhere. Real players go
+    // and look. The bot walks a loop of the arena's middle and each side's
+    // start, the places the fight passes through, so two hidden bots walk the
+    // same ground and stealth's own detection range has them meet. It looks
+    // for people, it is not told where they are: a person hiding in a corner
+    // stays hidden until they come out.
+    bool SearchArenaForHiddenEnemy(Player* player)
+    {
+        Battleground* battleground = player->GetBattleground();
+        if (!battleground || !battleground->isArena() || battleground->GetStatus() != STATUS_IN_PROGRESS)
+            return false;
+        if (!OnlyHiddenArenaEnemiesRemain(player, battleground))
+            return false;
+
+        Map* map = player->FindMap();
+        Position const* allianceStart = battleground->GetTeamStartPosition(TEAM_ALLIANCE);
+        Position const* hordeStart = battleground->GetTeamStartPosition(TEAM_HORDE);
+        if (!map || !allianceStart || !hordeStart)
+            return false;
+
+        // The middle is the average of the starts, which can sit under a
+        // floor or over a pit, so it is looked down onto from above the
+        // higher start - or from the arena's own probe height when it has one.
+        Position middle = battleground->GetSquadArenaCentre();
+        BattlegroundBounds const& bounds = battleground->GetBounds();
+        float const probeZ = bounds.Enabled && bounds.ProbeZ != 0.0f ? bounds.ProbeZ :
+            std::max(allianceStart->GetPositionZ(), hordeStart->GetPositionZ()) + 10.0f;
+        float const floorZ = map->GetHeight(player->GetPhaseMask(), middle.GetPositionX(), middle.GetPositionY(), probeZ, true, 60.0f);
+        if (floorZ > INVALID_HEIGHT)
+            middle.m_positionZ = floorZ;
+
+        std::array<Position, 4> const loop = { middle, *allianceStart, middle, *hordeStart };
+
+        // A leg is over on arrival, or after long enough that the place cannot
+        // be reached from here (a start pad in the air, a lift that is down).
+        constexpr float kArrivedRange = 6.0f;
+        constexpr uint32 kLegTimeoutMs = 25 * IN_MILLISECONDS;
+        // Not asked for this long, the search is over - the bot found somebody
+        // or the round turned over - and the next one starts at the middle.
+        constexpr uint32 kSearchStaleMs = 5 * IN_MILLISECONDS;
+
+        struct ArenaSearchState
+        {
+            uint32 instanceId = 0;
+            uint8 leg = 0;
+            uint32 legStartMs = 0;
+            uint32 lastAskedMs = 0;
+        };
+
+        static std::unordered_map<uint64, ArenaSearchState> stateByGuid;
+        ArenaSearchState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        if (state.instanceId != battleground->GetInstanceID() || nowMs - state.lastAskedMs > kSearchStaleMs)
+        {
+            state.instanceId = battleground->GetInstanceID();
+            state.leg = 0;
+            state.legStartMs = nowMs;
+        }
+        state.lastAskedMs = nowMs;
+
+        Position destination = loop[state.leg];
+        playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
+        if (player->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY()) <= kArrivedRange ||
+            nowMs - state.legStartMs > kLegTimeoutMs)
+        {
+            state.leg = uint8((state.leg + 1) % loop.size());
+            state.legStartMs = nowMs;
+            destination = loop[state.leg];
+            playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
+        }
+
+        EmitBattlegroundGmDebug(player, "arena-search leg=" + std::to_string(uint32(state.leg)) +
+            " dist=" + std::to_string(int32(player->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY()))), 2000);
+        return IssueMovePointThrottled(player, destination, 4.0f, 1000) || player->isMoving();
+    }
+
     bool TryPursueNearestEnemyInBattleground(Player* player)
     {
         if (!player || !player->InBattleground())
@@ -623,7 +740,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr);
         if (!nearestEnemy)
-            return false;
+            return SearchArenaForHiddenEnemy(player);
 
         bool chaseIssued = MoveTowardUnit(player, nearestEnemy, combatEngageDistance);
         if (!chaseIssued && !player->isMoving())
