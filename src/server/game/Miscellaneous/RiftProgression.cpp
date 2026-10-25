@@ -930,6 +930,26 @@ namespace
 
     // The way out: the client is told the spellbook it normally holds - what it
     // gains before the real bars go out (gains), what it loses after them.
+    // What a client that logged in while the match held its character was sent:
+    // SendInitialSpells asks ShowsInSpellbook, so its list is the match's - the
+    // real ranks the match hides are missing (ClientHidden) and the lower ranks
+    // it lists are extra (ClientExtra).
+    void NoteLoginSpellbook(Player const* player, State& state)
+    {
+        state.ClientHidden.clear();
+        state.ClientExtra.clear();
+        for (auto const& [spell, known] : player->GetSpellMap())
+        {
+            if (known.state == PLAYERSPELL_REMOVED || known.disabled)
+                continue;
+            bool const shows = MatchShows(state, spell, known.active);
+            if (known.active && !shows)
+                state.ClientHidden.insert(spell);
+            else if (!known.active && shows)
+                state.ClientExtra.insert(spell);
+        }
+    }
+
     void ResetClientSpellbook(Player* player, State& state, bool gains)
     {
         if (player->GetSession())
@@ -2205,20 +2225,9 @@ void Enter(Player* player)
     if (State* existing = Find(player))
     {
         // Back in the match it left: level, talents and gear are as it left them.
-        // A relog's spell list was already the match's (SendInitialSpells asks
-        // ShowsInSpellbook), so that is what the client holds now.
-        existing->ClientHidden.clear();
-        existing->ClientExtra.clear();
-        for (auto const& [spell, known] : player->GetSpellMap())
-        {
-            if (known.state == PLAYERSPELL_REMOVED || known.disabled)
-                continue;
-            bool const shows = MatchShows(*existing, spell, known.active);
-            if (known.active && !shows)
-                existing->ClientHidden.insert(spell);
-            else if (!known.active && shows)
-                existing->ClientExtra.insert(spell);
-        }
+        // A relog's spell list was already the match's, so that is what the
+        // client holds now.
+        NoteLoginSpellbook(player, *existing);
         // A rogue's coats are dependent, so the relog did not load them back.
         // Learned after the loop above: the client is told each one, and
         // PublishBars takes the locked ones back out of its spellbook.
@@ -2393,13 +2402,29 @@ namespace
     QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money, talents, actions, {}, {} FROM custom_rift_stash WHERE guid = {}",
         StashSkillsColumn ? "skills" : "''", StashPetColumn ? "pet_spells" : "''", player->GetGUID().GetCounter());
     SetMatchSkills(player, false);
+    // A login while the match still held the character got the match's spell list,
+    // without the real ranks it hides. The client clears every bar button whose
+    // spell it does not know and tells the server, so the real bars go out only
+    // after it has been told those spells again, as Leave sends them.
+    State shown;
     {
         std::lock_guard<std::recursive_mutex> lock(StateMutex);
-        States.erase(player->GetGUID().GetCounter());
+        auto const itr = States.find(player->GetGUID().GetCounter());
+        if (itr != States.end())
+        {
+            NoteLoginSpellbook(player, itr->second);
+            shown.ClientHidden = std::move(itr->second.ClientHidden);
+            shown.ClientExtra = std::move(itr->second.ClientExtra);
+            States.erase(itr);
+        }
         Stashed.erase(player->GetGUID().GetCounter());
     }
     if (!row)
+    {
+        ResetClientSpellbook(player, shown, true);
+        ResetClientSpellbook(player, shown, false);
         return false;
+    }
 
     // Before the tournament script's login hook hands the gear back: the real
     // level first, so the character can wear it again.
@@ -2420,7 +2445,9 @@ namespace
     player->SetMoney(fields[2].GetUInt32());
     RestoreTalents(player, TalentsFromString(fields[3].GetString()));
     RestoreButtons(player, ButtonsFromString(fields[4].GetString()));
+    ResetClientSpellbook(player, shown, true);
     player->SendActionButtons(1);
+    ResetClientSpellbook(player, shown, false);
     ForgetRecall(player);
     CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
     TC_LOG_INFO("bg.battleground", "Rift: {} restored from the stash of a match it left; level {}, experience, money, talents and bars back.", player->GetName(), realLevel);
