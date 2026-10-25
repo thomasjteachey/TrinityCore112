@@ -1149,7 +1149,8 @@ class TC_GAME_API Battleground
         // the time limit is a round's, not the whole match's.
         virtual void UpdateRounds(uint32 /*diff*/) { }
         // The gates shut again and the start-of-match clocks (bounds grace,
-        // start exits) back at zero, for another round in the same arena.
+        // start exits) back at zero, for another round in the same arena. A
+        // gate that changes state is sent to the clients again, so it blocks.
         void ResetStartingAreaForRound();
         // Sends anyone who has wandered off their start back to it, the check
         // every match runs behind closed gates.

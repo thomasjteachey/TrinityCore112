@@ -2273,7 +2273,32 @@ void Battleground::MoveParticipantToTeam(ObjectGuid guid, Player* player, uint32
 
 void Battleground::ResetStartingAreaForRound()
 {
+    // Which objects are gates is each arena's own business, so they are found
+    // by what StartingEventCloseDoors changes: every door it moves to another
+    // state.
+    BattlegroundMap* const map = FindBgMap();
+    std::vector<std::pair<uint32, GOState>> doorStates;
+    if (map)
+        for (uint32 i = 0; i < BgObjects.size(); ++i)
+            if (GameObject* go = map->GetGameObject(BgObjects[i]))
+                if (go->GetGoType() == GAMEOBJECT_TYPE_DOOR)
+                    doorStates.emplace_back(i, go->GetGoState());
+
     StartingEventCloseDoors();
+
+    // The client sets up a door's collision when the object is created, not
+    // when its state changes: a gate shut again with a state change swings shut
+    // on screen and can still be walked through. Destroyed and sent again, each
+    // client builds it shut, the way the first round's gates arrive. (Ring of
+    // Valor resends its pillars after every toggle for the same reason.)
+    if (map)
+        for (auto const& [index, oldState] : doorStates)
+            if (GameObject* go = map->GetGameObject(BgObjects[index]))
+                if (go->IsInWorld() && go->GetGoState() != oldState)
+                {
+                    go->DestroyForNearbyPlayers();
+                    go->UpdateObjectVisibility(true);
+                }
 
     m_ValidStartPositionTimer = 0;
     m_BoundsElapsed = 0;
