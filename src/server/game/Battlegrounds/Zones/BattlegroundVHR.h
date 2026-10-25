@@ -417,6 +417,12 @@ public:
     // lifecycle holds them where they stand until they are let out.
     bool OwnsPreparationState(Player const* player) const override;
 
+    // Every cell door still shut, and the prison seal. The navmesh runs through
+    // the doorways (the stock bosses walk out of their cells), so without these
+    // a kiting bot retreated through a shut door and stood in a cell nobody
+    // could reach or shoot into.
+    void GetStandingGates(GuidVector& gates) const override;
+
     // --- script-side clone driver interface -------------------------------
     // The driver polls this every world tick. A non-null return means the wave
     // has been composed and is waiting to be summoned; the driver spawns one

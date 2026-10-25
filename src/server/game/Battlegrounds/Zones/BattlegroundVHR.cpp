@@ -884,6 +884,22 @@ bool BattlegroundVHR::OwnsPreparationState(Player const* player) const
     }
 }
 
+void BattlegroundVHR::GetStandingGates(GuidVector& gates) const
+{
+    BattlegroundMap* map = FindBgMap();
+    if (!map)
+        return;
+
+    // DoorOpen sets GO_STATE_ACTIVE, which also takes the door's collision
+    // away; only a door still READY blocks anyone. Cells stay open once their
+    // wave is out until a later wave reuses them, so what is shut here is a
+    // cell never used yet, a held-back group's cell, or the next wave's.
+    for (uint32 type = 0; type <= BG_VHR_OBJECT_MAIN_DOOR; ++type)
+        if (GameObject* door = map->GetGameObject(BgObjects[type]))
+            if (door->IsInWorld() && door->isSpawned() && door->GetGoState() == GO_STATE_READY)
+                gates.push_back(door->GetGUID());
+}
+
 void BattlegroundVHR::OpenWaveCell()
 {
     // Only the opening group's cells. The held-back clones' cells open as the
