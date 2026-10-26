@@ -31,13 +31,30 @@
 local BOT_ICON  = "Interface\\WorldMap\\WorldMapPartyIcon"
 local MAX_BLIPS = 80
 
--- The grey battleground tombstone - grey because no graveyard here belongs to a
--- side - which is landmark 8 on the map's own POI sheet. The sheet is laid out
--- on an 18-pixel grid, not 16: landmark 7 at 126-144 is the red Horde banner,
--- and a 16-pixel crop at 128 lands on that flag. Cell 8 spans 144-162 and its
--- neighbours' pixels stop at 142 and start at 163, so the cell crops clean.
+-- The neutral battleground tombstone - neutral because no graveyard here
+-- belongs to a side - which is landmark 8 on the map's own POI sheet. The sheet
+-- is laid out on an 18-pixel grid, not 16: landmark 7 at 126-144 is the red
+-- Horde banner, and a 16-pixel crop at 128 lands on that flag. Cell 8 spans
+-- 144-162 and its neighbours' pixels stop at 142 and start at 163, so the cell
+-- crops clean.
 local GRAVE_ICON   = "Interface\\Minimap\\POIIcons"
 local GRAVE_COORDS = { 144 / 256, 162 / 256, 0, 18 / 256 }
+
+-- Spirit-healer blue. The stone is a dark brown sprite, and a vertex colour can
+-- only multiply, so tinting it as it is just turns it muddy. It is greyed
+-- first, so the colour lands evenly, then drawn a second time additively on top
+-- to lift it back to full brightness; the black outline stays black either way.
+local GRAVE_TINT   = { 0.55, 0.85, 1.0 }
+
+local function GraveLayer(stone, layer)
+	local tex = stone:CreateTexture(nil, layer)
+	tex:SetAllPoints(stone)
+	tex:SetTexture(GRAVE_ICON)
+	tex:SetTexCoord(unpack(GRAVE_COORDS))
+	tex:SetDesaturated(true)
+	tex:SetVertexColor(unpack(GRAVE_TINT))
+	return tex
+end
 
 local bots     = {}     -- the completed set: { name, x, y }
 local pending  = {}     -- chunks still arriving
@@ -135,10 +152,8 @@ local function AcquireGrave(surface, index)
 		stone = CreateFrame("Frame", nil, graves.parent)
 		stone:SetWidth(graves.size)
 		stone:SetHeight(graves.size)
-		local icon = stone:CreateTexture(nil, "ARTWORK")
-		icon:SetAllPoints(stone)
-		icon:SetTexture(GRAVE_ICON)
-		icon:SetTexCoord(unpack(GRAVE_COORDS))
+		GraveLayer(stone, "ARTWORK")
+		GraveLayer(stone, "OVERLAY"):SetBlendMode("ADD")
 
 		if graves.tooltip then
 			stone.tooltip = graves.tooltip
