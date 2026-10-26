@@ -722,11 +722,40 @@ void WorldSession::HandleReclaimCorpse(WorldPackets::Misc::ReclaimCorpse& /*pack
         return;
 
     // prevent resurrect before 30-sec delay after body release not finished
-    if (time_t(corpse->GetGhostTime() + _player->GetCorpseReclaimDelay(corpse->GetType() == CORPSE_RESURRECTABLE_PVP)) > GameTime::GetGameTime())
+    //
+    // CalculateCorpseReclaimDelay(true) is this exact test (the corpse's ghost
+    // time plus GetCorpseReclaimDelay for its type), returning what is left.
+    //
+    // A refused click used to vanish without a word. The client lights its
+    // "Resurrect now?" button off its own copy of the countdown, and that copy
+    // can be missing - a relog used to lose it - so say how long is left, and
+    // send the countdown again so the popup has it the next time it opens.
+    int32 const reclaimDelay = _player->CalculateCorpseReclaimDelay(true);
+    if (reclaimDelay >= 0)
+    {
+        uint32 const secondsLeft = uint32(reclaimDelay) / IN_MILLISECONDS;
+
+        _player->SendCorpseReclaimDelay(uint32(reclaimDelay));
+        if (secondsLeft == 1)
+            SendNotification("You can resurrect in 1 second.");
+        else
+            SendNotification("You can resurrect in %u seconds.", secondsLeft);
+
+        TC_LOG_INFO("entities.player", "Player {} ({}) tried to reclaim a {} corpse {} s before the reclaim delay ran out.",
+            _player->GetName(), _player->GetGUID().ToString(),
+            corpse->GetType() == CORPSE_RESURRECTABLE_PVP ? "PvP" : "PvE", secondsLeft);
         return;
+    }
 
     if (!corpse->IsWithinDistInMap(_player, CORPSE_RECLAIM_RADIUS, true))
+    {
+        // The client only offers the button inside this radius, so landing here
+        // means the server and the client disagree about where one of them is.
+        TC_LOG_INFO("entities.player", "Player {} ({}) tried to reclaim their corpse from {:.1f} yd away (map {} vs corpse map {}, phase {} vs {}).",
+            _player->GetName(), _player->GetGUID().ToString(), _player->GetExactDist(corpse),
+            _player->GetMapId(), corpse->GetMapId(), _player->GetPhaseMask(), corpse->GetPhaseMask());
         return;
+    }
 
     // resurrect
     _player->ResurrectPlayer(_player->InBattleground() ? 1.0f : 0.5f);

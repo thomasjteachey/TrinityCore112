@@ -28053,27 +28053,26 @@ int32 Player::CalculateCorpseReclaimDelay(bool load) const
 
     if (load)
     {
-        if (corpse->GetGhostTime() > m_deathExpireTime)
+        // What is left of the wait on a corpse that already exists - a ghost
+        // logging back in, or a reclaim the server just refused.
+        //
+        // This has to be the very sum WorldSession::HandleReclaimCorpse tests,
+        // so the client never offers "Resurrect now?" while the server would
+        // still refuse it. The old version counted the deaths from the ghost
+        // time instead of from now, so it could promise a shorter wait than the
+        // check enforced, and it charged a PvE corpse 30 seconds when the PvE
+        // delay is switched off.
+        //
+        // The delay is read at the current time, and it can only step down as
+        // time passes, so this is never shorter than the real wait - at worst
+        // the countdown runs a little past the moment the check would allow.
+        time_t const readyAt = corpse->GetGhostTime() + GetCorpseReclaimDelay(pvp);
+        time_t const now = GameTime::GetGameTime();
+
+        if (now >= readyAt)
             return -1;
 
-        uint64 count = 0;
-
-        if ((pvp && sWorld->getBoolConfig(CONFIG_DEATH_CORPSE_RECLAIM_DELAY_PVP)) ||
-            (!pvp && sWorld->getBoolConfig(CONFIG_DEATH_CORPSE_RECLAIM_DELAY_PVE)))
-        {
-            count = (m_deathExpireTime - corpse->GetGhostTime()) / DEATH_EXPIRE_STEP;
-
-            if (count >= MAX_DEATH_COUNT)
-                count = MAX_DEATH_COUNT - 1;
-        }
-
-        time_t expected_time = corpse->GetGhostTime() + copseReclaimDelay[count];
-        time_t now = GameTime::GetGameTime();
-
-        if (now >= expected_time)
-            return -1;
-
-        delay = expected_time - now;
+        delay = uint32(readyAt - now);
     }
     else
         delay = GetCorpseReclaimDelay(pvp);

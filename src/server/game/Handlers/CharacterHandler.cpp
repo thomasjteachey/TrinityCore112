@@ -1302,6 +1302,17 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         pCurrChar->BuildPlayerRepop();
         pCurrChar->RepopAtGraveyard();
     }
+    // A ghost logging back in. The corpse reclaim countdown is only ever sent
+    // at death and at release, and the new client starts without one, so it
+    // offered "Resurrect now?" at once while HandleReclaimCorpse kept refusing
+    // the click until the real wait - up to two minutes after repeated PvP
+    // deaths - had run out. Hand the client what is left of it.
+    else if (pCurrChar->getDeathState() == DEAD)
+    {
+        int32 const corpseReclaimDelay = pCurrChar->CalculateCorpseReclaimDelay(true);
+        if (corpseReclaimDelay >= 0)
+            pCurrChar->SendCorpseReclaimDelay(corpseReclaimDelay);
+    }
 
     if (pCurrChar->IsSpectator())
     {
