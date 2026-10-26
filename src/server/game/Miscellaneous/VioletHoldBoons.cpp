@@ -114,8 +114,52 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Beastmaster,  SPELL_BOON_BEASTMASTER, 20, 100, MASK_PETS,     5, "Boon of the Beastmaster", "pet and guardian damage and health",  "%" },
     { Boon::Menagerie,    SPELL_BOON_MENAGERIE,    1,   20, MASK_ALL,     4, "Boon of the Menagerie", "random guardian fights beside you each wave", "" },
     { Boon::Fellowship,   SPELL_BOON_FELLOWSHIP,   1,   3, MASK_ALL,      3, "Boon of Fellowship",   "a random champion joins your side for the rest of the run (run-wide)", "" },
-    { Boon::Respite,      SPELL_BOON_RESPITE,      1,   4, MASK_ALL,      5, "Boon of Respite",      "sooner out of combat",                    "s" }
+    { Boon::Respite,      SPELL_BOON_RESPITE,      1,   4, MASK_ALL,      5, "Boon of Respite",      "sooner out of combat",                    "s" },
+
+    // Third batch. Resilience, Protector and Weaponmaster are plain auras the
+    // engine already applies (197 crit taken, 101 armor %, 232 disarm
+    // duration); the other four are procs in scripts/Custom/violet_hold_boons.cpp.
+    // Weaponmaster covers what Resolve leaves out on purpose: disarms.
+    { Boon::Resilience,   SPELL_BOON_RESILIENCE,   3,  30, MASK_ALL,      7, "Boon of Resilience",   "less chance to be critically hit",        "%" },
+    { Boon::Divinity,     SPELL_BOON_DIVINITY,     5,  25, MASK_ALL,      5, "Boon of Divinity",     "of your damage and healing builds a shield (up to 25% of your health)", "%" },
+    { Boon::Clearcasting, SPELL_BOON_CLEARCASTING, 2,  20, MASK_ALL,      5, "Boon of Clearcasting", "chance on damage or healing that your next spell or ability costs nothing", "%" },
+    { Boon::Viper,        SPELL_BOON_VIPER,        5,  25, MASK_MANA,     6, "Boon of the Viper",    "of damage dealt drained from the target's mana into yours", "%" },
+    { Boon::Protector,    SPELL_BOON_PROTECTOR,   10, 100, MASK_ALL,      8, "Boon of the Protector", "armor",                                  "%" },
+    { Boon::Weaponmaster, SPELL_BOON_WEAPONMASTER, 10, 90, MASK_MELEE,    4, "Boon of the Weaponmaster", "shorter disarms on you",              "%" },
+    { Boon::Aggression,   SPELL_BOON_AGGRESSION,   5,  50, MASK_ALL,      6, "Boon of Aggression",   "less healing received by whatever you hit (10 sec)", "%" },
+    { Boon::Healthstone,  SPELL_BOON_HEALTHSTONE,  1,   1, MASK_ALL,      4, "Boon of the Healthstone", "never used up, lasts the run (unique)", "" }
 };
+
+// Boon of the Healthstone hands out one of these: the warlock's improved
+// (2/2) stone of each rank, cloned as item_template 160808-160812 with no
+// charges (never used up), soulbound, unique and limited to Map 1608 - the
+// same run-only shape as the legendaries. Ordered by level; the best one the
+// picker's level can use is the one granted.
+struct RunHealthstone
+{
+    uint32 itemEntry;
+    uint8 requiredLevel;   // the stock rank's RequiredLevel; the item row says the same
+};
+
+RunHealthstone const kRunHealthstones[] =
+{
+    { 160808,  1 },   // Everlasting Minor Healthstone   (19005)
+    { 160809, 12 },   // Everlasting Lesser Healthstone  (19007)
+    { 160810, 24 },   // Everlasting Healthstone         (19009)
+    { 160811, 36 },   // Everlasting Greater Healthstone (19011)
+    { 160812, 48 }    // Everlasting Major Healthstone   (19013)
+};
+
+// The broker's healthstone the character carries, if any. GetItemByEntry looks
+// through the bags and what is worn, not the bank - there is no banker inside
+// the Hold, and outside it the item's Map limit deletes the stone at login.
+Item* GetRunHealthstone(Player const* player)
+{
+    for (RunHealthstone const& stone : kRunHealthstones)
+        if (Item* item = player->GetItemByEntry(stone.itemEntry))
+            return item;
+    return nullptr;
+}
 
 // Three per class. spellId is the FIRST rank where a chain exists
 // (Shadowfury 30283 -> r2 30413 at 60; Water Shield 52127 -> r6 52138 at 60;
@@ -651,6 +695,8 @@ bool IsBoonSpell(uint32 spellId)
         || (spellId >= SPELL_BOON_COOLDOWN_CLASS_FIRST && spellId <= SPELL_BOON_COOLDOWN_CLASS_LAST)
         || (spellId >= SPELL_BOON_BATCH2_FIRST && spellId <= SPELL_BOON_BATCH2_LAST)
         || spellId == SPELL_BOON_RESPITE
+        || (spellId >= SPELL_BOON_BATCH3_FIRST && spellId <= SPELL_BOON_BATCH3_LAST)
+        || spellId == SPELL_BOON_HEALTHSTONE
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
 }
@@ -683,6 +729,23 @@ uint32 GetBoonSpellFor(Boon boon, uint8 classId)
     if (boon == Boon::Cooldown && classId >= CLASS_WARRIOR && classId < MAX_CLASSES)
         return SPELL_BOON_COOLDOWN_CLASS_BASE + classId;
     return GetBoon(boon).spellId;
+}
+
+uint32 GetClearcastingBuffFor(uint8 classId)
+{
+    // Death knights (6) and the unused class 10 have no variant.
+    if (classId < CLASS_WARRIOR || classId >= MAX_CLASSES || classId == CLASS_DEATH_KNIGHT || classId == 10)
+        return 0;
+    return SPELL_BOON_CLEARCAST_CLASS_BASE + classId;
+}
+
+uint32 GetHealthstoneFor(uint8 level)
+{
+    uint32 best = 0;
+    for (RunHealthstone const& stone : kRunHealthstones)
+        if (level >= stone.requiredLevel)
+            best = stone.itemEntry;
+    return best;
 }
 
 uint8 GetStacks(Player const* player, Boon boon)
@@ -729,6 +792,24 @@ PickResult CanTake(Player const* player, Offer offer)
 
         if (info.boon == Boon::MountSpeed && player->GetLevel() < BOON_OUTRIDER_MIN_LEVEL)
             return PickResult::TooLowLevel;
+
+        // The healthstone is an item behind a one-stack record aura: the bags
+        // must take it, and a stone still carried (its record lost some other
+        // way) counts as having it. No item row loaded = never on offer.
+        if (info.boon == Boon::Healthstone)
+        {
+            if (GetStacks(player, info.boon) >= info.maxStacks)
+                return PickResult::AtCap;
+            uint32 const entry = GetHealthstoneFor(player->GetLevel());
+            if (!entry || !sObjectMgr->GetItemTemplate(entry))
+                return PickResult::Failed;
+            if (GetRunHealthstone(player))
+                return PickResult::AlreadyKnown;
+            ItemPosCountVec dest;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, entry, 1) != EQUIP_ERR_OK)
+                return PickResult::NoRoom;
+            return PickResult::Ok;
+        }
 
         if (info.boon == Boon::Level)
             return player->GetLevel() < LEVEL_BOON_CEILING ? PickResult::Ok : PickResult::LevelCeiling;
@@ -1081,6 +1162,27 @@ PickResult Take(Player* player, Offer offer)
         case Boon::Beastmaster:
             RefreshBeastmaster(player);
             break;
+        case Boon::Healthstone:
+        {
+            // The record aura went on above; the stone itself now. Without
+            // the stone the record would only block a later pick, so it goes.
+            uint32 const entry = GetHealthstoneFor(player->GetLevel());
+            ItemPosCountVec dest;
+            Item* item = nullptr;
+            if (entry && player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, entry, 1) == EQUIP_ERR_OK)
+                item = player->StoreNewItem(dest, entry, true);
+            if (!item)
+            {
+                TC_LOG_ERROR("bg.battleground", "VioletHoldBoons::Take: could not create healthstone {} for {}.",
+                    entry, player->GetGUID().ToString());
+                player->RemoveAurasDueToSpell(boonSpellId);
+                return PickResult::Failed;
+            }
+            item->SetBinding(true);
+            item->SetState(ITEM_CHANGED, player);
+            player->SendNewItem(item, 1, true, false);
+            break;
+        }
         default:
             break;
     }
@@ -1152,6 +1254,16 @@ void StripAll(Player* player)
     ReequipDisplacedWeapons(player, emptied);
     player->GetVioletHoldDisplacedWeapons().fill(0);
 
+    // The broker's healthstone: run-only entries, so by entry (bags and worn).
+    for (RunHealthstone const& stone : kRunHealthstones)
+        for (uint8 guard = 0; guard < 8; ++guard)
+        {
+            Item* item = player->GetItemByEntry(stone.itemEntry);
+            if (!item)
+                break;
+            player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+        }
+
     // Taught class spells: ONLY the chains the knowledge marker says the broker
     // taught (read before the marker goes), top rank first so RemoveSpell's
     // own "unlearn higher ranks" recursion never surprises us. The dependent
@@ -1197,6 +1309,11 @@ void StripAll(Player* player)
         player->RemoveAurasDueToSpell(info.spellId);
     for (uint32 id = SPELL_BOON_COOLDOWN_CLASS_FIRST; id <= SPELL_BOON_COOLDOWN_CLASS_LAST; ++id)
         player->RemoveAurasDueToSpell(id);
+    // What the third batch's procs leave on the holder: a pending free cast
+    // and the Divinity shield.
+    for (uint32 id = SPELL_BOON_CLEARCAST_CLASS_FIRST; id <= SPELL_BOON_CLEARCAST_CLASS_LAST; ++id)
+        player->RemoveAurasDueToSpell(id);
+    player->RemoveAurasDueToSpell(SPELL_DIVINITY_SHIELD);
     player->RemoveAurasDueToSpell(SPELL_KNOWLEDGE_MARKER);
     player->RemoveAurasDueToSpell(SPELL_CACHE_MARKER);
 
@@ -1363,6 +1480,8 @@ void OnLogin(Player* player)
     for (ItemGrantInfo const& info : kItemGrants)
         if (info.runOnly && player->GetItemByEntry(info.itemEntry))
             carrying = true;
+    if (GetRunHealthstone(player))
+        carrying = true;
     for (BoonInfo const& info : kBoons)
         if (carrying || player->HasAura(info.spellId))
         {
@@ -1444,6 +1563,14 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
             return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:
             return Trinity::StringFormat("{}: +1 {}{}", info.name, info.summary, blocked);
+        case Boon::Healthstone:
+        {
+            // Named for the reader's level: "Everlasting Major Healthstone".
+            char const* stone = "a healthstone";
+            if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(GetHealthstoneFor(viewer ? viewer->GetLevel() : 0)))
+                stone = proto->Name1.c_str();
+            return Trinity::StringFormat("{}: {}, {}{}", info.name, stone, info.summary, blocked);
+        }
         case Boon::Greed:
         case Boon::Fellowship:
         case Boon::Menagerie:
@@ -1714,6 +1841,9 @@ void CopyBoonsTo(Player const* source, Player* target)
             case Boon::Level:
             // Alacrity lives in a per-class variant, not the table's id.
             case Boon::Cooldown:
+            // The record aura is nothing without the stone, and a clone has
+            // no bags worth filling.
+            case Boon::Healthstone:
                 return false;
             default:
                 return true;

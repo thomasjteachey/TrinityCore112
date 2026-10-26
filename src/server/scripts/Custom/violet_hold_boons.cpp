@@ -621,6 +621,198 @@ class spell_vhr_boon_vampire : public AuraScript
     }
 };
 
+// --- third batch ------------------------------------------------------------
+// Every proc below has a spell_proc row (damage done, direct and periodic, and
+// for Divinity and Clearcasting healing done too; triggered spells may proc).
+
+namespace
+{
+// The healing a proc event carries: all of it, or only what landed (not overheal).
+uint32 ProcHeal(ProcEventInfo const& eventInfo, bool effectiveOnly)
+{
+    HealInfo const* healInfo = eventInfo.GetHealInfo();
+    if (!healInfo)
+        return 0;
+    return effectiveOnly ? healInfo->GetEffectiveHeal() : healInfo->GetHeal();
+}
+}
+
+// 90413 Boon of Divinity: stacks% of the damage and the effective healing the
+// holder does goes into an absorb shield (90419) on the holder, which never
+// holds more than DIVINITY_SHIELD_CAP_PCT of max health. Each top-up restarts
+// its 30 sec. A shield that is used up is gone, and the next proc starts a new one.
+class spell_vhr_boon_divinity : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_divinity);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (IsBoonTriggeredSpell(eventInfo.GetSpellInfo()))
+            return false;
+        if (!GetTarget()->IsAlive())
+            return false;
+        return ProcDamage(eventInfo) > 0 || ProcHeal(eventInfo, true) > 0;
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* holder = GetTarget();
+        uint32 const done = ProcDamage(eventInfo) + ProcHeal(eventInfo, true);
+        uint32 const gain = CalculatePct(done, uint32(GetStackAmount()));
+        uint32 const cap = holder->CountPctFromMaxHealth(DIVINITY_SHIELD_CAP_PCT);
+        if (!gain || !cap)
+            return;
+
+        if (AuraEffect* shield = holder->GetAuraEffect(SPELL_DIVINITY_SHIELD, EFFECT_0, holder->GetGUID()))
+        {
+            int64 const now = shield->GetAmount();
+            int64 const next = std::min<int64>(now + gain, int64(cap));
+            if (next > now)
+                shield->ChangeAmount(int32(next));
+            shield->GetBase()->RefreshDuration();
+            return;
+        }
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(int32(std::min(gain, cap)));
+        holder->CastSpell(holder, SPELL_DIVINITY_SHIELD, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_divinity::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_vhr_boon_divinity::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 90414 Boon of Clearcasting: stacks% chance on damage or healing done to put
+// the class's own Clearcasting (90401-90411, a -100% cost spellmod with one
+// charge) on the holder. It is separate from Omen of Clarity and Arcane
+// Concentration - its own roll and its own buff. The buff's spell_proc row
+// spends the charge on the next costed spell the mod actually changed.
+class spell_vhr_boon_clearcasting : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_clearcasting);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (IsBoonTriggeredSpell(eventInfo.GetSpellInfo()))
+            return false;
+        if (!GetTarget()->IsAlive())
+            return false;
+        if (!ProcDamage(eventInfo) && !ProcHeal(eventInfo, false))
+            return false;
+        return roll_chance_i(GetStackAmount());
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+
+        Unit* holder = GetTarget();
+        if (uint32 const buff = GetClearcastingBuffFor(holder->GetClass()))
+            holder->CastSpell(holder, buff, TRIGGERED_FULL_MASK);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_clearcasting::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_vhr_boon_clearcasting::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 90415 Boon of the Viper: stacks% of the damage dealt is drained from the
+// target's mana into the holder's (90395, a power drain with a 1.0 gain
+// multiplier). The drain effect only takes from units whose power IS mana,
+// so a warrior, a rogue or a druid in cat or bear form is skipped here.
+class spell_vhr_boon_viper : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_viper);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (IsBoonTriggeredSpell(eventInfo.GetSpellInfo()))
+            return false;
+        Unit* victim = eventInfo.GetProcTarget();
+        if (!GetTarget()->IsAlive() || !victim || victim == GetTarget() || !victim->IsAlive())
+            return false;
+        if (victim->GetPowerType() != POWER_MANA || !victim->GetPower(POWER_MANA))
+            return false;
+        return ProcDamage(eventInfo) > 0;
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* victim = eventInfo.GetProcTarget();
+        uint32 const drain = CalculatePct(ProcDamage(eventInfo), uint32(GetStackAmount()));
+        if (!victim || !drain)
+            return;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(int32(drain));
+        GetTarget()->CastSpell(victim, SPELL_VIPER_DRAIN, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_viper::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_vhr_boon_viper::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 90418 Boon of Aggression: every damaging hit leaves Mortal Wound (90396,
+// healing received -stacks%, 10 sec) on the target. One wound per holder; a
+// hit that finds it already at the holder's strength only keeps it open.
+class spell_vhr_boon_aggression : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_aggression);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (IsBoonTriggeredSpell(eventInfo.GetSpellInfo()))
+            return false;
+        Unit* victim = eventInfo.GetProcTarget();
+        return GetTarget()->IsAlive() && victim && victim != GetTarget() && victim->IsAlive() && ProcDamage(eventInfo) > 0;
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* holder = GetTarget();
+        Unit* victim = eventInfo.GetProcTarget();
+        int32 const cut = -int32(GetStackAmount());
+        if (!victim || !cut)
+            return;
+
+        if (Aura* wound = victim->GetAura(SPELL_AGGRESSION_WOUND, holder->GetGUID()))
+        {
+            AuraEffect const* eff = wound->GetEffect(EFFECT_0);
+            if (eff && eff->GetAmount() == cut)
+            {
+                wound->RefreshDuration();
+                return;
+            }
+        }
+
+        // A recast from the same caster overwrites the wound's base amount,
+        // so a holder who took more stacks deepens it on the next hit.
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(cut);
+        holder->CastSpell(victim, SPELL_AGGRESSION_WOUND, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_aggression::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_vhr_boon_aggression::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 void AddSC_violet_hold_boons()
 {
     new npc_violet_hold_boon_broker();
@@ -631,4 +823,8 @@ void AddSC_violet_hold_boons()
     RegisterSpellScript(spell_vhr_boon_ricochet);
     RegisterSpellScript(spell_vhr_boon_reflection);
     RegisterSpellScript(spell_vhr_boon_vampire);
+    RegisterSpellScript(spell_vhr_boon_divinity);
+    RegisterSpellScript(spell_vhr_boon_clearcasting);
+    RegisterSpellScript(spell_vhr_boon_viper);
+    RegisterSpellScript(spell_vhr_boon_aggression);
 }

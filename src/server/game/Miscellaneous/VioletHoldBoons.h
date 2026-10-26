@@ -111,6 +111,16 @@ namespace VioletHoldBoons
 
         Respite,        // leave PvP combat 1 sec sooner per stack (CombatManager)
 
+        // Third batch (2026-10-26, a player's suggestions).
+        Resilience,     // less chance to be critically hit (aura 197)
+        Divinity,       // % of damage and healing done builds an absorb shield
+        Clearcasting,   // damage/heal chance: the next spell or ability costs nothing
+        Viper,          // % of damage dealt drained from the target's mana into yours
+        Protector,      // % armor (aura 101, armor school)
+        Weaponmaster,   // shorter disarms on you (aura 232, MECHANIC_DISARM)
+        Aggression,     // your hits cut the target's healing received for 10 sec
+        Healthstone,    // unique: a healthstone for your level that is never used up
+
         Max
     };
 
@@ -185,6 +195,29 @@ namespace VioletHoldBoons
 
         // 90298 is taken (Reinforced), so Respite sits on its own past it.
         SPELL_BOON_RESPITE      = 90299,
+
+        // Third batch. 90401-90418 is one block, so IsBoonSpell is a range
+        // check: the per-class Clearcasting buffs first (id = base + ChrClasses
+        // id, the Alacrity layout - 90406/90410 unused), then the boon auras.
+        // The healthstone's record aura sits just below it. 90395/90396/90419
+        // are what the procs FIRE (a mana drain, the healing debuff, the
+        // shield) - not boon auras and deliberately not in IsBoonSpell.
+        SPELL_BOON_HEALTHSTONE          = 90397,   // record only; the item is the boon
+        SPELL_BOON_CLEARCAST_CLASS_BASE = 90400,
+        SPELL_BOON_CLEARCAST_CLASS_FIRST = 90401,
+        SPELL_BOON_CLEARCAST_CLASS_LAST = 90411,
+        SPELL_BOON_RESILIENCE   = 90412,
+        SPELL_BOON_DIVINITY     = 90413,
+        SPELL_BOON_CLEARCASTING = 90414,
+        SPELL_BOON_VIPER        = 90415,
+        SPELL_BOON_PROTECTOR    = 90416,
+        SPELL_BOON_WEAPONMASTER = 90417,
+        SPELL_BOON_AGGRESSION   = 90418,
+        SPELL_BOON_BATCH3_FIRST = 90401,
+        SPELL_BOON_BATCH3_LAST  = 90418,
+        SPELL_VIPER_DRAIN       = 90395,
+        SPELL_AGGRESSION_WOUND  = 90396,
+        SPELL_DIVINITY_SHIELD   = 90419,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -348,6 +381,22 @@ namespace VioletHoldBoons
     // The aura a boon puts on THIS player - the same for everyone except the
     // per-class spellmod variants (Alacrity).
     TC_GAME_API uint32 GetBoonSpellFor(Boon boon, uint8 classId);
+
+    // The Clearcasting buff for this class (a cost spellmod only works inside
+    // the class's own spell family, client side too), or 0 for a class that
+    // has none.
+    TC_GAME_API uint32 GetClearcastingBuffFor(uint8 classId);
+
+    // Boon of Divinity: the shield never holds more than this share of the
+    // holder's maximum health, and lasts 30 sec past its last top-up (90419's
+    // duration). The number is also written in the kBoons summary and in
+    // 90413's tooltip - change all three together.
+    constexpr uint8 DIVINITY_SHIELD_CAP_PCT = 25;
+
+    // Boon of the Healthstone: the run-only, never-used-up healthstone a
+    // character of this level gets (the improved stone of the best rank the
+    // level can use), or 0.
+    TC_GAME_API uint32 GetHealthstoneFor(uint8 level);
 
     // Stacks the player currently holds of a boon (0 if none).
     TC_GAME_API uint8 GetStacks(Player const* player, Boon boon);
