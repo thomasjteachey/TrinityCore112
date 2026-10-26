@@ -743,10 +743,35 @@ Playerbot.PveGrind.LevelMatchYards = 15
 
 #    Playerbot.PveGrind.WanderRadius
 #        Description: When nothing attackable is nearby, the bot strolls to a random reachable
-#                     point within this many yards every 12-25 seconds.
+#                     point within this many yards (or toward a creature further out) every
+#                     WanderMinSeconds-WanderMaxSeconds.
 #        Default:     40
 
 Playerbot.PveGrind.WanderRadius = 40
+
+#    Playerbot.PveGrind.WanderMinSeconds
+#    Playerbot.PveGrind.WanderMaxSeconds
+#        Description: Pause between strolls for a bot with nothing worth fighting in range.
+#                     This pause is most of what a world bot "standing around" is. Each stroll
+#                     also counts toward Relocate.DryWandersBeforeMove, so change both together.
+#        Default:     4, 8 (was 12-25 before 2026-10-26)
+
+Playerbot.PveGrind.WanderMinSeconds = 4
+Playerbot.PveGrind.WanderMaxSeconds = 8
+
+#    Playerbot.Pve.FastTickMs
+#    Playerbot.Pve.SlowTickMs
+#    Playerbot.PveGrind.ScanIntervalMs
+#        Description: How often a world bot thinks. The fast tick picks targets, fights and
+#                     moves (battleground bots use 100 ms too); the slow tick starts rest and
+#                     runs housekeeping that keeps its own longer timers; the scan looks for a
+#                     new creature while the bot has nothing in hand. All re-read by
+#                     .reload config. Clamped to 50-1000, FastTick-5000 and FastTick-10000.
+#        Default:     100, 500, 1000 (were 250, 750, 2000 before 2026-10-26)
+
+Playerbot.Pve.FastTickMs = 100
+Playerbot.Pve.SlowTickMs = 500
+Playerbot.PveGrind.ScanIntervalMs = 1000
 
 #    Playerbot.PveGrind.MaxLevelAbove
 #    Playerbot.PveGrind.MaxLevelBelow
@@ -894,10 +919,12 @@ Playerbot.PveGrind.Relocate.Enable = 1
 
 #    Playerbot.PveGrind.Relocate.DryWandersBeforeMove
 #        Description: How many consecutive fruitless wander cycles (no creature found within
-#                     3x the search radius) trigger a relocation.
-#        Default:     5
+#                     3x the search radius) trigger a relocation. Counted in strolls, so it
+#                     scales with WanderMin/MaxSeconds: 12 at 4-8 s is about the minute and a
+#                     half that 5 was at the old 12-25 s.
+#        Default:     12
 
-Playerbot.PveGrind.Relocate.DryWandersBeforeMove = 5
+Playerbot.PveGrind.Relocate.DryWandersBeforeMove = 12
 
 #    Playerbot.Pve.Quests.Enable also covers gameobject objectives: bots walk to and use
 #    quest goobers (RequiredNpcOrGo credit) and loot quest chests within 120 yards of their

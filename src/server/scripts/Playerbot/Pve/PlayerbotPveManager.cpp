@@ -121,9 +121,9 @@ namespace
     // The same free eat/drink pair the battleground preparation logic uses.
     constexpr uint32 SPELL_HUNTER_FEIGN_DEATH = 5384;
     constexpr uint32 kPveHunterAutoShotSpellId = 75;
-    // Consecutive ticks a live victim may fail to resolve before the bot gives up
-    // on it. A knockback or a stun can flicker one for a tick or two.
-    constexpr uint32 PveTargetResolveGrace = 3;
+    // How long a live victim may fail to resolve before the bot gives up on it.
+    // A knockback or a stun can flicker one for a tick or two.
+    constexpr uint32 PveTargetResolveGraceMs = 750;
     constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_EAT = 29073;
     constexpr uint32 SPELL_PVE_OUT_OF_COMBAT_DRINK = 22734;
 
@@ -218,9 +218,6 @@ namespace
 
         return nullptr;
     }
-    constexpr std::chrono::milliseconds PveFastTickInterval(250);
-    constexpr std::chrono::milliseconds PveSlowTickInterval(750);
-    constexpr std::chrono::seconds PveGrindScanInterval(2);
     constexpr uint32 PvePendingSummonTimeoutMs = 90 * 1000;
     constexpr float PveCompanionTeleportCatchupDistance = 150.0f;
     constexpr float PveRestBreakFollowDistance = 40.0f;
@@ -248,6 +245,15 @@ namespace
     constexpr float PveHeldCreatureLeashFactor = 2.0f;
 
     playerbot::PveConfig g_PveConfig;
+
+    // Fast ticks in a stretch of real time. A hold counted in ticks would get
+    // shorter every time the tick rate goes up; written in milliseconds and
+    // converted here, it keeps its length.
+    uint32 FastTicksFor(uint32 milliseconds)
+    {
+        uint32 const tickMs = std::max<uint32>(1, g_PveConfig.fastTickMs);
+        return std::max<uint32>(1, (milliseconds + tickMs - 1) / tickMs);
+    }
 
     enum class PveErrandKind : uint8
     {
@@ -16190,14 +16196,17 @@ namespace
         // movement throttle then "preserves" the dead chase forever
         // (motion=chase, chase_move=no, moving=no). If an engaged bot with a far
         // target holds the same position for ~1.5s, rebuild its movement.
+        // "The same position" is under 2 yards a second, scaled to the tick so a
+        // faster tick does not read a slow walk as standing still.
         float const victimDistance = bot->GetDistance(victim);
         if (victimDistance > 35.0f && !bot->HasUnitState(UNIT_STATE_CASTING))
         {
             float const deltaX = bot->GetPositionX() - state.lastEngagedX;
             float const deltaY = bot->GetPositionY() - state.lastEngagedY;
-            if (deltaX * deltaX + deltaY * deltaY < 0.25f)
+            float const stillYards = 2.0f * float(g_PveConfig.fastTickMs) / 1000.0f;
+            if (deltaX * deltaX + deltaY * deltaY < stillYards * stillYards)
             {
-                if (++state.engagedStallTicks >= 6 && !bot->isMoving())
+                if (++state.engagedStallTicks >= FastTicksFor(1500) && !bot->isMoving())
                 {
                     state.engagedStallTicks = 0;
 
@@ -18095,7 +18104,7 @@ namespace
                 // it was already winning and went and pulled something else -
                 // which is exactly what a knockdown looked like in game. Only a
                 // target that stays unresolvable is really gone.
-                if (++state.targetResolveMisses < PveTargetResolveGrace)
+                if (++state.targetResolveMisses < FastTicksFor(PveTargetResolveGraceMs))
                     return;
 
                 MarkRecentBadTarget(state, previousTargetGuid);
@@ -18265,7 +18274,7 @@ namespace
                 PveTimePoint const now = PveClock::now();
                 if (!target && now >= state.nextGrindScanAt)
                 {
-                    state.nextGrindScanAt = now + PveGrindScanInterval;
+                    state.nextGrindScanAt = now + std::chrono::milliseconds(cfg.grindScanMs);
                     // A skinner that can take a devilsaur looks for one first.
                     target = PickDevilsaurHuntTarget(bot, state, cfg);
                     if (!target)
@@ -18422,7 +18431,10 @@ namespace
             PveTimePoint const now = PveClock::now();
             if (now >= state.nextWanderAt)
             {
-                state.nextWanderAt = now + std::chrono::seconds(urand(12, 25));
+                // This pause is most of what "standing around" is: nothing in
+                // range, waiting for the next stroll.
+                state.nextWanderAt = now + std::chrono::seconds(
+                    urand(cfg.grindWanderMinSeconds, cfg.grindWanderMaxSeconds));
                 // A freshly logged-in player's MotionMaster is EMPTY and reports
                 // MAX_MOTION_TYPE, not IDLE - treating only IDLE as "free to
                 // wander" left spawned bots standing forever.
@@ -19420,6 +19432,15 @@ namespace playerbot
             sConfigMgr->GetIntDefault("Playerbot.Pve.BuffScrolls.IntervalSeconds", 60), 5, 3600));
         g_PveConfig.buffScrollShareYards = std::clamp(
             sConfigMgr->GetFloatDefault("Playerbot.Pve.BuffScrolls.ShareYards", 20.0f), 0.0f, 30.0f);
+        g_PveConfig.fastTickMs = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.FastTickMs", 100), 50, 1000));
+        g_PveConfig.slowTickMs = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Pve.SlowTickMs", 500),
+            int32(g_PveConfig.fastTickMs), 5000));
+        g_PveConfig.grindScanMs = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.ScanIntervalMs", 1000),
+            int32(g_PveConfig.fastTickMs), 10000));
+        g_PveConfig.grindWanderMinSeconds = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.PveGrind.WanderMinSeconds", 4), 1, 120));
+        g_PveConfig.grindWanderMaxSeconds = uint32(std::clamp(
+            sConfigMgr->GetIntDefault("Playerbot.PveGrind.WanderMaxSeconds", 8), int32(g_PveConfig.grindWanderMinSeconds), 300));
         g_PveConfig.grindWanderRadius = sConfigMgr->GetFloatDefault("Playerbot.PveGrind.WanderRadius", 40.0f);
         g_PveConfig.grindMaxLevelAbove = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelAbove", 3), 0, 10));
         g_PveConfig.grindMaxLevelBelow = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.PveGrind.MaxLevelBelow", 5), 0, 80));
@@ -19506,7 +19527,7 @@ namespace playerbot
             sConfigMgr->GetIntDefault("Playerbot.Pve.Professions.SmeltPercent", 50), 0, 100));
         g_PveConfig.relocateEnabled = sConfigMgr->GetBoolDefault("Playerbot.PveGrind.Relocate.Enable", true);
         g_PveConfig.relocateDryWanders = uint32(std::clamp(
-            sConfigMgr->GetIntDefault("Playerbot.PveGrind.Relocate.DryWandersBeforeMove", 5), 2, 100));
+            sConfigMgr->GetIntDefault("Playerbot.PveGrind.Relocate.DryWandersBeforeMove", 12), 2, 100));
         g_PveConfig.stuckRecoveryEnabled =
             sConfigMgr->GetBoolDefault("Playerbot.PveGrind.StuckRecovery.Enable", true);
         g_PveConfig.stuckRecoveryDistanceYards = std::clamp(
@@ -21269,14 +21290,14 @@ namespace playerbot
         {
             // Stagger first evaluation by GUID so a freshly loaded population does
             // not decide on the same world tick.
-            state.nextFastTick = now + std::chrono::milliseconds(rawGuid % uint64(PveFastTickInterval.count()));
+            state.nextFastTick = now + std::chrono::milliseconds(rawGuid % uint64(std::max<uint32>(1, cfg.fastTickMs)));
             state.nextSlowTick = state.nextFastTick;
             return;
         }
 
         if (now >= state.nextSlowTick)
         {
-            state.nextSlowTick = now + PveSlowTickInterval;
+            state.nextSlowTick = now + std::chrono::milliseconds(cfg.slowTickMs);
             RunSlowTick(player, state, cfg);
         }
 
@@ -21288,7 +21309,7 @@ namespace playerbot
 
         if (now < state.nextFastTick)
             return;
-        state.nextFastTick = now + PveFastTickInterval;
+        state.nextFastTick = now + std::chrono::milliseconds(cfg.fastTickMs);
 
         RunFastTick(player, state, cfg);
     }

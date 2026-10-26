@@ -116,6 +116,16 @@ struct PveConfig
     bool buffScrollsEnabled = true;
     uint32 buffScrollIntervalSeconds = 60;
     float buffScrollShareYards = 20.0f;
+    // How often a world bot thinks. The fast tick picks targets, fights and
+    // moves; the slow tick starts rest and runs the housekeeping, each piece of
+    // which keeps its own longer timer on top. Both in milliseconds.
+    uint32 fastTickMs = 100;
+    uint32 slowTickMs = 500;
+    // How often a bot with nothing in hand looks for a creature to fight.
+    uint32 grindScanMs = 1000;
+    // With nothing worth fighting in range, how long a bot waits between strolls.
+    uint32 grindWanderMinSeconds = 4;
+    uint32 grindWanderMaxSeconds = 8;
     float grindWanderRadius = 40.0f;
     uint32 grindMaxLevelAbove = 3;
     uint32 grindMaxLevelBelow = 5;
@@ -146,7 +156,9 @@ struct PveConfig
     bool buffsEnabled = true;
     bool talentsEnabled = true;
     bool relocateEnabled = true;
-    uint32 relocateDryWanders = 5;
+    // Counted in strolls, so it scales with the wander pause above: 12 at 4-8 s
+    // is the minute and a half that 5 was at the old 12-25 s.
+    uint32 relocateDryWanders = 12;
     std::vector<uint32> relocateMaps = { 0, 1 };
     // Open-world safety net: an autonomous PvE bot that never gets this far
     // from one anchor during the timeout is moved to a validated grind spot
