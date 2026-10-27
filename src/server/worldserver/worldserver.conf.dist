@@ -4950,6 +4950,13 @@ Centurion.BountyBoard.GossipTextId = 900310
 #                     feuds and recovery/hunt hostility all stop, and the rest keeps working.
 #        Default:     1
 #
+#    Centurion.BountyBoard.Notices.Group.Stances.Enable
+#        Description: A notice's truce or feud covers the holder's whole party or raid, following
+#                     the group as people join and leave: friends can help with a feud whatever
+#                     their War Mode, and nobody in the party can land the first blow on a
+#                     Mok'gora challenger walking up. 0 keeps it between the holder and the bot.
+#        Default:     1
+#
 #    Centurion.BountyBoard.Notices.Dispatch.Enable
 #        Description: A bot on a notice errand far from its player may be landed at the edge of
 #                     their sight (never closer than 210 yards). 0 makes it walk the whole way.
@@ -4994,6 +5001,7 @@ Centurion.BountyBoard.Notices.Reward.Experience.Enable = 1
 Centurion.BountyBoard.Notices.Reward.Seals.Enable = 1
 Centurion.BountyBoard.Notices.Gossip.Enable = 1
 Centurion.BountyBoard.Notices.Stances.Enable = 1
+Centurion.BountyBoard.Notices.Group.Stances.Enable = 1
 Centurion.BountyBoard.Notices.Dispatch.Enable = 1
 
 Centurion.BountyBoard.Notices.MinLevel = 10
@@ -5034,6 +5042,263 @@ Centurion.BountyBoard.Notices.MokgoraQuest1 = 60011
 Centurion.BountyBoard.Notices.MokgoraQuest2 = 60014
 Centurion.BountyBoard.Notices.RecoveryQuest1 = 60012
 Centurion.BountyBoard.Notices.RecoveryQuest2 = 60015
+
+###################################################################################################
+# CENTURION NEMESIS (custom_nemesis.cpp, addon CENTURION_BountyBoard)
+#
+#    Shadow of Mordor's nemesis system on the world bots. Every key below is read on .reload
+#    config and takes effect at once on a running realm - no rebuild, no restart.
+#
+#    Centurion.Nemesis.Enable
+#        Description: The whole feature. A world bot that kills a player becomes a nemesis: a
+#                     rank, an epithet, strengths and weaknesses, and a memory of who it killed.
+#                     The character tables are created at startup.
+#        Default:     0 - (off)
+#
+#    Centurion.Nemesis.MaxRank
+#        Description: The highest rank a nemesis can reach.
+#        Default:     5
+#
+#    Centurion.Nemesis.Promote.MaxLevelGap
+#        Description: Killing a player this many levels or more below it does not count. Also
+#                     how far above its slayer a revenant may be and still come for them.
+#        Default:     10
+#
+#    Centurion.Nemesis.Promote.FightSeconds
+#        Description: A nemesis takes at most one rank per this many seconds, so wiping a party
+#                     is one rank, not five. 0 lets every kill count.
+#        Default:     120
+#
+#    Centurion.Nemesis.Promote.SameVictimMinutes
+#        Description: The same player cannot give the same nemesis another rank within this many
+#                     minutes - nobody feeds one its ranks to farm the purse. 0 turns it off.
+#        Default:     60
+#
+#    Centurion.Nemesis.Power.Enable
+#    Centurion.Nemesis.Power.DamagePerRank
+#    Centurion.Nemesis.Power.ResistPerRank
+#        Description: Per rank, % more damage dealt to players and % less taken from them.
+#        Default:     1, 5, 5
+#
+#    Centurion.Nemesis.Scale.Enable
+#    Centurion.Nemesis.Scale.PerRank
+#    Centurion.Nemesis.Scale.Warchief
+#        Description: How much bigger a nemesis looks: per rank, and on top for a Warchief.
+#        Default:     1, 0.04, 0.06
+#
+#    Centurion.Nemesis.Traits.Enable
+#        Description: Strengths (crowd-control immunities, damage cuts, a bodyguard) and
+#                     weaknesses (a school it takes extra from, falters when hurt).
+#        Default:     1
+#
+#    Centurion.Nemesis.Intel.Enable
+#    Centurion.Nemesis.Intel.ZoneKillChance
+#    Centurion.Nemesis.Intel.OnDeath
+#        Description: Traits are hidden until learned: a bot killed in a nemesis's zone gives up
+#                     a secret (% chance), and dying to a nemesis teaches one of its strengths.
+#        Default:     1, 100, 1
+#
+#    Centurion.Nemesis.Group.Credit
+#    Centurion.Nemesis.Group.CreditYards
+#        Description: A player's party or raid standing within this many yards shares a nemesis
+#                     kill like a quest kill: each gets the full purse and seals, and the vengeance.
+#        Default:     1, 100
+#
+#    Centurion.Nemesis.Group.Intel
+#        Description: What one player learns of a nemesis's traits, their party standing within
+#                     Group.CreditYards learns too.
+#        Default:     1
+#
+#    Centurion.Nemesis.Taunts.Enable
+#    Centurion.Nemesis.Taunts.CooldownMinutes
+#        Description: A nemesis yells at the players it fights - by name if it killed them before.
+#        Default:     1, 10
+#
+#    Centurion.Nemesis.Return.Enable
+#        Description: The Revenant. A slain nemesis may come back - hours later, at a random
+#                     moment while its slayer is out in the open world - and hunt that one player
+#                     for a while: whispers as it closes in, a yell when it arrives. Kill it again
+#                     and it is laid to rest for good, for a bigger purse; die to it and it climbs.
+#        Default:     1
+#
+#    Centurion.Nemesis.Return.Chance
+#    Centurion.Nemesis.Return.ChancePerRank
+#    Centurion.Nemesis.Return.ChanceLossPerScar
+#        Description: % chance a slain nemesis will come back: Chance + ChancePerRank x its rank
+#                     - ChanceLossPerScar x the times it already came back (at most 95). One that
+#                     is killed while it hunts is laid to rest and never comes back.
+#        Default:     35, 5, 15
+#
+#    Centurion.Nemesis.Return.MinHours
+#    Centurion.Nemesis.Return.MaxHours
+#        Description: The earliest it can come back: a random time between these after it died.
+#        Default:     1, 8
+#
+#    Centurion.Nemesis.Return.StrikeChance
+#        Description: From then on, % chance every 5 seconds that it strikes while its slayer is
+#                     in the open world - not resting at an inn or in a city, not flying, not in a
+#                     sanctuary or a duel, and not in a raid (see StrikeInRaid).
+#        Default:     5
+#
+#    Centurion.Nemesis.Return.GiveUpDays
+#        Description: If its slayer never comes out where it can reach them for this long, it
+#                     stays down.
+#        Default:     7
+#
+#    Centurion.Nemesis.Return.VendettaMinutes
+#        Description: How long the hunt lasts before it loses the trail.
+#        Default:     20
+#
+#    Centurion.Nemesis.Return.VendettaDamage
+#        Description: % more damage it deals to its slayer while hunting them.
+#        Default:     10
+#
+#    Centurion.Nemesis.Return.RevengeRanks
+#        Description: Ranks it gains for killing its slayer.
+#        Default:     2
+#
+#    Centurion.Nemesis.Return.RestRewardMultiplier
+#        Description: The purse for laying a revenant to rest is multiplied by this.
+#        Default:     2
+#
+#    Centurion.Nemesis.Return.GroupStance
+#        Description: The slayer's whole party may fight the revenant whatever their War Mode,
+#                     and it them. 0 keeps it between the slayer and the revenant alone.
+#        Default:     1
+#
+#    Centurion.Nemesis.Return.Dispatch
+#        Description: A revenant far away is landed at the edge of its slayer's sight (never
+#                     closer than 210 yards). 0 makes it walk the whole way.
+#        Default:     1
+#
+#    Centurion.Nemesis.Return.StrikeInRaid
+#        Description: 1 lets a revenant come for a player who is in a raid group.
+#        Default:     0
+#
+#    Centurion.Nemesis.Return.PowerPerAlly
+#    Centurion.Nemesis.Return.MaxAllies
+#    Centurion.Nemesis.Return.AllyYards
+#        Description: For each friend standing within AllyYards of its slayer (up to MaxAllies),
+#                     the revenant deals % more and takes % less damage from all of them.
+#        Default:     10, 4, 40
+#
+#    Centurion.Nemesis.Return.VisualSpell
+#    Centurion.Nemesis.Return.Sound.Rise
+#    Centurion.Nemesis.Return.Sound.Arrive
+#        Description: Its ghostly look while it hunts (a spell id, 0 for none), the sting only
+#                     the slayer hears when it rises, and the sound around it when it arrives.
+#        Default:     35847, 5174, 4795
+#
+#    Centurion.Nemesis.Struggles.Enable
+#    Centurion.Nemesis.Struggles.CheckMinutes
+#    Centurion.Nemesis.Struggles.Chance
+#    Centurion.Nemesis.Struggles.LeadMinutes
+#        Description: Power struggles: every CheckMinutes, % chance two nemeses in one zone go
+#                     for each other's standing; it is settled LeadMinutes later, unless a player
+#                     settles it first by killing one of them.
+#        Default:     1, 60, 25, 30
+#
+#    Centurion.Nemesis.Warchief.Enable
+#    Centurion.Nemesis.Warchief.MinRank
+#    Centurion.Nemesis.Warchief.Guards
+#    Centurion.Nemesis.Warchief.PowerBonus
+#        Description: The top nemesis online in each zone, at MinRank or higher, is its Warchief:
+#                     Guards bodyguards and PowerBonus % more power.
+#        Default:     1, 3, 2, 5
+#
+#    Centurion.Nemesis.Guards.Enable
+#        Description: Bodyguards at all - a Warchief's, and the Bodyguard strength's.
+#        Default:     1
+#
+#    Centurion.Nemesis.Announce.Yell
+#    Centurion.Nemesis.Announce.Whisper
+#        Description: Nemeses yell (rising, taunts, last words, a revenant's arrival); players get
+#                     whispers and system lines (became your nemesis, avenged, a revenant's words).
+#        Default:     1, 1
+#
+#    Centurion.Nemesis.Board.Enable
+#    Centurion.Nemesis.Gossip.Enable
+#        Description: The bounty board shows nemeses, the hierarchy and the rumours (addon), and
+#                     the board's own menu asks "Who are the nemeses around here?" (no addon).
+#        Default:     1, 1
+#
+#    Centurion.Nemesis.Rewards.Enable
+#    Centurion.Nemesis.Rewards.MoneyPerRank
+#    Centurion.Nemesis.Rewards.SealsPerRank
+#    Centurion.Nemesis.Rewards.WarchiefMultiplier
+#        Description: Killing a nemesis pays copper and Hunter's Ledger seals per rank, times the
+#                     multiplier for a Warchief. Nothing for one that is gray to you.
+#        Default:     1, 5000, 1, 2
+#
+#    Centurion.Nemesis.Vengeance.Enable
+#        Description: Everyone a nemesis killed is told when it dies, and by whom.
+#        Default:     1
+#
+#    Centurion.Nemesis.FallenHistoryDays
+#        Description: How long a slain nemesis stays in the board's history.
+#        Default:     7
+#
+
+Centurion.Nemesis.Enable = 0
+Centurion.Nemesis.MaxRank = 5
+Centurion.Nemesis.Promote.MaxLevelGap = 10
+Centurion.Nemesis.Promote.FightSeconds = 120
+Centurion.Nemesis.Promote.SameVictimMinutes = 60
+Centurion.Nemesis.Power.Enable = 1
+Centurion.Nemesis.Power.DamagePerRank = 5
+Centurion.Nemesis.Power.ResistPerRank = 5
+Centurion.Nemesis.Scale.Enable = 1
+Centurion.Nemesis.Scale.PerRank = 0.04
+Centurion.Nemesis.Scale.Warchief = 0.06
+Centurion.Nemesis.Traits.Enable = 1
+Centurion.Nemesis.Intel.Enable = 1
+Centurion.Nemesis.Intel.ZoneKillChance = 100
+Centurion.Nemesis.Intel.OnDeath = 1
+Centurion.Nemesis.Group.Credit = 1
+Centurion.Nemesis.Group.CreditYards = 100
+Centurion.Nemesis.Group.Intel = 1
+Centurion.Nemesis.Taunts.Enable = 1
+Centurion.Nemesis.Taunts.CooldownMinutes = 10
+Centurion.Nemesis.Return.Enable = 1
+Centurion.Nemesis.Return.Chance = 35
+Centurion.Nemesis.Return.ChancePerRank = 5
+Centurion.Nemesis.Return.ChanceLossPerScar = 15
+Centurion.Nemesis.Return.MinHours = 1
+Centurion.Nemesis.Return.MaxHours = 8
+Centurion.Nemesis.Return.StrikeChance = 5
+Centurion.Nemesis.Return.GiveUpDays = 7
+Centurion.Nemesis.Return.VendettaMinutes = 20
+Centurion.Nemesis.Return.VendettaDamage = 10
+Centurion.Nemesis.Return.RevengeRanks = 2
+Centurion.Nemesis.Return.RestRewardMultiplier = 2
+Centurion.Nemesis.Return.GroupStance = 1
+Centurion.Nemesis.Return.Dispatch = 1
+Centurion.Nemesis.Return.StrikeInRaid = 0
+Centurion.Nemesis.Return.PowerPerAlly = 10
+Centurion.Nemesis.Return.MaxAllies = 4
+Centurion.Nemesis.Return.AllyYards = 40
+Centurion.Nemesis.Return.VisualSpell = 35847
+Centurion.Nemesis.Return.Sound.Rise = 5174
+Centurion.Nemesis.Return.Sound.Arrive = 4795
+Centurion.Nemesis.Struggles.Enable = 1
+Centurion.Nemesis.Struggles.CheckMinutes = 60
+Centurion.Nemesis.Struggles.Chance = 25
+Centurion.Nemesis.Struggles.LeadMinutes = 30
+Centurion.Nemesis.Warchief.Enable = 1
+Centurion.Nemesis.Warchief.MinRank = 3
+Centurion.Nemesis.Warchief.Guards = 2
+Centurion.Nemesis.Warchief.PowerBonus = 5
+Centurion.Nemesis.Guards.Enable = 1
+Centurion.Nemesis.Announce.Yell = 1
+Centurion.Nemesis.Announce.Whisper = 1
+Centurion.Nemesis.Board.Enable = 1
+Centurion.Nemesis.Gossip.Enable = 1
+Centurion.Nemesis.Rewards.Enable = 1
+Centurion.Nemesis.Rewards.MoneyPerRank = 5000
+Centurion.Nemesis.Rewards.SealsPerRank = 1
+Centurion.Nemesis.Rewards.WarchiefMultiplier = 2
+Centurion.Nemesis.Vengeance.Enable = 1
+Centurion.Nemesis.FallenHistoryDays = 7
 
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002

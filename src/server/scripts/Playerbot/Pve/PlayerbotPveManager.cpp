@@ -19566,6 +19566,7 @@ namespace
         ObjectGuid Target;
         bool Arrived = false;
         PveTimePoint NextDispatchAt{};
+        playerbot::PveManager::NoticeDispatch Dispatch = playerbot::PveManager::NoticeDispatch::AsSwitched;
     };
 
     std::mutex g_NoticeErrandLock;
@@ -19586,6 +19587,20 @@ namespace
     // Further than this, or on another map, and the bot is dispatched rather
     // than walked - through the same 210 yard landing every hunter uses.
     constexpr float kNoticeWalkYards = 300.0f;
+
+    // Whether this errand may be landed near its person rather than walked.
+    bool MayDispatch(NoticeErrand const& errand)
+    {
+        switch (errand.Dispatch)
+        {
+            case playerbot::PveManager::NoticeDispatch::Always:
+                return true;
+            case playerbot::PveManager::NoticeDispatch::Never:
+                return false;
+            default:
+                return g_NoticeDispatchAllowed.load(std::memory_order_relaxed);
+        }
+    }
 
     bool FindNoticeErrand(uint64 rawGuid, NoticeErrand& out)
     {
@@ -19613,14 +19628,11 @@ namespace
     // bot in a fight, a watcher in the way) and this simply asks again.
     void RequestNoticeDispatch(uint64 botRaw, ObjectGuid target)
     {
-        if (!g_NoticeDispatchAllowed.load(std::memory_order_relaxed))
-            return;
-
         PveTimePoint const now = PveClock::now();
         {
             std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
             auto const itr = g_NoticeErrands.find(botRaw);
-            if (itr == g_NoticeErrands.end() || now < itr->second.NextDispatchAt)
+            if (itr == g_NoticeErrands.end() || !MayDispatch(itr->second) || now < itr->second.NextDispatchAt)
                 return;
             itr->second.NextDispatchAt = now + std::chrono::seconds(20);
         }
@@ -19738,7 +19750,7 @@ namespace
                 if (errand.Arrived)
                     SetNoticeErrandArrived(rawGuid, false);
 
-                if (distance > kNoticeWalkYards && g_NoticeDispatchAllowed.load(std::memory_order_relaxed))
+                if (distance > kNoticeWalkYards && MayDispatch(errand))
                 {
                     RequestNoticeDispatch(rawGuid, errand.Target);
                     return true;
@@ -19798,7 +19810,7 @@ namespace
                 if (state.engaged)
                     DisengagePveCombat(bot, state);
 
-                if (distance > kNoticeWalkYards && g_NoticeDispatchAllowed.load(std::memory_order_relaxed))
+                if (distance > kNoticeWalkYards && MayDispatch(errand))
                 {
                     RequestNoticeDispatch(rawGuid, errand.Target);
                     return true;
@@ -19816,7 +19828,7 @@ namespace
 
 namespace playerbot
 {
-    void PveManager::SetNoticeErrand(ObjectGuid bot, NoticeErrandKind kind, ObjectGuid target)
+    void PveManager::SetNoticeErrand(ObjectGuid bot, NoticeErrandKind kind, ObjectGuid target, NoticeDispatch dispatch)
     {
         if (bot.IsEmpty() || target.IsEmpty())
             return;
@@ -19830,6 +19842,7 @@ namespace playerbot
             errand.Arrived = false;
             errand.NextDispatchAt = {};
         }
+        errand.Dispatch = dispatch;
         g_AnyNoticeErrand.store(true, std::memory_order_relaxed);
     }
 
@@ -20186,7 +20199,9 @@ namespace playerbot
         // first blow while a Mok'gora challenger walks up; a feud is consent the
         // other way round - a refused Mok'gora, or a person come for the bot
         // carrying their gear - whatever War Mode or the level rule below say.
-        switch (PairStance::Get(bot->GetGUID(), human->GetGUID()))
+        // Between, not Get: a stance shared with the person's party holds for
+        // every one of them.
+        switch (PairStance::Between(bot, human))
         {
             case PairStance::Stance::Truce:
                 return false;

@@ -21,8 +21,6 @@
 #include "Define.h"
 #include "ObjectGuid.h"
 
-#include <vector>
-
 class WorldObject;
 
 // One bot and one person, set apart from the realm's ordinary rules.
@@ -41,6 +39,13 @@ class WorldObject;
 //          Mok'gora, or somebody going after the bot that walked off with
 //          their gear. Sanctuaries still hold.
 //
+// A stance can also be SHARED: it then holds between the bot and everybody in
+// the person's party or raid as well, following the group as people join and
+// leave. Friends can help with a feud, and a truce covers the whole party, so
+// nobody in it lands the first blow on a challenger walking up. A pair's own
+// stance outranks the one it gets through its group, and where two shared
+// stances meet on one group a feud outranks a truce.
+//
 // The scripts library decides who gets a stance and when it ends; this library
 // owns the rule because IsValidAttackTarget, GetReactionTo and the per-viewer
 // faction render all live here and cannot see scripts/.
@@ -58,16 +63,21 @@ namespace PairStance
 
     // Order of the two does not matter. Setting None clears the pair.
     TC_GAME_API void Set(ObjectGuid a, ObjectGuid b, Stance stance);
+    // Set, shared with everybody in `person`'s party or raid (see above).
+    // Setting a pair again with Set takes the sharing back off.
+    TC_GAME_API void SetShared(ObjectGuid bot, ObjectGuid person, Stance stance);
     TC_GAME_API void Clear(ObjectGuid a, ObjectGuid b);
 
     // Every stance this character is part of.
     TC_GAME_API void ClearAllFor(ObjectGuid who);
 
+    // The pair's own stance only - nothing it gets through a group.
     TC_GAME_API Stance Get(ObjectGuid a, ObjectGuid b);
 
     // Between the players behind two world objects - a pet, a totem or a trap
-    // answers for its owner. Always None inside a battleground or an arena,
-    // where the match decides who is on whose side.
+    // answers for its owner - their own stance first, then one shared with the
+    // group either of them is in. Always None inside a battleground or an
+    // arena, where the match decides who is on whose side.
     TC_GAME_API Stance Between(WorldObject const* a, WorldObject const* b);
 
     // One relaxed atomic load. Every caller on a hot path asks this first, so a
@@ -80,12 +90,14 @@ namespace PairStance
     // so switching it back on restores them. Both ways re-colour every pair.
     TC_GAME_API void SetEnabled(bool enabled);
 
-    // The characters whose clients are showing the wrong colour since the last
-    // call: both halves of every pair that changed. The caller re-sends their
-    // faction views (Unit::BuildValuesUpdate computes them per viewer, and
-    // nothing in the core dirties that field on its own). Returns false when
-    // there is nothing to do.
-    TC_GAME_API bool TakeStaleViews(std::vector<ObjectGuid>& out);
+    // World thread, maps idle - call it from a world tick; any number of
+    // callers is fine. Follows every shared stance onto its group as the group
+    // stands now (re-read once a second, since nobody tells this file when a
+    // party changes), then re-sends the faction view of everybody whose colour
+    // changed since the last call - Unit::BuildValuesUpdate computes it per
+    // viewer, and nothing in the core dirties that field on its own - and drops
+    // any fight the change made illegal. Cheap when nothing changed.
+    TC_GAME_API void Update();
 }
 
 #endif // TRINITYCORE_PAIR_STANCE_H

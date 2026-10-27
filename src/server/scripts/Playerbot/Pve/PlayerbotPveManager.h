@@ -410,7 +410,17 @@ public:
         Escort   = 2,   // stay beside another bot and join its fights (a hunted bot's friends)
         Pursue   = 3,   // go after a person it is in a feud with and fight them
     };
-    static void SetNoticeErrand(ObjectGuid bot, NoticeErrandKind kind, ObjectGuid target);
+    // Whether this errand's bot may be landed near its person (the 210 yard
+    // dispatch) when it is far away: as the notices' switch says, or always or
+    // never whatever it says - for a feature with a switch of its own.
+    enum class NoticeDispatch : uint8
+    {
+        AsSwitched = 0,
+        Always     = 1,
+        Never      = 2,
+    };
+    static void SetNoticeErrand(ObjectGuid bot, NoticeErrandKind kind, ObjectGuid target,
+        NoticeDispatch dispatch = NoticeDispatch::AsSwitched);
     static void ClearNoticeErrand(ObjectGuid bot);
     static bool HasNoticeErrand(ObjectGuid bot);
     // An Approach errand that is standing in challenge range of its person.

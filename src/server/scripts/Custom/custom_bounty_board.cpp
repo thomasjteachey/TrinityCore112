@@ -69,6 +69,7 @@
 #include "custom_barracks_hardcore.h"
 #include "custom_bounty_board.h"
 #include "custom_bounty_notices.h"
+#include "custom_nemesis.h"
 
 #include "Bag.h"
 #include "Chat.h"
@@ -424,6 +425,7 @@ namespace
         // gear off their body, and what their Ledger rank reads. Before the
         // end marker, so the addon has it when it draws.
         BountyNotices::SendBoardExtras(viewer, zoneId, bots);
+        Nemesis::SendBoardRows(viewer, zoneId, bots);
 
         SendTagged(viewer, "BBRE", head + std::to_string(bots.size()));
     }
@@ -468,6 +470,7 @@ namespace
         // Whose body each piece came off, and which notices this reader may
         // take on the bot.
         BountyNotices::SendPosterExtras(viewer, bot);
+        Nemesis::SendPosterLine(viewer, bot);
 
         SendTagged(viewer, "BBPE", head + "1");
     }
@@ -525,7 +528,10 @@ namespace
 
         std::string_view const verb = argument.substr(0, colon);
 
-        // Taking, tearing up and paying for notices (custom_bounty_notices.cpp).
+        // The nemesis hierarchy (custom_nemesis.cpp), then taking, tearing up
+        // and paying for notices (custom_bounty_notices.cpp).
+        if (Nemesis::HandleRequest(player, verb, argument.substr(colon + 1)))
+            return;
         if (BountyNotices::HandleRequest(player, verb, argument.substr(colon + 1)))
             return;
 
@@ -538,6 +544,7 @@ namespace
             SendZoneList(player);
             SendNotices(player, *id);
             BountyNotices::SendLedgerAndNotices(player);
+            Nemesis::SendBoardState(player);
         }
         else if (verb == "ZONE")
             SendNotices(player, *id);
@@ -773,6 +780,7 @@ public:
                 SendTagged(player, "BBOP", std::to_string(me->GetZoneId()));
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Read the notices.", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
                 BountyNotices::AddGossipOptions(player);
+                Nemesis::AddGossipOptions(player);
             }
             SendGossipMenuFor(player, s_gossipTextId, me->GetGUID());
             return true;
@@ -787,6 +795,8 @@ public:
 
             // The notices' own options: they close the menu or open the next.
             if (s_enabled && BountyNotices::OnGossipSelect(player, me, sender, action))
+                return true;
+            if (s_enabled && Nemesis::OnGossipSelect(player, me, sender, action))
                 return true;
 
             CloseGossipMenuFor(player);

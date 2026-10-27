@@ -57,6 +57,7 @@
 //                     BBMS:<1 ok, 0 refused>|<text>
 
 #include "custom_bounty_notices.h"
+#include "custom_nemesis.h"
 
 #include "custom_barracks_hardcore.h"
 #include "custom_bounty.h"
@@ -202,6 +203,7 @@ namespace
         bool RewardSeals = true;
         bool Gossip = true;             // the no-addon board menu
         bool Stances = true;            // the truce/feud rule in the core (PairStance)
+        bool GroupStances = true;       // ...covering the holder's whole party or raid
         bool Dispatch = true;           // a bot on a notice errand may be landed near you
     };
     Switches s_on;
@@ -296,6 +298,7 @@ namespace
         s_on.RewardSeals = on("Reward.Seals.Enable");
         s_on.Gossip = on("Gossip.Enable");
         s_on.Stances = on("Stances.Enable");
+        s_on.GroupStances = on("Group.Stances.Enable");
         s_on.Dispatch = on("Dispatch.Enable");
     }
 
@@ -719,6 +722,17 @@ namespace
         return false;
     }
 
+    // A notice's stance, shared with the holder's party or raid when the switch
+    // says so: friends can help with a feud whatever their War Mode, and nobody
+    // in the party lands the first blow on a challenger walking up in truce.
+    void PutStance(ObjectGuid bot, ObjectGuid human, PairStance::Stance stance)
+    {
+        if (s_on.GroupStances)
+            PairStance::SetShared(bot, human, stance);
+        else
+            PairStance::Set(bot, human, stance);
+    }
+
     // Make the bots match the switches for one live notice: whatever it should
     // have in force right now - the quarry kept in the world, a Mok'gora
     // challenger's truce and walk, a recovery's feud, a hunted bot's guards -
@@ -758,7 +772,7 @@ namespace
         {
             case Kind::Mokgora:
                 if (on && s_on.MokgoraTruce && !notice.Dueling)
-                    PairStance::Set(notice.Quarry, notice.Holder, PairStance::Stance::Truce);
+                    PutStance(notice.Quarry, notice.Holder, PairStance::Stance::Truce);
                 else
                     PairStance::Clear(notice.Quarry, notice.Holder);
 
@@ -770,7 +784,7 @@ namespace
                 break;
             case Kind::Recovery:
                 if (on && s_on.RecoveryFeud)
-                    PairStance::Set(notice.Quarry, notice.Holder, PairStance::Stance::Feud);
+                    PutStance(notice.Quarry, notice.Holder, PairStance::Stance::Feud);
                 else
                     PairStance::Clear(notice.Quarry, notice.Holder);
                 break;
@@ -779,7 +793,7 @@ namespace
                 // not land a blow on what they took the notice for, so the pair
                 // feuds. With War Mode required there is nothing to add.
                 if (on && !s_on.HuntRequireWarMode)
-                    PairStance::Set(notice.Quarry, notice.Holder, PairStance::Stance::Feud);
+                    PutStance(notice.Quarry, notice.Holder, PairStance::Stance::Feud);
                 else
                     PairStance::Clear(notice.Quarry, notice.Holder);
                 break;
@@ -835,7 +849,7 @@ namespace
         feud.Until = GameTime::GetGameTime() + time_t(s_feudMinutes) * MINUTE;
         g_feuds.push_back(feud);
 
-        PairStance::Set(bot, human, PairStance::Stance::Feud);
+        PutStance(bot, human, PairStance::Stance::Feud);
         playerbot::PveManager::SetNoticeHeld(bot, true);
         playerbot::PveManager::SetNoticeErrand(bot, playerbot::PveManager::NoticeErrandKind::Pursue, human);
     }
@@ -872,6 +886,10 @@ namespace
         if (!FeudsOn())
             while (!g_feuds.empty())
                 EndFeudLocked(g_feuds.begin());
+
+        // Shared with the group or not, as the switch now says.
+        for (Feud const& feud : g_feuds)
+            PutStance(feud.Bot, feud.Human, PairStance::Stance::Feud);
 
         for (Notice& notice : g_notices)
             ReconcileLocked(notice);
@@ -1100,6 +1118,11 @@ namespace
                 break;
         }
 
+        // Back from the grave for whoever put it there: no notice names it
+        // until that is settled - it has an errand and a stance of its own.
+        if (Nemesis::IsHunting(bot->GetGUID()))
+            return "grave";
+
         uint8 const rank = RankOf(player->GetGUID());
         {
             std::lock_guard<std::mutex> guard(g_lock);
@@ -1160,6 +1183,7 @@ namespace
         if (code == "level") return "Not a fair fight. Pick someone nearer your own level.";
         if (code == "full")  return "You carry as many notices as the board will trust you with. Finish one first.";
         if (code == "taken") return "Somebody else's challenge is already on its way to them.";
+        if (code == "grave") return "That one has crawled out of a grave for somebody. The board will not post it until that is settled.";
         if (code == "none")  return "They carry nothing of yours.";
         if (code == "quest") return "Your quest log is full.";
         return "The board will not give you that notice.";
@@ -1598,29 +1622,11 @@ namespace
     // works it out per viewer, and nothing in the core dirties the field when a
     // stance changes, so a client keeps the old colour until told. World
     // thread, maps idle.
+    // The core follows shared stances onto their groups and re-sends whatever
+    // colour changed (PairStance::Update). World thread.
     void RefreshStaleViews()
     {
-        std::vector<ObjectGuid> stale;
-        if (!PairStance::TakeStaleViews(stale))
-            return;
-
-        for (ObjectGuid guid : stale)
-        {
-            Player* player = ObjectAccessor::FindPlayer(guid);
-            if (!player || !player->IsInWorld())
-                continue;
-
-            player->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
-            player->ForceValuesUpdateAtIndex(UNIT_FIELD_BYTES_2);
-            for (Unit* controlled : player->m_Controlled)
-            {
-                controlled->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
-                controlled->ForceValuesUpdateAtIndex(UNIT_FIELD_BYTES_2);
-            }
-
-            // Nothing re-checks a fight already under way.
-            player->ValidateAttackersAndOwnTarget();
-        }
+        PairStance::Update();
     }
 
     // A quarry is down. Whoever holds a hunt or recovery notice on it and had a
@@ -2185,6 +2191,22 @@ namespace BountyNotices
             SendNoticeList(player);
     }
 
+    bool AddSeals(Player* player, uint32 seals)
+    {
+        if (!s_enabled || !s_tablesReady || !player || !seals)
+            return false;
+
+        Ledger after;
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            Ledger& ledger = g_ledgers[player->GetGUID().GetRawValue()];
+            ledger.Seals += seals;
+            after = ledger;
+        }
+        SaveLedger(player->GetGUID(), after);
+        return true;
+    }
+
     void AddGossipOptions(Player* player)
     {
         if (!s_enabled || !s_on.Gossip || !s_tablesReady || !player)
@@ -2562,7 +2584,7 @@ public:
                     notice.Dueling = false;
                     notice.Challenged = false;
                     notice.NextChallengeTryAt = GameTime::GetGameTime() + 30;
-                    PairStance::Set(notice.Quarry, notice.Holder, PairStance::Stance::Truce);
+                    PutStance(notice.Quarry, notice.Holder, PairStance::Stance::Truce);
                     playerbot::PveManager::SetNoticeErrand(notice.Quarry,
                         playerbot::PveManager::NoticeErrandKind::Approach, notice.Holder);
                 }

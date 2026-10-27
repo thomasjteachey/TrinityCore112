@@ -80,6 +80,10 @@ namespace BountyNotices
     // board opens, so touching a board is the turn-in.
     void OnBoardTouched(Player* player, GameObject* board);
 
+    // Seals paid for something other than a notice - a nemesis slain. False
+    // when the ledger is not there to hold them. With the player in hand.
+    bool AddSeals(Player* player, uint32 seals);
+
     // The gossip fallback for a client without the addon.
     void AddGossipOptions(Player* player);
     // World thread (CMSG_GOSSIP_SELECT_OPTION). True when it was ours.
