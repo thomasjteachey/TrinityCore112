@@ -754,6 +754,29 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             {
                 TC_LOG_WARN("entities.player.character", "Account: {} (IP: {}) Found {} pre-existing rows in character_skills for {} {}; deleting them before creation (likely leftover from a prior failed custom copy).", GetAccountId(), GetRemoteAddress(), leakedSkillRows, newChar->GetName(), newChar->GetGUID().ToString());
             }
+
+            // The same for character_spell. Bot clones draw their guids from the
+            // generator new characters use, and it restarts at MAX(characters.guid)
+            // + 1, so a new character can be handed a guid a clone already wrote
+            // spells under - which it would then load as its own. If a real
+            // character held this guid, the characters insert below would fail
+            // and roll this delete back with it.
+            uint64 leakedSpellRows = 0;
+            if (QueryResult leakedSpellsResult = CharacterDatabase.PQuery("SELECT COUNT(*) FROM character_spell WHERE guid = {}", newChar->GetGUID().GetCounter()))
+                leakedSpellRows = (*leakedSpellsResult)[0].GetUInt64();
+
+            if (CharacterDatabasePreparedStatement* leakedSpellsCleanup = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_SPELL))
+            {
+                leakedSpellsCleanup->setUInt32(0, newChar->GetGUID().GetCounter());
+                characterTransaction->Append(leakedSpellsCleanup, Trinity::StringFormat(
+                    "character_spell cleanup guid={} ({}) leftover_rows={}",
+                    newChar->GetGUID().ToString(), newChar->GetName(), leakedSpellRows));
+            }
+
+            if (leakedSpellRows)
+            {
+                TC_LOG_WARN("entities.player.character", "Account: {} (IP: {}) Found {} pre-existing rows in character_spell for {} {}; deleting them before creation (most likely a bot clone that held this guid).", GetAccountId(), GetRemoteAddress(), leakedSpellRows, newChar->GetName(), newChar->GetGUID().ToString());
+            }
             LoginDatabaseTransaction trans = LoginDatabase.BeginTransaction();
                                                                   // Player created, save it now
 

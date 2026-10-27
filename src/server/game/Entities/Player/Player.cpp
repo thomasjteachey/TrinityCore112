@@ -5007,11 +5007,19 @@ bool Player::ResetTalents(bool no_cost)
         }
     }
 
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    _SaveTalents(trans);
-    _SaveVioletHoldRunTalents(trans);
-    _SaveSpells(trans);
-    CharacterDatabase.CommitTransaction(trans);
+    // A transient clone has no character row, so SaveToDB skips it and this
+    // commit must too. Clones reach here from InitTalentForLevel when a bot is
+    // copied into a lower bracket; the write left the clone's spellbook under
+    // a guid no character held, and the next character given that guid loaded
+    // it as its own.
+    if (!GetSession() || !GetSession()->IsTransientPlayerSession())
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        _SaveTalents(trans);
+        _SaveVioletHoldRunTalents(trans);
+        _SaveSpells(trans);
+        CharacterDatabase.CommitTransaction(trans);
+    }
 
     m_usedTalentCount = 0;
     SetFreeTalentPoints(talentPointsForLevel);
