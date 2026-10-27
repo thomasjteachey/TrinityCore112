@@ -128,3 +128,29 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 UPDATE `characters` SET `account` = 0, `online` = 0 WHERE `guid` IN (13307,13308,13309,13310,13311,13312,13313,13314,13315);
+
+-- Blizzard's own addons. The worldserver bans any secure addon missing from this table.
+INSERT IGNORE INTO `addons` (`name`, `crc`) VALUES
+('Blizzard_AchievementUI',1276933997),
+('Blizzard_ArenaUI',1276933997),
+('Blizzard_AuctionUI',1276933997),
+('Blizzard_BarbershopUI',1276933997),
+('Blizzard_BattlefieldMinimap',1276933997),
+('Blizzard_BindingUI',1276933997),
+('Blizzard_Calendar',1276933997),
+('Blizzard_CombatLog',1276933997),
+('Blizzard_CombatText',1276933997),
+('Blizzard_DebugTools',1276933997),
+('Blizzard_GlyphUI',1276933997),
+('Blizzard_GMChatUI',1276933997),
+('Blizzard_GMSurveyUI',1276933997),
+('Blizzard_GuildBankUI',1276933997),
+('Blizzard_InspectUI',1276933997),
+('Blizzard_ItemSocketingUI',1276933997),
+('Blizzard_MacroUI',1276933997),
+('Blizzard_RaidUI',1276933997),
+('Blizzard_TalentUI',1276933997),
+('Blizzard_TimeManager',1276933997),
+('Blizzard_TokenUI',1276933997),
+('Blizzard_TradeSkillUI',1276933997),
+('Blizzard_TrainerUI',1276933997);

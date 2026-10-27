@@ -87,6 +87,22 @@ def views(db):
     return q(f"SELECT table_name FROM information_schema.views WHERE table_schema='{db}' ORDER BY 1").split()
 
 
+# The worldserver bans any secure addon missing from `addons` (WorldSession::ReadAddonsInfo),
+# and every Blizzard_ addon is secure. Without these rows a fresh realm shows
+# "Couldn't load Blizzard_CombatLog: Banned" and breaks talents, keybindings and more.
+# Same rows as stock TrinityCore's sql/base/characters_database.sql; 1276933997 = 0x4C1C776D,
+# the CRC of Blizzard's public key.
+BLIZZARD_ADDONS = (
+    b'\n-- Blizzard\'s own addons. The worldserver bans any secure addon missing from this table.\n'
+    b'INSERT IGNORE INTO `addons` (`name`, `crc`) VALUES\n'
+    + b',\n'.join(f"('Blizzard_{n}',1276933997)".encode() for n in (
+        'AchievementUI', 'ArenaUI', 'AuctionUI', 'BarbershopUI', 'BattlefieldMinimap', 'BindingUI',
+        'Calendar', 'CombatLog', 'CombatText', 'DebugTools', 'GlyphUI', 'GMChatUI', 'GMSurveyUI',
+        'GuildBankUI', 'InspectUI', 'ItemSocketingUI', 'MacroUI', 'RaidUI', 'TalentUI',
+        'TimeManager', 'TokenUI', 'TradeSkillUI', 'TrainerUI'))
+    + b';\n')
+
+
 def characters(out):
     tables = lines('chars_tables.txt')
     schema = dump('--no-data', '--routines', CHARS, *(tables + views(CHARS)))
@@ -100,7 +116,8 @@ def characters(out):
             dump('--no-create-info', f'--where=guid IN ({t})', CHARS, 'characters', 'character_spell', 'character_talent', 'character_action'),
             dump('--no-create-info', f'--where=owner IN ({t})', CHARS, 'character_pet'),
             dump('--no-create-info', f'--where=guid IN (SELECT id FROM character_pet WHERE owner IN ({t}))', CHARS, 'pet_spell'),
-            f'UPDATE `characters` SET `account` = 0, `online` = 0 WHERE `guid` IN ({t});\n'.encode()]
+            f'UPDATE `characters` SET `account` = 0, `online` = 0 WHERE `guid` IN ({t});\n'.encode(),
+            BLIZZARD_ADDONS]
     write(f'{out}/characters/characters_seed.sql', b''.join(seed))
 
     a = ids(BOT_ACCOUNTS)

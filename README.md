@@ -261,6 +261,13 @@ UPDATE auth.realmlist SET address = 'play.example.com', localAddress = '192.168.
 
 Open or forward TCP 3724 (authserver) and 8085 (worldserver).
 
+If the game says **"Couldn't load Blizzard_CombatLog: Banned"** (or talents, keybindings
+and other built-in panels fail with Lua errors), your characters database is missing
+Blizzard's own addons in its `addons` table; the worldserver bans any addon it doesn't
+know. Imports made before 2026-10-27 have this problem. Load the rows from the end of
+`centurion/sql/characters/characters_seed.sql` into your characters database, restart
+the worldserver, and log in again.
+
 ### 8. Set up the launcher
 
 Players start the game through the launcher. It downloads the patches and
