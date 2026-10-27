@@ -969,6 +969,18 @@ DisableWaterBreath = 4
 AllFlightPaths = 0
 
 #
+#    Centurion.FlightPaths.AlwaysKnown
+#        Description: Flight path nodes (TaxiNodes ids) every character knows, granted at
+#                     every login, so existing characters get them too. Space- or
+#                     comma-separated. .reload config applies a change from the next login.
+#                     Centurion uses the six old-world capitals: Stormwind 2, Ironforge 6,
+#                     Undercity 11, Thunder Bluff 22, Orgrimmar 23, Rut'theran Village 27.
+#        Example:     "2 6 11 22 23 27"
+#        Default:     "" - (off)
+
+Centurion.FlightPaths.AlwaysKnown = ""
+
+#
 #    InstantFlightPaths
 #        Description: Flight paths will take players to their destination instantly instead
 #                     of making them wait while flying.
