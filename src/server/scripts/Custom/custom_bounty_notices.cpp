@@ -193,8 +193,15 @@ namespace
         uint32 Count = 1;
     };
     std::vector<ShopItem> s_shop;
-    constexpr char const* kDefaultShop = "929:1:5,1710:1:5,3928:2:5,13446:3:5,5634:2,3387:4,13452:4,13510:15,"
-        "8529:2:5,8485:10,11023:10,23192:25,1973:25,19872:150";
+    // Potions, the five flasks, the level-60 raid elixirs, then the levelling and
+    // utility elixirs, then the vanity pieces.
+    constexpr char const* kDefaultShop = "929:1:5,1710:1:5,3928:2:5,13446:3:5,"
+        "13510:15,13511:15,13512:15,13513:15,13506:15,"
+        "9155:2,9179:4,9187:4,9206:4,9224:2,9264:4,21546:4,13445:4,13447:4,13453:4,13452:4,13454:4,22192:4,22193:4,"
+        "8529:2:5,2454:1:5,5997:1:5,2457:1:5,2458:1:5,5996:1:5,6662:1:5,3383:1:5,3386:1:5,3389:1:5,3390:1:5,"
+        "6373:1:5,3391:1:5,3825:1:5,8949:1:5,17708:1:5,3828:1:5,8951:1:5,10592:1:5,8827:1:5,18294:1:5,9154:1:5,"
+        "9197:1:5,9233:1:5,"
+        "8485:10,11023:10,23192:25,1973:25,19872:150";
 
     // Every part of the feature can be switched off on its own, live, with
     // .reload config. A part switched off stops at once: its notices freeze
