@@ -6052,12 +6052,20 @@ Centurion.Marks.HonorCostMultiplier = 0
 #        Description: Diagnostic. Logs (bg.battleground, INFO) every change in a Menagerie
 #                     guardian's combat state and each gate on its owner's target. Dev only.
 #        Default:     0 - (Disabled)
+#
+#    Centurion.VioletHold.ExperienceMultiplier
+#        Description: Multiplier on the experience a run pays below the level cap (the run's
+#                     honor converted by Centurion.Battleground.XpInsteadOfHonor). Does not
+#                     change the run's gold or the honor paid at the cap.
+#                     Live: `.reload config` applies to the next payout.
+#        Default:     1.5
 
 Centurion.VioletHold.PrepSeconds = 30
 Centurion.VioletHold.CountdownFromSeconds = 15
 Centurion.VioletHold.PartyWaveChancePercent = 10
 Centurion.VioletHold.CopiesInheritBoons = 0
 Centurion.VioletHold.MenagerieTrace = 0
+Centurion.VioletHold.ExperienceMultiplier = 1.5
 
 ###############################################################################
 

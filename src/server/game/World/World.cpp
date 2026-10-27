@@ -1590,6 +1590,10 @@ void World::LoadConfigSettings(bool reload)
     m_float_configs[CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER] = sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaRewardMultiplier", .2f);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_EXPERIENCE_MULTIPLIER] = std::max(0.0f,
         sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaExperienceMultiplier", .4f));
+    // XP-only multiplier for a Violet Hold run's payout below the level cap.
+    // Honor at the cap and the run's gold are unaffected.
+    m_float_configs[CONFIG_CENTURION_VHR_EXPERIENCE_MULTIPLIER] = std::max(0.0f,
+        sConfigMgr->GetFloatDefault("Centurion.VioletHold.ExperienceMultiplier", 1.5f));
     // End-of-match honor set so every kind of battleground and arena match
     // earns the same honor per hour at its median length
     // (BattlegroundMgr::GetHourlyHonorPayout). Read at every match end, so

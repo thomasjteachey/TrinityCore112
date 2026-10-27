@@ -8432,6 +8432,12 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
             if (bg && bg->isArena())
                 xp = uint64(double(xp) *
                     double(sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_EXPERIENCE_MULTIPLIER)));
+            // Violet Hold has its own XP-only multiplier, for the same reason:
+            // it moves the leveling payout without touching the run's gold or
+            // the honor a level-capped character earns.
+            else if (bg && bg->GetTypeID() == BATTLEGROUND_VHR)
+                xp = uint64(double(xp) *
+                    double(sWorld->getFloatConfig(CONFIG_CENTURION_VHR_EXPERIENCE_MULTIPLIER)));
 
             // Never past the cap. GiveXP stops leveling at max level and parks the
             // rest where nothing reads it, so the share of an award that would
