@@ -3693,7 +3693,8 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
     // decides below. A truce holds while a Mok'gora challenger walks up - no
     // first blow either way - until the two of them are actually dueling. A
     // feud makes them fair game whatever either one's War Mode says, except in
-    // a sanctuary, which shelters a feud as it shelters everything else.
+    // a sanctuary, which shelters a feud as it shelters everything else - but
+    // not the pair's own duel, which goes on to the ordinary duel rules below.
     switch (PairStance::Between(this, target))
     {
         case PairStance::Stance::Truce:
@@ -3711,6 +3712,11 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
             Unit const* targetUnitForFeud = target->ToUnit();
             Player const* a = GetAffectingPlayer();
             Player const* b = target->GetAffectingPlayer();
+            // Their own duel first. Sheltered, a Mok'gora fought inside a
+            // sanctuary town (Gadgetzan) left neither side able to land a blow,
+            // and the only way out was to log out and wear Coward! (2026-10-27).
+            if (a && b && a->duel && a->duel->Opponent == b && a->duel->State == DUEL_STATE_IN_PROGRESS)
+                break;
             bool const sheltered = (unit && unit->IsInSanctuary()) ||
                 (targetUnitForFeud && targetUnitForFeud->IsInSanctuary()) ||
                 (a && a->IsInSanctuary()) || (b && b->IsInSanctuary());
