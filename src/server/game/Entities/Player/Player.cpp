@@ -8448,11 +8448,11 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
                     double(sWorld->getFloatConfig(CONFIG_CENTURION_VHR_EXPERIENCE_MULTIPLIER)));
             // Summoner's Rift too: a League match runs far longer than its payout
             // pays a leveling character for (owner 2026-10-27: "up the summoner's
-            // rift exp by about 300%"). Read here like the Rift's other keys, so
-            // .reload config applies at once.
+            // rift exp by about 300%", then doubled twice the same day). Read here
+            // like the Rift's other keys, so .reload config applies at once.
             else if (bg && bg->GetTypeID() == BATTLEGROUND_SRF)
                 xp = uint64(double(xp) *
-                    double(std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.ExperienceMultiplier", 4.0f))));
+                    double(std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.ExperienceMultiplier", 16.0f))));
 
             // Never past the cap. GiveXP stops leveling at max level and parks the
             // rest where nothing reads it, so the share of an award that would

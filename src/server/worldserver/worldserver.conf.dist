@@ -6801,9 +6801,10 @@ Centurion.Rift.FlatHonorMultiplier = 2.0
 #                     level cap (its honor converted by
 #                     Centurion.Battleground.XpInsteadOfHonor). Does not change the
 #                     honor paid at the cap. .reload config applies a change at once.
-#        Default:     4.0 - (a League match is long; owner 2026-10-27)
+#        Default:     16.0 - (a League match is long; owner 2026-10-27, doubled
+#                     twice since the first 4.0)
 
-Centurion.Rift.ExperienceMultiplier = 4.0
+Centurion.Rift.ExperienceMultiplier = 16.0
 
 #
 #    Centurion.Rift.UnitLevelRate
