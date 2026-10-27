@@ -55,8 +55,15 @@
 //   GMOB:<seq>|<withBots>                           begin; the addon starts a fresh list
 //   GMOR:<realmId>|<name>|<people>|<bots>|<live>     one per realm; live = from memory
 //   GMOZ:<zoneId>,<name>;...                        names of the zones the rows use
-//   GMOP:<realmId>|<name>,<lvl>,<class>,<race>,<zone>,<flags>,<account>;...
+//   GMOP:<realmId>|<name>,<lvl>,<class>,<race>,<zone>,<flags>,<account>,<ping>;...
 //   GMOE:<seq>                                      end; the addon swaps the list in
+//
+// <ping> is the player's latency in ms, as their own client measures it and
+// reports it in every CMSG_PING (one every 30 s). On this realm it is the
+// session's current value; on another realm it is what that realm last saved
+// with the character. 0 = not known yet (no ping since login, or a bot).
+// It is last in the row, so every other field stays where it was; an addon
+// that predates it shows it glued to the account name (",54").
 //
 // and an account listing is the same shape with its own tags:
 //
@@ -130,6 +137,7 @@ namespace
         uint32 race = 0;
         uint32 zoneId = 0;
         uint32 flags = 0;
+        uint32 latency = 0;     // ms; 0 = not known
     };
 
     enum OnlineRowFlags : uint32
@@ -374,6 +382,9 @@ namespace
             row.playerClass = player->GetClass();
             row.race = player->GetRace();
             row.zoneId = player->GetZoneId();
+            // An atomic the socket thread writes on each CMSG_PING; reading it
+            // costs nothing. A virtual session has no socket and stays 0.
+            row.latency = session->GetLatency();
 
             // Virtual sessions are the bot fleet; transient ones are the
             // battleground clones of it. Either way not a person.
@@ -420,7 +431,9 @@ namespace
                 << "WHERE aa.AccountID = a.id AND (aa.RealmID = -1 OR aa.RealmID = " << other.id << ")), 0) AS UNSIGNED), "
                 // Dead: no health, or a released ghost (PLAYER_FLAGS_GHOST) - a
                 // ghost is saved with 1 health, so both are needed.
-                << "CAST((c.health = 0 OR (c.playerFlags & 16) <> 0) AS UNSIGNED)"
+                << "CAST((c.health = 0 OR (c.playerFlags & 16) <> 0) AS UNSIGNED), "
+                // Saved with every character save, so as fresh as the zone.
+                << "CAST(c.latency AS UNSIGNED)"
                 << " FROM `" << other.schema << "`.characters c"
                 << " JOIN `" << s_authSchema << "`.account a ON a.id = c.account"
                 << " WHERE c.online = 1";
@@ -453,6 +466,7 @@ namespace
                 row.flags |= ROW_BG;
             if (fields[9].GetUInt32())
                 row.flags |= ROW_DEAD;
+            row.latency = fields[10].GetUInt32();
             rows.push_back(std::move(row));
         } while (result->NextRow());
     }
@@ -566,7 +580,8 @@ namespace
 
                 std::string const entry = row.name + "," + std::to_string(row.level) + "," +
                     std::to_string(row.playerClass) + "," + std::to_string(row.race) + "," +
-                    std::to_string(row.zoneId) + "," + std::to_string(row.flags) + "," + row.account + ";";
+                    std::to_string(row.zoneId) + "," + std::to_string(row.flags) + "," + row.account + "," +
+                    std::to_string(row.latency) + ";";
                 if (!rowPayload.empty() && head.size() + rowPayload.size() + entry.size() > kMaxPayload)
                 {
                     SendTagged(viewer, "GMOP", head + rowPayload);
@@ -621,8 +636,9 @@ namespace
                 if (row.realmId != realmId || (!withBots && (row.flags & ROW_BOT)))
                     continue;
 
-                chat.PSendSysMessage("  %s - %u %s - %s - %s%s%s%s", row.name.c_str(), row.level,
-                    ClassName(row.playerClass), ZoneName(row.zoneId).c_str(), row.account.c_str(),
+                std::string const ping = row.latency ? (" - " + std::to_string(row.latency) + " ms") : std::string();
+                chat.PSendSysMessage("  %s - %u %s - %s - %s%s%s%s%s", row.name.c_str(), row.level,
+                    ClassName(row.playerClass), ZoneName(row.zoneId).c_str(), row.account.c_str(), ping.c_str(),
                     (row.flags & ROW_GM) ? " [GM]" : "", (row.flags & ROW_BG) ? " [BG]" : "",
                     (row.flags & ROW_DEAD) ? " [dead]" : "");
             }

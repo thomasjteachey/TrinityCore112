@@ -20,7 +20,8 @@
 --   GMOB  begin a reply            <seq>|<withBots>
 --   GMOR  one realm's header       <realmId>|<name>|<people>|<bots>|<live>
 --   GMOZ  zone names               <zoneId>,<name>;...
---   GMOP  character rows           <realmId>|<name>,<lvl>,<class>,<race>,<zone>,<flags>,<account>;...
+--   GMOP  character rows           <realmId>|<name>,<lvl>,<class>,<race>,<zone>,<flags>,<account>[,<ping>];...
+--         <ping> is ms, 0 = not known yet; a server built before it sends none
 --   GMOE  end of the reply         <seq>
 --
 -- The window has a second page for the other half of the same question: who
@@ -56,7 +57,7 @@
 -- one - and the two pages assemble separately, so a background auto-refresh of
 -- one never half-writes the other.
 
-local PANEL_W, PANEL_H = 640, 500
+local PANEL_W, PANEL_H = 690, 500
 local ROW_H = 16
 local MAX_ROWS = 20
 local AUTO_SECONDS = 15
@@ -219,8 +220,15 @@ local function ParseRows(payload)
 		return
 	end
 	realmId = tonumber(realmId)
-	for name, lvl, cls, race, zone, flags, account in
+	for name, lvl, cls, race, zone, flags, rest in
 		string.gmatch(rows, "([^,;]+),(%d+),(%d+),(%d+),(%d+),(%d+),([^;]*);") do
+		-- The ping rides after the account name. The server scrubs commas out of
+		-- account names, so a comma here can only be that separator; a server
+		-- built before the ping sends the bare account name.
+		local account, ping = string.match(rest, "^([^,]*),(%d+)$")
+		if not account then
+			account = rest
+		end
 		-- The server scrubs every pipe out of what it sends, so one here is not
 		-- from the server; never hand a stray escape sequence to SetText.
 		if not string.find(name, "|", 1, true) and not string.find(account, "|", 1, true) then
@@ -233,6 +241,7 @@ local function ParseRows(payload)
 				zone    = tonumber(zone) or 0,
 				flags   = tonumber(flags) or 0,
 				account = account,
+				ping    = tonumber(ping),   -- nil = this server does not send it
 			})
 		end
 	end
@@ -531,13 +540,24 @@ local COLUMNS = {
 	{ key = "race",    x = 184, w = 70,  title = "Race" },
 	{ key = "zone",    x = 256, w = 150, title = "Zone" },
 	{ key = "account", x = 408, w = 110, title = "Account", altTitle = "Last seen" },
-	{ key = "tags",    x = 520, w = 76,  title = "" },
+	-- Online page only: the account page's rows are mostly offline.
+	{ key = "ping",    x = 520, w = 44,  title = "Ping", altTitle = "" },
+	{ key = "tags",    x = 566, w = 76,  title = "" },
 }
 
 -- The Server page reuses the same cells for its map table.
 local TICK_TITLES = {
-	name = "Map", level = "Avg", race = "Max", zone = "Players / bots", account = "Last", tags = "",
+	name = "Map", level = "Avg", race = "Max", zone = "Players / bots", account = "Last", ping = "", tags = "",
 }
+
+-- Green is a good connection, yellow is noticeable, red is a player who is
+-- rubber-banding. Grey "-" = no ping reported yet (it comes every 30 s).
+local function PingText(ms)
+	if not ms then return "" end
+	if ms <= 0 then return "|cff808080-|r" end
+	local color = (ms >= 300 and "|cffff4040") or (ms >= 150 and "|cffffd200") or "|cff40ff40"
+	return color .. ms .. "|r"
+end
 
 -- Twenty rows from here end at -462, clear of the footer at the bottom of a
 -- 500-high window.
@@ -588,6 +608,9 @@ local function ShowTooltip(row)
 		GameTooltip:AddDoubleLine("Gold", tostring(p.gold), 0.8, 0.8, 0.8, 1, 0.82, 0)
 	else
 		GameTooltip:AddLine("Account: " .. (p.account ~= "" and p.account or "?"), 0.8, 0.8, 0.8)
+		if p.ping and p.ping > 0 and bit.band(p.flags, FLAG_BOT) == 0 then
+			GameTooltip:AddLine("Ping: " .. PingText(p.ping) .. " ms", 0.8, 0.8, 0.8)
+		end
 	end
 	GameTooltip:AddLine(entry.realmName .. (entry.live and "" or "  (as of its last save)"), 0.8, 0.7, 0.3)
 	if bit.band(p.flags, FLAG_BOT) > 0 then GameTooltip:AddLine("Playerbot", 0.6, 0.6, 0.6) end
@@ -913,7 +936,7 @@ function CENTURION_GMOnline_Refresh()
 	for _, col in ipairs(COLUMNS) do
 		if onTick then
 			headers[col.key]:SetText(TICK_TITLES[col.key] or "")
-		elseif col.key == "account" and onAccount then
+		elseif onAccount and col.altTitle then
 			headers[col.key]:SetText(col.altTitle)
 		else
 			headers[col.key]:SetText(col.title)
@@ -994,6 +1017,10 @@ function CENTURION_GMOnline_Refresh()
 					end
 				else
 					row.cells.account:SetText(dim .. p.account .. dimEnd)
+					-- A bot has no client, so nothing to show.
+					if bit.band(p.flags, FLAG_BOT) == 0 then
+						row.cells.ping:SetText(PingText(p.ping))
+					end
 				end
 
 				local tags = ""
