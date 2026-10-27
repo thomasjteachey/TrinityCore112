@@ -323,6 +323,12 @@ struct VhrWaveSpawnRequest
     VhrWaveComposition composition = VhrWaveComposition::RandomPerSlot;
     uint32 partyMinLevel = 0;
     uint32 partyMaxLevel = 0;
+    // A custom game's host fixed the bots' levels (BattlegroundCustomRules
+    // VhrBotMinLevel/MaxLevel). When set, BotSourced waves take only bots
+    // inside this range, from either bot pool, and never widen it; with none
+    // in range the wave falls back to the party picks as usual.
+    uint32 hostBotMinLevel = 0;
+    uint32 hostBotMaxLevel = 0;
     std::vector<ObjectGuid> sourceGuids;
     std::vector<Position> spawnPositions;
 

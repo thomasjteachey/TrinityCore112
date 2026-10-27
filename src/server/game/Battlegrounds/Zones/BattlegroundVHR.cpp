@@ -448,6 +448,13 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
     _pendingRequest.partyMinLevel = minLevel;
     _pendingRequest.partyMaxLevel = maxLevel;
 
+    // A custom game's host can fix the bots' levels instead.
+    if (IsCustomGame() && GetCustomRules().VhrBotMinLevel)
+    {
+        _pendingRequest.hostBotMinLevel = GetCustomRules().VhrBotMinLevel;
+        _pendingRequest.hostBotMaxLevel = std::max(GetCustomRules().VhrBotMinLevel, GetCustomRules().VhrBotMaxLevel);
+    }
+
     // Party-mirror waves are the seasoning, not the meal: most waves are
     // drawn from the playerbot population, with the party flavours rolled
     // first so they keep their exact advertised odds.

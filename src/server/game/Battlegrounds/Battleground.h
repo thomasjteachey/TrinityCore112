@@ -278,6 +278,10 @@ struct BattlegroundCustomRules
     bool RiftLastHitGold = true;
     bool RiftDenying = false;
     bool RiftSharedExperience = false;
+    // Violet Hold. The level range its bot-sourced waves are drawn from, both
+    // ends inclusive. 0 = the party's own level band, as in a queued run.
+    uint8 VhrBotMinLevel = 0;
+    uint8 VhrBotMaxLevel = 0;
 };
 
 enum BattlegroundDesertionType

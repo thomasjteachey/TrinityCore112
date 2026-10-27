@@ -179,8 +179,12 @@ void RefreshOfflineWaveBotsIfStale()
 //
 // pvpOnlyPool (DrawsFromPvpOnlyPool): the bracket reaches the level cap, so the
 // PvP-only characters are the whole population and nobody else is offered.
+//
+// exactRange: a custom game's host chose the levels. Only bots inside
+// [partyMinLevel, partyMaxLevel] count - no widening rings - and both pools are
+// offered, since the host's range need not match the bracket's pool.
 std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 partyMaxLevel, bool includeOffline,
-    bool pvpOnlyPool)
+    bool pvpOnlyPool, bool exactRange = false)
 {
     // Disjoint rings: a bot lands in the tightest one that contains it, so
     // returning the first non-empty ring returns the closest match available.
@@ -188,8 +192,11 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
     std::array<std::vector<ObjectGuid>, kBands.size()> onlineRings;
     std::array<std::vector<ObjectGuid>, kBands.size()> offlineRings;
 
-    auto ringOf = [partyMinLevel, partyMaxLevel](uint32 level) -> size_t
+    auto ringOf = [partyMinLevel, partyMaxLevel, exactRange](uint32 level) -> size_t
     {
+        if (exactRange)
+            return level >= partyMinLevel && level <= partyMaxLevel ? 0 : kBands.size();
+
         for (size_t ring = 0; ring < kBands.size(); ++ring)
         {
             uint32 const low = partyMinLevel > kBands[ring] ? partyMinLevel - kBands[ring] : 1;
@@ -210,7 +217,7 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
             if (!playerbot::IsManagedRandomBot(candidate))
                 continue;
 
-            if (pvpOnlyPool != playerbot::PveManager::IsPvpOnlyBot(candidate))
+            if (!exactRange && pvpOnlyPool != playerbot::PveManager::IsPvpOnlyBot(candidate))
                 continue;
 
             // A bot already inside a battleground or arena is mid-match somewhere;
@@ -231,7 +238,7 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
         RefreshOfflineWaveBotsIfStale();
         for (OfflineWaveBot const& bot : g_OfflineWaveBots)
         {
-            if (pvpOnlyPool != bot.pvpOnly)
+            if (!exactRange && pvpOnlyPool != bot.pvpOnly)
                 continue;
 
             size_t const ring = ringOf(bot.level);
@@ -685,8 +692,12 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
     // a fallback and this driver re-sources here.
     if (request->composition == VhrWaveComposition::BotSourced)
     {
-        std::vector<ObjectGuid> bots = CollectBotWaveSources(request->partyMinLevel, request->partyMaxLevel,
-            loadSession != nullptr, DrawsFromPvpOnlyPool(bg));
+        bool const hostRange = request->hostBotMinLevel != 0;
+        std::vector<ObjectGuid> bots = hostRange
+            ? CollectBotWaveSources(request->hostBotMinLevel, request->hostBotMaxLevel, loadSession != nullptr,
+                false, true)
+            : CollectBotWaveSources(request->partyMinLevel, request->partyMaxLevel,
+                loadSession != nullptr, DrawsFromPvpOnlyPool(bg));
         if (!bots.empty())
         {
             // Shuffle and deal without repeats until the pool runs dry, so a

@@ -31,6 +31,7 @@
 #include "TemporarySummon.h"
 #include "Util.h"
 #include "Weather.h"
+#include "World.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -111,12 +112,13 @@ enum GossipAction : uint32
     ACTION_SELECT_DS,
     ACTION_SELECT_RV,
     ACTION_SELECT_SRF,
+    ACTION_SELECT_VHR,
     // The ported arenas are addressed as a block instead of one constant each:
     // the action id is this base plus the arena's offset within
     // BATTLEGROUND_CUSTOM_ARENA_FIRST..LAST. Adding an arena then costs nothing
     // here, nothing in the menu builder and nothing in the select handler.
     // Occupies 330..346 today (345 is Four Corners' slot, never offered); the
-    // block above ends at 322 and the next starts at 380, so there is room for
+    // block above ends at 323 and the next starts at 380, so there is room for
     // 50 arenas before this needs revisiting.
     ACTION_SELECT_CUSTOM_ARENA_BASE = 330,
     ACTION_BATTLEGROUND_OPTIONS = 380,
@@ -128,6 +130,7 @@ enum GossipAction : uint32
     ACTION_RULE_REZ_TIME,
     ACTION_RULE_NODE_FLAG_TIME,
     ACTION_RULE_NODE_BASE_TIME,
+    ACTION_RULE_VHR_BOT_LEVELS,
     ACTION_TOGGLE_ENEMY_FLAG = 450,
     ACTION_TOGGLE_ALLY_FLAG,
     ACTION_CYCLE_WEATHER,
@@ -269,8 +272,34 @@ std::string BattlegroundNameByType(BattlegroundTypeId type)
         case BATTLEGROUND_AOA: return "Amphitheater of Anguish";
         case BATTLEGROUND_EOE: return "The Eye of Eternity";
         case BATTLEGROUND_GMH: return "The Gamesman's Hall";
+        case BATTLEGROUND_VHR: return "The Violet Hold Gauntlet";
         default: return "Unknown";
     }
+}
+
+// The Violet Hold is the party against waves of clones it summons itself, so a
+// custom game of it has one team of players (Blue - the run's human side is
+// always Alliance), no playerbots or clones added in the lobby, and at most the
+// ten players a queued run takes.
+constexpr uint32 CUSTOM_GAME_VHR_MAX_PLAYERS = 10;
+
+bool IsSingleTeamGame(CustomGameLobby const& lobby)
+{
+    return !lobby.RandomArena && lobby.SelectedType == BATTLEGROUND_VHR;
+}
+
+uint32 MaxTeamSize(CustomGameLobby const& lobby)
+{
+    return IsSingleTeamGame(lobby) ? CUSTOM_GAME_VHR_MAX_PLAYERS : CUSTOM_GAME_MAX_PLAYERS_PER_TEAM;
+}
+
+std::string VhrBotLevelsText(BattlegroundCustomRules const& rules)
+{
+    if (!rules.VhrBotMinLevel)
+        return "party's level (default)";
+    if (rules.VhrBotMinLevel == rules.VhrBotMaxLevel)
+        return std::to_string(rules.VhrBotMinLevel);
+    return std::to_string(rules.VhrBotMinLevel) + "-" + std::to_string(rules.VhrBotMaxLevel);
 }
 
 std::string BattlegroundName(CustomGameLobby const& lobby)
@@ -619,6 +648,10 @@ public:
         if (!lobby || lobby->ActiveBattlegroundId || (team != ALLIANCE && team != HORDE))
             return;
 
+        // One team of players: whichever side they asked for, it is Blue.
+        if (IsSingleTeamGame(*lobby))
+            team = ALLIANCE;
+
         ObjectGuid const playerGuid = player->GetGUID();
         auto const currentItr = lobby->Teams.find(playerGuid);
         if (currentItr != lobby->Teams.end() && currentItr->second == team)
@@ -634,17 +667,29 @@ public:
         for (CloneRequest const& request : lobby->CloneRequests)
             if (request.Team == team)
                 ++teamSize;
-        if (teamSize >= CUSTOM_GAME_MAX_PLAYERS_PER_TEAM)
+        if (teamSize >= MaxTeamSize(*lobby))
         {
             Notify(player, std::string("Team ") + TeamName(team) + " already has the maximum of " +
-                std::to_string(CUSTOM_GAME_MAX_PLAYERS_PER_TEAM) + " participants.");
+                std::to_string(MaxTeamSize(*lobby)) + " participants.");
             return;
         }
 
         lobby->Teams[playerGuid] = team;
         ApplyTeamVisual(player, team);
         SyncLobbyRaids(*lobby);
-        Notify(player, std::string("You joined team ") + TeamName(team) + ".");
+        Notify(player, std::string("You joined team ") + TeamName(team) + "." +
+            (IsSingleTeamGame(*lobby) ? " The Violet Hold is played on one team." : ""));
+    }
+
+    // Bots and clones are added to a team in the lobby for every game but the
+    // Violet Hold, which summons its own enemies wave by wave.
+    bool RefusesLobbyClones(Player* player, CustomGameLobby const& lobby)
+    {
+        if (!IsSingleTeamGame(lobby))
+            return false;
+
+        Notify(player, "The Violet Hold summons its own enemies; playerbots and clones cannot be added to it.");
+        return true;
     }
 
     void LeaveTeam(Player* player)
@@ -663,6 +708,9 @@ public:
     {
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || lobby->ActiveBattlegroundId || !normalizePlayerName(name))
+            return false;
+
+        if (RefusesLobbyClones(player, *lobby))
             return false;
 
         if (!CanAddCloneUnderResourceBudget(player, *lobby))
@@ -702,6 +750,9 @@ public:
     {
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || lobby->ActiveBattlegroundId || (team != ALLIANCE && team != HORDE))
+            return false;
+
+        if (RefusesLobbyClones(player, *lobby))
             return false;
 
         if (!CanAddCloneUnderResourceBudget(player, *lobby))
@@ -784,6 +835,9 @@ public:
     {
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || lobby->ActiveBattlegroundId || (expectedTeam != ALLIANCE && expectedTeam != HORDE))
+            return false;
+
+        if (RefusesLobbyClones(player, *lobby))
             return false;
 
         if (!CanAddCloneUnderResourceBudget(player, *lobby))
@@ -904,11 +958,44 @@ public:
             return;
         }
 
+        // The Violet Hold fields its own enemies, so a roster that already has
+        // bots or clones would have to lose them. Leave that to the host.
+        if (type == BATTLEGROUND_VHR && !lobby->CloneRequests.empty())
+        {
+            Notify(player, "Remove the playerbots and clones first: the Violet Hold summons its own enemies.");
+            return;
+        }
+
         if (lobby->RandomArena || lobby->SelectedType != type)
             lobby->Rules = BattlegroundCustomRules();
         lobby->SelectedType = type;
         lobby->ArenaType = arenaType;
         lobby->RandomArena = false;
+
+        // One team of players: anyone on Red moves to Blue.
+        if (IsSingleTeamGame(*lobby))
+        {
+            bool moved = false;
+            for (auto& [guid, team] : lobby->Teams)
+            {
+                if (team == ALLIANCE)
+                    continue;
+
+                team = ALLIANCE;
+                moved = true;
+                if (Player* member = ObjectAccessor::FindConnectedPlayer(guid))
+                {
+                    ApplyTeamVisual(member, ALLIANCE);
+                    Notify(member, "The Violet Hold is played on one team: you are now on team Blue.");
+                }
+            }
+            if (moved)
+                SyncLobbyRaids(*lobby);
+
+            if (lobby->Teams.size() > CUSTOM_GAME_VHR_MAX_PLAYERS)
+                Notify(player, "The Violet Hold takes up to " + std::to_string(CUSTOM_GAME_VHR_MAX_PLAYERS) +
+                    " players. The rest must leave team Blue and spectate before it can start.");
+        }
     }
 
     void SelectRandomArena(Player* player)
@@ -926,11 +1013,69 @@ public:
         lobby->RandomArena = true;
     }
 
+    // "20-30", "20 30" or "20 to 30" sets a range, one number a single level,
+    // 0 or nothing the default (the party's own band). Clamped to 1..cap.
+    bool SetVhrBotLevels(Player* player, CustomGameLobby& lobby, std::string const& text)
+    {
+        std::vector<uint32> numbers;
+        uint32 current = 0;
+        bool inNumber = false;
+        for (char c : text)
+        {
+            if (c >= '0' && c <= '9')
+            {
+                current = current * 10 + uint32(c - '0');
+                if (current > 1000)
+                {
+                    Notify(player, "Enter a bot level range such as 20-30.");
+                    return false;
+                }
+                inNumber = true;
+            }
+            else if (inNumber)
+            {
+                numbers.push_back(current);
+                current = 0;
+                inNumber = false;
+            }
+        }
+        if (inNumber)
+            numbers.push_back(current);
+
+        if (numbers.size() > 2)
+        {
+            Notify(player, "Enter a bot level range such as 20-30.");
+            return false;
+        }
+
+        if (numbers.empty() || !numbers.front())
+        {
+            lobby.Rules.VhrBotMinLevel = 0;
+            lobby.Rules.VhrBotMaxLevel = 0;
+            Notify(player, "Bot levels: the party's level.");
+            return true;
+        }
+
+        uint32 const cap = std::max<uint32>(1, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
+        uint32 low = std::clamp<uint32>(numbers.front(), 1, cap);
+        uint32 high = std::clamp<uint32>(numbers.back(), 1, cap);
+        if (low > high)
+            std::swap(low, high);
+
+        lobby.Rules.VhrBotMinLevel = uint8(low);
+        lobby.Rules.VhrBotMaxLevel = uint8(high);
+        Notify(player, "Bot levels: " + VhrBotLevelsText(lobby.Rules) + ".");
+        return true;
+    }
+
     bool SetRule(Player* player, uint32 action, std::string const& text)
     {
         CustomGameLobby* lobby = GetLobby(player);
         if (!IsOwner(player, lobby) || lobby->ActiveBattlegroundId)
             return false;
+
+        if (action == ACTION_RULE_VHR_BOT_LEVELS)
+            return SetVhrBotLevels(player, *lobby, text);
 
         uint32 value = 0;
         try { value = uint32(std::stoul(text)); }
@@ -1050,7 +1195,32 @@ public:
         for (CloneRequest const& request : lobby->CloneRequests)
             request.Team == ALLIANCE ? ++blueCount : ++redCount;
 
-        if (!blueCount || !redCount)
+        bool const singleTeam = IsSingleTeamGame(*lobby);
+        if (singleTeam)
+        {
+            // The party alone; the Violet Hold brings the other side. SetTeam
+            // and SelectBattleground already keep everyone on Blue and the
+            // roster free of copies - this is the last word on both.
+            if (!lobby->CloneRequests.empty())
+            {
+                Notify(owner, "Remove the playerbots and clones first: the Violet Hold summons its own enemies.");
+                return false;
+            }
+            blueCount += redCount;
+            redCount = 0;
+            if (!hasHumanTeamParticipant)
+            {
+                Notify(owner, "At least one player has to join team Blue.");
+                return false;
+            }
+            if (blueCount > CUSTOM_GAME_VHR_MAX_PLAYERS)
+            {
+                Notify(owner, "The Violet Hold takes up to " + std::to_string(CUSTOM_GAME_VHR_MAX_PLAYERS) +
+                    " players. The rest must leave team Blue and spectate.");
+                return false;
+            }
+        }
+        else if (!blueCount || !redCount)
         {
             Notify(owner, "Both teams need at least one player, playerbot, or player clone.");
             return false;
@@ -1185,7 +1355,7 @@ public:
                 continue;
             }
 
-            uint32 const team = teamItr->second;
+            uint32 const team = singleTeam ? ALLIANCE : teamItr->second;
             BattlegroundQueueTypeId const queueType = BattlegroundMgr::BGQueueTypeId(bg->GetTypeID(), bg->GetArenaType());
             uint32 const queueSlot = player->AddBattlegroundQueueId(queueType);
             if (queueSlot >= PLAYER_MAX_BATTLEGROUND_QUEUES)
@@ -2239,6 +2409,34 @@ public:
             if (!lobby)
                 return;
 
+            // The Violet Hold: one team of players, no copies to add.
+            if (IsSingleTeamGame(*lobby))
+            {
+                if (team != ALLIANCE)
+                {
+                    AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                        "The Violet Hold is played on one team: join team Blue.", team, ACTION_STATUS);
+                    SendGossipMenuFor(player, 1, me->GetGUID());
+                    return;
+                }
+
+                uint32 players = 0;
+                for (auto const& [guid, assignedTeam] : lobby->Teams)
+                    if (assignedTeam == ALLIANCE)
+                        ++players;
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Blue roster: " + std::to_string(players) + "/" + std::to_string(CUSTOM_GAME_VHR_MAX_PLAYERS) +
+                    " players. The Violet Hold summons the enemies.", team, ACTION_STATUS);
+
+                auto itr = lobby->Teams.find(player->GetGUID());
+                if (itr != lobby->Teams.end() && itr->second == team)
+                    AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Leave team", team, ACTION_LEAVE_TEAM);
+                else
+                    AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Join team Blue", team, ACTION_JOIN_TEAM);
+                SendGossipMenuFor(player, 1, me->GetGUID());
+                return;
+            }
+
             uint32 realCount = 0;
             uint32 copyCount = 0;
             for (auto const& [guid, assignedTeam] : lobby->Teams)
@@ -2515,9 +2713,10 @@ public:
             offer("Scarlet Chapel Deathmatch", BATTLEGROUND_SCM, ACTION_SELECT_SCM);
             offer("Blackrock Throne Deathmatch", BATTLEGROUND_BRT, ACTION_SELECT_BRT);
             offer("Obsidian Colosseum", BATTLEGROUND_OBC, ACTION_SELECT_OBC);
-            offer("Tanaris Deathmatch", BATTLEGROUND_TRT, ACTION_SELECT_TRT);
+            // Tanaris Deathmatch is no longer offered here (owner, 2026-10-27).
             offer("Temple of Kotmogu", BATTLEGROUND_TOK, ACTION_SELECT_TOK);
             offer("Summoner's Rift", BATTLEGROUND_SRF, ACTION_SELECT_SRF);
+            offer("The Violet Hold Gauntlet", BATTLEGROUND_VHR, ACTION_SELECT_VHR);
             offer("Battle for Gilneas", BATTLEGROUND_BFG, ACTION_SELECT_BFG);
             offer("Alterac Valley", BATTLEGROUND_AV, ACTION_SELECT_AV);
             offer("Strand of the Ancients", BATTLEGROUND_SA, ACTION_SELECT_SA);
@@ -2585,7 +2784,14 @@ public:
                     "Deathmatch kills: " + ConfiguredValue(lobby->Rules.DeathmatchKillLimit, DefaultDeathmatchKillLimit(lobby->SelectedType)),
                     GOSSIP_SENDER_MAIN, ACTION_RULE_KILLS, "Winning kill total (0 restores default)", 0, true);
 
-            if (!IsArenaSelection(lobby->SelectedType))
+            // The Violet Hold has no graveyards (death is final there), so its
+            // only rule of its own is who the waves are drawn from.
+            if (lobby->SelectedType == BATTLEGROUND_VHR)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Bot levels: " + VhrBotLevelsText(lobby->Rules),
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_VHR_BOT_LEVELS,
+                    "Bot level range, e.g. 20-30 or 60 (0 restores the party's level)", 0, true);
+            else if (!IsArenaSelection(lobby->SelectedType))
             {
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
                     "Resurrection: " + ConfiguredSeconds(lobby->Rules.ResurrectionIntervalMs, RESURRECTION_INTERVAL),
@@ -2716,7 +2922,7 @@ public:
                 case ACTION_SELECT_SCM: manager.SelectBattleground(player, BATTLEGROUND_SCM, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_BRT: manager.SelectBattleground(player, BATTLEGROUND_BRT, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_OBC: manager.SelectBattleground(player, BATTLEGROUND_OBC, 0); ShowChromieMenu(player); return true;
-                case ACTION_SELECT_TRT: manager.SelectBattleground(player, BATTLEGROUND_TRT, 0); ShowChromieMenu(player); return true;
+                case ACTION_SELECT_VHR: manager.SelectBattleground(player, BATTLEGROUND_VHR, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TOK: manager.SelectBattleground(player, BATTLEGROUND_TOK, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_SRF: manager.SelectBattleground(player, BATTLEGROUND_SRF, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_BFG: manager.SelectBattleground(player, BATTLEGROUND_BFG, 0); ShowChromieMenu(player); return true;
@@ -2777,7 +2983,7 @@ public:
                 ShowChromieMenu(player);
                 return true;
             }
-            else if (action >= ACTION_RULE_FLAG_CAPS && action <= ACTION_RULE_NODE_BASE_TIME)
+            else if (action >= ACTION_RULE_FLAG_CAPS && action <= ACTION_RULE_VHR_BOT_LEVELS)
             {
                 manager.SetRule(player, action, value);
                 ShowBattlegroundOptions(player);
