@@ -102,7 +102,7 @@ namespace
     uint32 s_earlyReliefEndStacks = 20;
     float s_earlyReliefPercent = 25.0f;
     uint32 s_pairUpStacks = 15;
-    uint32 s_veteranStacks = 25;
+    uint32 s_veteranStacks = 45;
     uint32 s_pvpBotStacks = 50;
     uint32 s_maxHuntersOnTarget = 6;
     uint32 s_guardStacks = 30;
@@ -248,7 +248,7 @@ namespace
         s_pairUpStacks = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.PairUpStacks", 15), 0, 255));
         s_veteranStacks = uint32(std::clamp(
-            sConfigMgr->GetIntDefault("Centurion.Bounty.VeteranStacks", 25), 0, 255));
+            sConfigMgr->GetIntDefault("Centurion.Bounty.VeteranStacks", 45), 0, 255));
         s_pvpBotStacks = uint32(std::clamp(
             sConfigMgr->GetIntDefault("Centurion.Bounty.PvpBotStacks", 50), 0, 255));
         s_maxHuntersOnTarget = uint32(std::clamp(
@@ -332,6 +332,17 @@ namespace
     // People only, as with the War Mode reward: bots level at the normal pace.
     // A bot's bounty is a payout for whoever puts it down, not a boost for the
     // fleet.
+    //
+    // Shared with the group, zone by zone. A party or raid carries one bounty,
+    // on its leader (BountyCarrierFor), so the stacks the whole group earned sat
+    // on one person and only that person was paid for them. Everybody in the
+    // group standing in the same zone is now paid at the HIGHEST count any of
+    // them carries - the highest, not the sum, so a second carrier adds nothing
+    // on top of the first and splitting a raid's kills across two heads buys no
+    // more than carrying them on one.
+    //
+    // The carrier passes the same tests the recipient does - a person, standing
+    // where a bounty applies - so a bot grouped with you never lends its stacks.
     float XpMultiplier(Player const* player)
     {
         if (!s_enabled || s_xpPercentPerStack <= 0.0f || !player)
@@ -340,8 +351,33 @@ namespace
         if (BarracksHardcore::IsPlayerbot(player) || !IsBountyContext(player))
             return 1.0f;
 
-        return 1.0f + float(GetStacks(player)) * s_xpPercentPerStack / 100.0f;
+        uint32 stacks = GetStacks(player);
+        if (Group const* group = player->GetGroup())
+        {
+            for (GroupReference const* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+            {
+                // The same Map object, not merely the same map id: that keeps the
+                // zone read below, and IsBountyContext's, on this map's own
+                // thread. An open-world continent is a single map.
+                Player const* member = itr->GetSource();
+                if (!member || member == player || !member->IsInWorld() ||
+                    member->FindMap() != player->FindMap() || member->GetZoneId() != player->GetZoneId())
+                    continue;
+
+                if (BarracksHardcore::IsPlayerbot(member) || !IsBountyContext(member))
+                    continue;
+
+                stacks = std::max(stacks, GetStacks(member));
+            }
+        }
+
+        return 1.0f + float(stacks) * s_xpPercentPerStack / 100.0f;
     }
+
+    // Depth of ScopedXpBonusSuppression on this thread. Per thread because the
+    // award it guards is paid on one map thread while every other map thread
+    // goes on paying its own experience at the normal bonus.
+    thread_local uint32 t_xpBonusSuppressed = 0;
 
     void WriteRegistry(Player const* player, uint32 stacks, int32 durationMs)
     {
@@ -1079,6 +1115,16 @@ uint32 TakePendingChestGold(Player* victim)
 
     return chestCopper;
 }
+
+ScopedXpBonusSuppression::ScopedXpBonusSuppression()
+{
+    ++t_xpBonusSuppressed;
+}
+
+ScopedXpBonusSuppression::~ScopedXpBonusSuppression()
+{
+    --t_xpBonusSuppressed;
+}
 }
 
 using namespace Bounty;
@@ -1168,7 +1214,8 @@ public:
     // composes with them in any order - and a zeroed award stays zeroed.
     void OnGiveXP(Player* player, uint32& amount, Unit* /*victim*/) override
     {
-        if (!amount)
+        // An award already priced off the stacks - the Quiet Man's payout.
+        if (!amount || t_xpBonusSuppressed)
             return;
 
         float const multiplier = XpMultiplier(player);

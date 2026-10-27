@@ -71,6 +71,21 @@ namespace Bounty
     // player in hand - a bounty-board pardon, bought at a board.
     uint32 ReduceStacks(Player* player, uint32 by);
 
+    // Holds the notoriety experience bonus off, on this thread, for as long as
+    // it is in scope. For an award that is already priced off the stacks - the
+    // Quiet Man's payout, whose tier is the banked peak - so the bonus does not
+    // count the same stacks a second time, the carrier's or anybody else's in
+    // the group.
+    class ScopedXpBonusSuppression
+    {
+    public:
+        ScopedXpBonusSuppression();
+        ~ScopedXpBonusSuppression();
+
+        ScopedXpBonusSuppression(ScopedXpBonusSuppression const&) = delete;
+        ScopedXpBonusSuppression& operator=(ScopedXpBonusSuppression const&) = delete;
+    };
+
     // 0.0 at no bounty, 1.0 at the cap. Every escalation below is a straight
     // line along this, so one number tunes how fast the world turns on you.
     float Fraction(uint32 stacks);

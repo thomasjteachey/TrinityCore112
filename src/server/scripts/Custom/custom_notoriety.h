@@ -50,6 +50,13 @@ class WorldObject;
 //
 // And if you die, the contract dies at the corpse. Nobody buys a dead man's
 // name.
+//
+// The raid carries it with you. Everybody in the holder's raid standing in the
+// holder's zone gets a copy of the quest - the mark, the Quiet Man, the hand-in
+// - and one sale by any of them settles it for all of them, pays everybody in
+// the raid who is in the seller's zone, and offers the whole raid a summons
+// back to the registrar. The page itself stays the holder's: it burns when they
+// die, and a copy can only be sold with them in the zone.
 // ---------------------------------------------------------------------------
 namespace Notoriety
 {
@@ -65,9 +72,12 @@ namespace Notoriety
     // one. This is what puts the ! over Grix's head and the quest in his menu.
     bool ShouldOffer(Player const* player);
 
+    // True for the HOLDER - the person whose name is on the page - only. A raid
+    // member carrying a copy of it is not a holder.
     bool HasLiveContract(ObjectGuid guid);
 
-    // Where this player's fence is standing. False when there is no contract.
+    // Where this player's fence is standing - the holder's, or the one their
+    // raid's copy points at. False when there is no contract.
     bool GetRendezvous(ObjectGuid guid, uint32& mapId, uint32& zoneId, Position& out);
 
     // Called from the bounty engine on the exact instruction that raises a
@@ -101,11 +111,18 @@ namespace Notoriety
     // packet, which is shorter than the walk to a rendezvous.
     void RefreshRendezvousPoi(Player* player);
 
-    // Passage back to the registrar who wrote the contract, owed the moment the
-    // page is sold. Held open for fifteen minutes and retried, so being dead, in
-    // combat or logged out delays it rather than cancelling it.
-    void ArmRideHome(Player* player, uint32 mapId, float x, float y, float z, float o);
+    // Passage back to the registrar who wrote the contract, owed to everybody in
+    // the seller's raid the moment the page is sold - as a summons each of them
+    // accepts or declines, not a teleport. Held open for fifteen minutes, so
+    // being dead, in combat or logged out delays the dialog rather than
+    // cancelling it. Arming only writes the offer down; the dialog goes up from
+    // the rider's own update. summoner is whose name the dialog shows.
+    void ArmRideHome(ObjectGuid who, ObjectGuid summoner, uint32 mapId, float x, float y, float z, float o);
     void ResumeRideHome(Player* player);
+
+    // The rider's answer to that dialog. False when the answer was not to one
+    // of these, so the stock summons handler still gets it.
+    bool AnswerRideHome(Player* player, ObjectGuid summoner, bool agree);
 
     // Put the fence on the ground when its buyer gets close and take it away
     // when they leave. Called from the holder's own update tick.
@@ -141,7 +158,7 @@ namespace Notoriety
     // turned on against them off their own debuff bar.
     //
     // Deliberately not every fifth stack. A debuff is a promise that something
-    // changed, and at 20, 35 and 45 nothing does - the payout tier steps and the
+    // changed, and at 25 and 35 nothing does - the payout tier steps and the
     // scalars keep sliding, exactly as they did on the stack before. One filler
     // icon and the player stops reading the rest of them.
     //

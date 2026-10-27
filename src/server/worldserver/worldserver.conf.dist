@@ -4083,9 +4083,16 @@ Centurion.Hardcore.PlayerKill.ExperienceBubbles = 2
 #                     the default a full fifty stacks is +250%. Only where the
 #                     bounty itself applies, so nothing extra inside a dungeon,
 #                     raid, battleground, arena or the Battle Ring. People only;
-#                     playerbots level at the normal pace. A Notoriety contract's
-#                     payout is already priced off the stacks, so it is paid after
-#                     they are cleared (Centurion.Notoriety.ClearStacksOnTurnIn).
+#                     playerbots level at the normal pace. Shared with the group:
+#                     everybody in a party or raid standing in the same zone earns
+#                     it at the HIGHEST count any of them carries (the highest, not
+#                     the sum - the group's kills stack on its leader anyway). Only
+#                     people's stacks count; a bot in the group lends none. A
+#                     Notoriety contract's payout is already priced off the stacks,
+#                     so the bonus is never applied to it.
+#                     The notoriety aura's tooltip states this bonus from its own
+#                     Spell.dbc effect (90701 effect 2, 4 + 1 per stack): change both
+#                     together, or the tooltip lies.
 #        Default:     5.0
 #                     0 - (no bonus)
 #
@@ -4327,7 +4334,7 @@ Centurion.Bounty.IgnoreAggroBudgetStacks = 40
 #                     The too-LOW rule (Playerbot.Pve.ProactiveMaxLevelsAbove)
 #                     applies at every tier, so raising a bounty never starts
 #                     feeding the victim easy kills.
-#        Default:     25 / 50
+#        Default:     45 / 50
 #                     0 - (that tier disabled)
 #
 Centurion.Bounty.RelentlessStacks = 10
@@ -4367,7 +4374,7 @@ Centurion.Bounty.EarlyReliefEndStacks = 20
 #    MaxHuntersOnTarget, so a wave fills the remaining room rather than always
 #    adding its full size on top of whoever is already there.
 Centurion.Bounty.PairUpStacks = 15
-Centurion.Bounty.VeteranStacks = 25
+Centurion.Bounty.VeteranStacks = 45
 Centurion.Bounty.PvpBotStacks = 50
 
 #
@@ -4515,11 +4522,12 @@ Centurion.Notoriety.BotsSeeThroughStealth = 1
 #               zone sees through stealth
 #            20 bots too weak to fight you shout, and one that can win is
 #               teleported in (Centurion.Bounty.CallForHelpStacks)
-#            25 the veteran pool becomes eligible and preferred
 #            30 the realm sends Centurion Guards
 #            40 the cap on how many may be on you at once stops applying
+#            45 the veteran pool becomes eligible and preferred
+#               (Centurion.Bounty.VeteranStacks)
 #            50 the battleground-only fleet is recruited into the open world
-#        35 and 45 arm nothing - the payout tier steps and the scalars keep
+#        25 and 35 arm nothing - the payout tier steps and the scalars keep
 #        sliding, as they did on the stack before - so they get no icon. One
 #        filler debuff and the player stops reading the rest.
 #
@@ -4550,17 +4558,22 @@ Centurion.Notoriety.CheckpointAuraBase    = 0
 #    only: the rule reads the quest, not the aura. Needs a client Spell.dbc row, so 0
 #    here; 90719 ("Carrying a Contract") on Barracks+.
 Centurion.Notoriety.ContractAuraSpell     = 0
-Centurion.Notoriety.CheckpointStacks      = "5:90710,10:90711,15:90712,20:90717,25:90713,30:90714,40:90715,50:90716"
+Centurion.Notoriety.CheckpointStacks      = "5:90710,10:90711,15:90712,20:90717,30:90714,40:90715,45:90713,50:90716"
 
-#    The payout. Money is flat copper; below level 60, experience is counted in
-#    BUBBLES of the seller's own next level. At level 60, those bubbles are valued
-#    using Centurion.Notoriety.MarkRewardMultiplier times
+#    The payout. Paid IN FULL to every person in the seller's party/raid who is
+#    standing in the seller's zone (bots and tournament characters excluded),
+#    each at their own level. Money is flat copper; below level 60, experience is
+#    counted in BUBBLES of the recipient's own next level. At level 60, those
+#    bubbles are valued using Centurion.Notoriety.MarkRewardMultiplier times
 #    Centurion.Battleground.XpInsteadOfHonor.HonorPerLevel, then converted to
 #    marks at 100 honor value per Mark of Honor; no regular honor points are
-#    awarded. Each connected party/raid member within 40 yards of the Quiet Man
-#    receives that many Centurion.Marks.RestoredEntry items plus five random
-#    entries from Centurion.Marks.DepletedEntries; full inventories receive them
-#    by mail.
+#    awarded. Every recipient also gets five random entries from
+#    Centurion.Marks.DepletedEntries; full inventories receive them by mail.
+#    The notoriety experience bonus is never applied to this payout.
+#    The raid shares the contract: everybody in the holder's raid standing in the
+#    holder's zone gets a copy of the quest, any of them can sell it (with the
+#    holder in the zone), and one sale takes every copy out of every log. The
+#    whole raid is then offered a summons back to the registrar.
 #    Paid by the fence script, NOT from quest_template - a repeatable quest pays
 #    its template rewards exactly once per character, ever, and silently zero
 #    every time after.
