@@ -421,6 +421,10 @@ public:
     static void SetNoticeHeld(ObjectGuid bot, bool held);
     static bool IsNoticeHeld(ObjectGuid bot);
 
+    // Whether a bot on an errand far from its person may be landed near them
+    // (the 210 yard dispatch) or must walk. A config switch, set on every load.
+    static void SetNoticeDispatchAllowed(bool allowed);
+
     // How aggressive this bot is by nature, 1-100 (the same figure the hunt
     // schedule and the GM stats feed read).
     static uint8 GetBotTemperament(Player const* bot);

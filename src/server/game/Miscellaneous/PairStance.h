@@ -71,8 +71,14 @@ namespace PairStance
     TC_GAME_API Stance Between(WorldObject const* a, WorldObject const* b);
 
     // One relaxed atomic load. Every caller on a hot path asks this first, so a
-    // realm with no notice out pays nothing else.
+    // realm with no notice out pays nothing else. False while switched off.
     TC_GAME_API bool Any();
+
+    // The kill switch (Centurion.BountyBoard.Notices.Stances.Enable, applied by
+    // the notices on every config load). Off, every pair reads None everywhere -
+    // the core behaves as if this file did not exist - but the pairs are kept,
+    // so switching it back on restores them. Both ways re-colour every pair.
+    TC_GAME_API void SetEnabled(bool enabled);
 
     // The characters whose clients are showing the wrong colour since the last
     // call: both halves of every pair that changed. The caller re-sends their

@@ -171,6 +171,41 @@ namespace
     uint32 s_pardonStacks = 10;
     uint32 s_pardonCooldownMinutes = 30;
 
+    // Every part of the feature can be switched off on its own, live, with
+    // .reload config. A part switched off stops at once: its notices freeze
+    // (still in the log, nothing hunts, nothing expires, nothing pays), what it
+    // put in force on the bots - truces, feuds, errands, guards - is taken back,
+    // and switching it on again puts all of that back for whoever is online.
+    struct Switches
+    {
+        bool Hunt = true;               // hunt notices can be taken and run
+        bool HuntRequireWarMode = true; // ...by War Mode players only
+        bool HuntEscorts = true;        // an aggressive quarry calls friends
+        bool Mokgora = true;            // Mok'gora notices
+        bool MokgoraTruce = true;       // the challenger is not red on its way
+        bool MokgoraFeud = true;        // a refusal turns the bot on you
+        bool Recovery = true;           // recovery notices
+        bool RecoveryFeud = true;       // ...make the thief hostile whatever War Mode says
+        bool ShowTakenFrom = true;      // the board marks gear taken off a body, and whose
+        bool Hints = true;              // "word on the road" while hunting
+        bool Ledger = true;             // ranks advance; off freezes them and their perks
+        bool PerkArea = true;           // Tracker reads where in a zone
+        bool PerkTemper = true;         // Bloodhound reads temperament
+        bool PerkCoin = true;           // Manhunter reads coin
+        bool PerkTwoNotices = true;     // Headsman carries two
+        bool Keepsakes = true;          // the readable poster on hand-in
+        bool Tabard = true;             // the Headsman's tabard
+        bool Titles = true;             // Headsman and the Relentless
+        bool Pardons = true;            // seals buy notoriety off
+        bool RewardMoney = true;
+        bool RewardExperience = true;
+        bool RewardSeals = true;
+        bool Gossip = true;             // the no-addon board menu
+        bool Stances = true;            // the truce/feud rule in the core (PairStance)
+        bool Dispatch = true;           // a bot on a notice errand may be landed near you
+    };
+    Switches s_on;
+
     // Gossip senders for the no-addon menu. Board-specific, well clear of
     // GOSSIP_SENDER_MAIN and anything a stock menu uses.
     constexpr uint32 kSenderMenu = 900310;
@@ -234,6 +269,62 @@ namespace
         s_pardonSeals = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.PardonSeals", 1)));
         s_pardonStacks = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.PardonStacks", 10)));
         s_pardonCooldownMinutes = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.PardonCooldownMinutes", 30)));
+
+        auto const on = [](char const* key) { return sConfigMgr->GetBoolDefault(
+            Trinity::StringFormat("Centurion.BountyBoard.Notices.{}", key), true); };
+        s_on.Hunt = on("Hunt.Enable");
+        s_on.HuntRequireWarMode = on("Hunt.RequireWarMode");
+        s_on.HuntEscorts = on("Hunt.Escorts.Enable");
+        s_on.Mokgora = on("Mokgora.Enable");
+        s_on.MokgoraTruce = on("Mokgora.Truce.Enable");
+        s_on.MokgoraFeud = on("Mokgora.FeudOnRefusal.Enable");
+        s_on.Recovery = on("Recovery.Enable");
+        s_on.RecoveryFeud = on("Recovery.Feud.Enable");
+        s_on.ShowTakenFrom = on("ShowTakenFrom.Enable");
+        s_on.Hints = on("Hints.Enable");
+        s_on.Ledger = on("Ledger.Enable");
+        s_on.PerkArea = on("Ledger.Perk.Area.Enable");
+        s_on.PerkTemper = on("Ledger.Perk.Temper.Enable");
+        s_on.PerkCoin = on("Ledger.Perk.Coin.Enable");
+        s_on.PerkTwoNotices = on("Ledger.Perk.TwoNotices.Enable");
+        s_on.Keepsakes = on("Keepsakes.Enable");
+        s_on.Tabard = on("Tabard.Enable");
+        s_on.Titles = on("Titles.Enable");
+        s_on.Pardons = on("Pardons.Enable");
+        s_on.RewardMoney = on("Reward.Money.Enable");
+        s_on.RewardExperience = on("Reward.Experience.Enable");
+        s_on.RewardSeals = on("Reward.Seals.Enable");
+        s_on.Gossip = on("Gossip.Enable");
+        s_on.Stances = on("Stances.Enable");
+        s_on.Dispatch = on("Dispatch.Enable");
+    }
+
+    // A kind of notice is running: the whole feature, and that kind.
+    bool KindOn(Kind kind)
+    {
+        if (!s_enabled)
+            return false;
+        switch (kind)
+        {
+            case Kind::Hunt:    return s_on.Hunt;
+            case Kind::Mokgora: return s_on.Mokgora;
+            default:            return s_on.Recovery;
+        }
+    }
+
+    // The Ledger rank as its perks read it: with the Ledger switched off nobody
+    // reads anything extra off the board.
+    bool PerkOn(uint8 rank, uint8 needed, bool perk)
+    {
+        return s_on.Ledger && perk && rank >= needed;
+    }
+
+    // BBLG's last field: which parts the addon should draw.
+    uint32 FeatureBits()
+    {
+        return (s_on.Ledger ? 1u : 0u) | (s_on.Pardons ? 2u : 0u) | (s_on.PerkArea ? 4u : 0u) |
+            (s_on.PerkTemper ? 8u : 0u) | (s_on.PerkCoin ? 16u : 0u) | (s_on.PerkTwoNotices ? 32u : 0u) |
+            (s_on.Titles ? 64u : 0u) | (s_on.ShowTakenFrom ? 128u : 0u);
     }
 
     uint32 QuestFor(Kind kind, uint8 slot)
@@ -459,7 +550,7 @@ namespace
 
     uint32 MaxNotices(uint8 rank)
     {
-        return rank >= kTopRank ? 2 : 1;
+        return PerkOn(rank, kTopRank, s_on.PerkTwoNotices) ? 2 : 1;
     }
 
     Ledger LedgerCopy(ObjectGuid guid)
@@ -551,6 +642,9 @@ namespace
     // so a title that reached the realm's data after it was earned still lands.
     void GrantEarnedTitles(Player* player, Ledger const& ledger)
     {
+        if (!s_enabled || !s_on.Titles || !s_on.Ledger)
+            return;
+
         if (RankFor(ledger.Collected) >= kTopRank)
             GrantTitle(player, s_headsmanTitle, "Headsman");
 
@@ -609,7 +703,7 @@ namespace
     bool QuarryNamedElsewhereLocked(ObjectGuid bot, uint32 exceptId)
     {
         for (Notice const& other : g_notices)
-            if (other.Id != exceptId && other.Live && !other.Complete && other.Quarry == bot)
+            if (other.Id != exceptId && other.Live && !other.Complete && other.Quarry == bot && KindOn(other.Type))
                 return true;
         for (Feud const& feud : g_feuds)
             if (feud.Bot == bot)
@@ -625,31 +719,77 @@ namespace
         return false;
     }
 
-    // Everything a live notice puts in force while its holder is online: the
-    // quarry kept in the world, a Mok'gora challenger's truce and walk, a
-    // recovery's feud.
-    void ApplyLiveLocked(Notice& notice)
+    // Make the bots match the switches for one live notice: whatever it should
+    // have in force right now - the quarry kept in the world, a Mok'gora
+    // challenger's truce and walk, a recovery's feud, a hunted bot's guards -
+    // is put in force, and whatever it should not have is taken out. Run when a
+    // notice goes live and again after every .reload config, so it has to be
+    // safe to run any number of times.
+    void ReconcileLocked(Notice& notice)
     {
-        notice.Live = true;
-        if (notice.Complete)
+        if (!notice.Live)
             return;
 
-        playerbot::PveManager::SetNoticeHeld(notice.Quarry, true);
+        bool const on = KindOn(notice.Type) && !notice.Complete;
+
+        if (on)
+            playerbot::PveManager::SetNoticeHeld(notice.Quarry, true);
+        else if (!QuarryNamedElsewhereLocked(notice.Quarry, notice.Id))
+            playerbot::PveManager::SetNoticeHeld(notice.Quarry, false);
+
+        // Guards stay only with a running hunt that still wants them. They are
+        // not called again when switched back on: a bot calls for help when it
+        // hears it is wanted, not when the config changes.
+        if (!(on && notice.Type == Kind::Hunt && s_on.HuntEscorts))
+        {
+            for (ObjectGuid escort : notice.Escorts)
+            {
+                playerbot::PveManager::ClearNoticeErrand(escort);
+                playerbot::PveManager::SetNoticeHeld(escort, false);
+            }
+            notice.Escorts.clear();
+        }
+
+        // A feud owns the pair's stance and the bot's errand.
+        if (InFeudLocked(notice.Quarry, notice.Holder))
+            return;
 
         switch (notice.Type)
         {
             case Kind::Mokgora:
-                PairStance::Set(notice.Quarry, notice.Holder, PairStance::Stance::Truce);
-                if (!notice.Dueling)
+                if (on && s_on.MokgoraTruce && !notice.Dueling)
+                    PairStance::Set(notice.Quarry, notice.Holder, PairStance::Stance::Truce);
+                else
+                    PairStance::Clear(notice.Quarry, notice.Holder);
+
+                if (on && !notice.Dueling)
                     playerbot::PveManager::SetNoticeErrand(notice.Quarry,
                         playerbot::PveManager::NoticeErrandKind::Approach, notice.Holder);
+                else
+                    playerbot::PveManager::ClearNoticeErrand(notice.Quarry);
                 break;
             case Kind::Recovery:
-                PairStance::Set(notice.Quarry, notice.Holder, PairStance::Stance::Feud);
+                if (on && s_on.RecoveryFeud)
+                    PairStance::Set(notice.Quarry, notice.Holder, PairStance::Stance::Feud);
+                else
+                    PairStance::Clear(notice.Quarry, notice.Holder);
                 break;
-            default:
+            case Kind::Hunt:
+                // With hunts open to anybody, somebody without War Mode could
+                // not land a blow on what they took the notice for, so the pair
+                // feuds. With War Mode required there is nothing to add.
+                if (on && !s_on.HuntRequireWarMode)
+                    PairStance::Set(notice.Quarry, notice.Holder, PairStance::Stance::Feud);
+                else
+                    PairStance::Clear(notice.Quarry, notice.Holder);
                 break;
         }
+    }
+
+    void ApplyLiveLocked(Notice& notice)
+    {
+        notice.Live = true;
+        ReconcileLocked(notice);
     }
 
     // And everything it took out again: the holder logged out, or the notice
@@ -673,7 +813,7 @@ namespace
         if (notice.Type == Kind::Mokgora && !feud)
             playerbot::PveManager::ClearNoticeErrand(notice.Quarry);
 
-        if (notice.Type != Kind::Hunt && !feud)
+        if (!feud)
             PairStance::Clear(notice.Quarry, notice.Holder);
 
         if (!QuarryNamedElsewhereLocked(notice.Quarry, notice.Id))
@@ -710,6 +850,31 @@ namespace
         playerbot::PveManager::ClearNoticeErrand(bot);
         if (!QuarryNamedElsewhereLocked(bot, 0))
             playerbot::PveManager::SetNoticeHeld(bot, false);
+    }
+
+    bool FeudsOn()
+    {
+        return s_enabled && s_on.Mokgora && s_on.MokgoraFeud;
+    }
+
+    // What a refused Mok'gora costs, said as it stands on this realm.
+    std::string RefusalText(char const* what, std::string const& name)
+    {
+        if (FeudsOn())
+            return Trinity::StringFormat("{} {} takes it as an insult - and is coming for you.", what, name);
+        return Trinity::StringFormat("{} {} walks away.", what, name);
+    }
+
+    // Everything after a .reload config: feuds end if they were switched off,
+    // and every live notice is made to match its switches again.
+    void ReconcileAllLocked()
+    {
+        if (!FeudsOn())
+            while (!g_feuds.empty())
+                EndFeudLocked(g_feuds.begin());
+
+        for (Notice& notice : g_notices)
+            ReconcileLocked(notice);
     }
 
     // ---------------------------------------------------------------- the quest
@@ -799,7 +964,7 @@ namespace
 
             // The feud first, so the release below leaves its stance and its
             // hold in place rather than tearing them down and putting them back.
-            if (reason == EndReason::Refused)
+            if (reason == EndReason::Refused && FeudsOn())
                 StartFeudLocked(copy.Quarry, copy.Holder);
 
             ReleaseLiveLocked(*itr);
@@ -900,7 +1065,7 @@ namespace
     {
         slot = 0;
 
-        if (!s_enabled || !s_tablesReady || !sObjectMgr->GetQuestTemplate(QuestFor(kind, 0)))
+        if (!KindOn(kind) || !s_tablesReady || !sObjectMgr->GetQuestTemplate(QuestFor(kind, 0)))
             return "off";
 
         if (player->GetLevel() < s_minLevel)
@@ -918,7 +1083,7 @@ namespace
         switch (kind)
         {
             case Kind::Hunt:
-                if (!BarracksHardcore::IsWarModeOptedIn(player))
+                if (s_on.HuntRequireWarMode && !BarracksHardcore::IsWarModeOptedIn(player))
                     return "wm";
                 if (!levelOk)
                     return "level";
@@ -1082,7 +1247,7 @@ namespace
         // The hunted hear it. An aggressive bot does not wait to be found alone.
         std::vector<ObjectGuid> escorts;
         uint8 const temper = playerbot::PveManager::GetBotTemperament(bot);
-        if (kind == Kind::Hunt && temper >= s_escortTemper)
+        if (kind == Kind::Hunt && s_on.HuntEscorts && temper >= s_escortTemper)
             escorts = PickEscorts(bot, std::min<uint32>(s_escortMax, temper >= s_escortTemperTwo ? 2 : 1));
 
         uint32 id = 0;
@@ -1128,7 +1293,7 @@ namespace
                 break;
         }
 
-        if (kind != Kind::Mokgora)
+        if (kind != Kind::Mokgora && s_on.Hints)
         {
             std::lock_guard<std::mutex> guard(g_lock);
             if (Notice* stored = FindLocked(id))
@@ -1158,7 +1323,7 @@ namespace
         std::string const zoneName = BountyBoard::ZoneName(zone);
         std::string const area = AreaName(quarry->GetAreaId());
 
-        if (rank >= 1 && !area.empty() && quarry->GetAreaId() != zone)
+        if (PerkOn(rank, 1, s_on.PerkArea) && !area.empty() && quarry->GetAreaId() != zone)
             Tell(holder, Trinity::StringFormat("Word on the road: {} was last seen near {}, {}.", notice.QuarryName, area, zoneName));
         else
             Tell(holder, Trinity::StringFormat("Word on the road: {} is somewhere in {}.", notice.QuarryName, zoneName));
@@ -1203,10 +1368,10 @@ namespace
         time_t const pardonReady = ledger.PardonAt + time_t(s_pardonCooldownMinutes) * MINUTE;
         uint32 const pardonIn = pardonReady > now ? uint32(pardonReady - now) : 0;
 
-        BountyBoard::SendTagged(viewer, "BBLG", Trinity::StringFormat("{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        BountyBoard::SendTagged(viewer, "BBLG", Trinity::StringFormat("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             uint32(rank), ledger.Collected, NextRankAt(ledger.Collected), ledger.Seals, ledger.Hunts, ledger.Mokgora,
             ledger.Recovered, done, total, pardonIn, MaxNotices(rank), s_pardonStacks, s_pardonSeals,
-            Bounty::GetStacks(viewer)));
+            Bounty::GetStacks(viewer), FeatureBits()));
     }
 
     // ---------------------------------------------------------------- collecting
@@ -1270,63 +1435,94 @@ namespace
         else
             xp = uint32(float(sObjectMgr->GetXPForLevel(player->GetLevel())) * bubbles / 20.0f);
 
+        if (!s_on.RewardMoney)
+            money = 0;
+        if (!s_on.RewardExperience)
+            xp = 0;
+        if (!s_on.RewardSeals)
+            seals = 0;
+
         if (money)
             player->ModifyMoney(int64(money));
         if (xp)
             player->GiveXP(xp, nullptr);
 
         // The ledger. The zone counts only if a board stands in it - the set
-        // that earns a title is "every zone with a board".
+        // that earns a title is "every zone with a board". With the Ledger
+        // switched off nothing is counted, so ranks and the zone set stand
+        // still; seals are their own switch.
         Ledger after;
         uint8 rankBefore = 0;
         {
             std::lock_guard<std::mutex> guard(g_lock);
             Ledger& ledger = g_ledgers[player->GetGUID().GetRawValue()];
             rankBefore = RankFor(ledger.Collected);
-            ++ledger.Collected;
-            switch (notice.Type)
+            if (s_on.Ledger)
             {
-                case Kind::Hunt:     ++ledger.Hunts;     break;
-                case Kind::Mokgora:  ++ledger.Mokgora;   break;
-                case Kind::Recovery: ++ledger.Recovered; break;
+                ++ledger.Collected;
+                switch (notice.Type)
+                {
+                    case Kind::Hunt:     ++ledger.Hunts;     break;
+                    case Kind::Mokgora:  ++ledger.Mokgora;   break;
+                    case Kind::Recovery: ++ledger.Recovered; break;
+                }
+                ledger.Zones.insert(notice.ZoneId);
             }
             ledger.Seals += seals;
-            ledger.Zones.insert(notice.ZoneId);
             after = ledger;
         }
 
         SaveLedger(player->GetGUID(), after);
-        if (s_tablesReady && notice.ZoneId)
+        if (s_tablesReady && s_on.Ledger && notice.ZoneId)
             CharacterDatabase.PExecute(
                 "INSERT INTO character_bounty_ledger_zone (guid, zoneId, collected) VALUES ({}, {}, 1) "
                 "ON DUPLICATE KEY UPDATE collected = collected + 1",
                 player->GetGUID().GetCounter(), notice.ZoneId);
 
-        std::string paid = MoneyText(money);
+        std::vector<std::string> paidParts;
+        if (money)
+            paidParts.push_back(MoneyText(money));
         if (xp)
-            paid += Trinity::StringFormat(", {} experience", xp);
+            paidParts.push_back(Trinity::StringFormat("{} experience", xp));
         if (seals)
-            paid += Trinity::StringFormat(", {} seal{}", seals, seals == 1 ? "" : "s");
-        Tell(player, Trinity::StringFormat("You hand in the notice on {}: {}.", notice.QuarryName, paid));
+            paidParts.push_back(Trinity::StringFormat("{} seal{}", seals, seals == 1 ? "" : "s"));
+        std::string paid;
+        for (std::string const& part : paidParts)
+            paid += (paid.empty() ? "" : ", ") + part;
+        Tell(player, paid.empty()
+            ? Trinity::StringFormat("You hand in the notice on {}.", notice.QuarryName)
+            : Trinity::StringFormat("You hand in the notice on {}: {}.", notice.QuarryName, paid));
 
-        WriteKeepsake(player, notice, board);
+        if (s_on.Keepsakes)
+            WriteKeepsake(player, notice, board);
 
         uint8 const rankAfter = RankFor(after.Collected);
-        if (rankAfter > rankBefore)
+        if (s_on.Ledger && rankAfter > rankBefore)
         {
             Tell(player, Trinity::StringFormat("The Hunter's Ledger writes you up a rank: {}.", RankNames[rankAfter]));
             switch (rankAfter)
             {
-                case 1: Tell(player, "Notices now tell you where in a zone their quarry was last seen."); break;
-                case 2: Tell(player, "Notices now tell you how ready their quarry is for a fight."); break;
-                case 3: Tell(player, "Notices now tell you how much coin their quarry carries."); break;
-                default: break;
+                case 1:
+                    if (s_on.PerkArea)
+                        Tell(player, "Notices now tell you where in a zone their quarry was last seen.");
+                    break;
+                case 2:
+                    if (s_on.PerkTemper)
+                        Tell(player, "Notices now tell you how ready their quarry is for a fight.");
+                    break;
+                case 3:
+                    if (s_on.PerkCoin)
+                        Tell(player, "Notices now tell you how much coin their quarry carries.");
+                    break;
+                default:
+                    break;
             }
 
             if (rankAfter >= kTopRank)
             {
-                Tell(player, "You may now carry two notices at once.");
-                if (s_tabardItem && sObjectMgr->GetItemTemplate(s_tabardItem))
+                if (s_on.PerkTwoNotices)
+                    Tell(player, "You may now carry two notices at once.");
+                if (s_on.Tabard && s_tabardItem && sObjectMgr->GetItemTemplate(s_tabardItem))
                     if (Item* tabard = Item::CreateItem(s_tabardItem, 1, player))
                         GiveOrMail(player, tabard, board, "The Headsman's tabard",
                             "Wear it. Everybody on the boards will know what it means.");
@@ -1347,6 +1543,11 @@ namespace
         uint32 const stacks = Bounty::GetStacks(player);
         time_t const now = GameTime::GetGameTime();
 
+        if (!s_enabled || !s_on.Pardons)
+        {
+            Result(player, false, "The board is not selling pardons just now.");
+            return;
+        }
         if (!stacks)
         {
             Result(player, false, "Your name is not in anybody's ledger. There is nothing to pardon.");
@@ -1431,7 +1632,8 @@ namespace
         {
             std::lock_guard<std::mutex> guard(g_lock);
             for (Notice const& notice : g_notices)
-                if (notice.Quarry == death.Victim && !notice.Complete && notice.Type != Kind::Mokgora)
+                if (notice.Quarry == death.Victim && !notice.Complete && notice.Type != Kind::Mokgora &&
+                    KindOn(notice.Type))
                     candidates.emplace_back(notice.Id, notice.Holder);
 
             // A feud lasts until one of the two is dead.
@@ -1482,8 +1684,6 @@ namespace
 
     void Tick()
     {
-        RefreshStaleViews();
-
         if (!g_any.load(std::memory_order_relaxed))
             return;
 
@@ -1535,8 +1735,7 @@ namespace
             if (holder->GetQuestStatus(questId) == QUEST_STATUS_NONE && now > notice.TakenAt + 2)
             {
                 if (notice.Type == Kind::Mokgora && !notice.Complete)
-                    EndNotice(notice.Id, holder, EndReason::Refused, Trinity::StringFormat(
-                        "You tore up the Mok'gora notice. {} takes it as an insult - and is coming for you.",
+                    EndNotice(notice.Id, holder, EndReason::Refused, RefusalText("You tore up the Mok'gora notice.",
                         notice.QuarryName));
                 else
                     EndNotice(notice.Id, holder, EndReason::Abandoned, Trinity::StringFormat(
@@ -1544,7 +1743,9 @@ namespace
                 continue;
             }
 
-            if (notice.Complete)
+            // A kind switched off is frozen: nothing expires, hunts or pays
+            // until it is switched on again.
+            if (notice.Complete || !KindOn(notice.Type))
                 continue;
 
             if (now >= notice.ExpiresAt && !notice.Challenged && !notice.Dueling)
@@ -1604,9 +1805,9 @@ namespace
                     // Word on the road: on the hint clock with a rank, and the
                     // moment it changes zone without one.
                     uint8 const rank = RankOf(holder->GetGUID());
-                    bool const due = (rank >= 1 && now >= notice.NextHintAt) ||
+                    bool const due = (PerkOn(rank, 1, s_on.PerkArea) && now >= notice.NextHintAt) ||
                         quarry->GetZoneId() != notice.LastHintZone;
-                    if (due && quarry->IsAlive())
+                    if (due && s_on.Hints && quarry->IsAlive())
                     {
                         std::lock_guard<std::mutex> guard(g_lock);
                         if (Notice* stored = FindLocked(notice.Id))
@@ -1697,9 +1898,8 @@ namespace
             return;
 
         if (answer == Mokgora::BotChallengeAnswer::Declined || answer == Mokgora::BotChallengeAnswer::Lapsed)
-            EndNotice(id, ObjectAccessor::FindPlayer(target), EndReason::Refused, Trinity::StringFormat(
-                "You did not answer the Mok'gora. The notice is failed - and {} takes it personally. They are coming for you.",
-                name));
+            EndNotice(id, ObjectAccessor::FindPlayer(target), EndReason::Refused,
+                RefusalText("You did not answer the Mok'gora. The notice is failed.", name));
     }
 
     // ---------------------------------------------------------------- the gossip fallback
@@ -1709,13 +1909,15 @@ namespace
         ClearGossipMenuFor(player);
 
         uint32 shown = 0;
-        bool const warMode = BarracksHardcore::IsWarModeOptedIn(player);
+        bool const hunts = KindOn(Kind::Hunt) &&
+            (!s_on.HuntRequireWarMode || BarracksHardcore::IsWarModeOptedIn(player));
+        bool const challenges = KindOn(Kind::Mokgora);
 
         // Anybody, anywhere, carrying your gear first: that is the notice the
         // reader most wants and can most easily miss.
         for (auto const& [guid, bot] : ObjectAccessor::GetPlayers())
         {
-            if (shown >= 6)
+            if (shown >= 6 || !KindOn(Kind::Recovery))
                 break;
             if (!IsWorldBot(bot) || !CarriesGearOf(bot, player->GetGUID()))
                 continue;
@@ -1738,13 +1940,16 @@ namespace
 
             std::string const who = Trinity::StringFormat("{} (level {} {})", BountyBoard::NoticeName(bot),
                 uint32(bot->GetLevel()), ClassWord(bot->GetClass()));
-            if (warMode)
+            if (hunts)
             {
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Hunt " + who, kSenderTakeHunt, bot->GetGUID().GetCounter());
                 ++shown;
             }
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Mok'gora: " + who, kSenderTakeMokgora, bot->GetGUID().GetCounter());
-            ++shown;
+            if (challenges)
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Mok'gora: " + who, kSenderTakeMokgora, bot->GetGUID().GetCounter());
+                ++shown;
+            }
         }
 
         if (!shown)
@@ -1813,20 +2018,24 @@ namespace BountyNotices
             uint32 flags = 0;
             if (mine.count(bot->GetGUID().GetRawValue()))
                 flags |= 1;
-            if (CarriesGearOf(bot, viewer->GetGUID()))
+            if (s_on.ShowTakenFrom && CarriesGearOf(bot, viewer->GetGUID()))
                 flags |= 2;
-            if (challenged.count(bot->GetGUID().GetRawValue()))
+            if (KindOn(Kind::Mokgora) && challenged.count(bot->GetGUID().GetRawValue()))
                 flags |= 4;
 
-            if (!flags && rank == 0)
+            bool const area = PerkOn(rank, 1, s_on.PerkArea);
+            bool const temper = PerkOn(rank, 2, s_on.PerkTemper);
+            bool const coin = PerkOn(rank, 3, s_on.PerkCoin);
+            if (!flags && !area && !temper && !coin)
                 continue;
 
-            int32 const temper = rank >= 2 ? int32(playerbot::PveManager::GetBotTemperament(bot)) : -1;
-            int64 const coin = rank >= 3 ? int64(bot->GetMoney()) : -1;
-            std::string const area = rank >= 1 && bot->GetAreaId() != bot->GetZoneId()
+            int32 const temperValue = temper ? int32(playerbot::PveManager::GetBotTemperament(bot)) : -1;
+            int64 const coinValue = coin ? int64(bot->GetMoney()) : -1;
+            std::string const areaName = area && bot->GetAreaId() != bot->GetZoneId()
                 ? Scrubbed(AreaName(bot->GetAreaId())) : std::string();
 
-            out.Add(Trinity::StringFormat("{},{},{},{},{}", bot->GetGUID().GetCounter(), flags, temper, coin, area));
+            out.Add(Trinity::StringFormat("{},{},{},{},{}", bot->GetGUID().GetCounter(), flags, temperValue,
+                coinValue, areaName));
         }
         out.Flush();
     }
@@ -1839,7 +2048,7 @@ namespace BountyNotices
         std::string const head = std::to_string(bot->GetGUID().GetCounter()) + "|";
 
         Chunker owners(viewer, "BBPO", head);
-        for (TakenPiece const& piece : TakenFromBodies(bot))
+        for (TakenPiece const& piece : s_on.ShowTakenFrom ? TakenFromBodies(bot) : std::vector<TakenPiece>())
         {
             std::string owner;
             if (!sCharacterCache->GetCharacterNameByGuid(piece.Owner, owner))
@@ -1913,8 +2122,7 @@ namespace BountyNotices
             }
 
             if (kind == Kind::Mokgora)
-                EndNotice(id, player, EndReason::Refused, Trinity::StringFormat(
-                    "You tear up the Mok'gora notice. {} takes it as an insult - and is coming for you.", name));
+                EndNotice(id, player, EndReason::Refused, RefusalText("You tear up the Mok'gora notice.", name));
             else
                 EndNotice(id, player, EndReason::Abandoned, Trinity::StringFormat("You tear up the notice on {}.", name));
             return true;
@@ -1979,14 +2187,15 @@ namespace BountyNotices
 
     void AddGossipOptions(Player* player)
     {
-        if (!s_enabled || !s_tablesReady || !player)
+        if (!s_enabled || !s_on.Gossip || !s_tablesReady || !player)
             return;
 
-        AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Take a notice down.", kSenderMenu, 0);
+        if (KindOn(Kind::Hunt) || KindOn(Kind::Mokgora) || KindOn(Kind::Recovery))
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Take a notice down.", kSenderMenu, 0);
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, "My notices and the Hunter's Ledger.", kSenderLedger, 0);
 
         Ledger const ledger = LedgerCopy(player->GetGUID());
-        if (Bounty::GetStacks(player) && ledger.Seals >= s_pardonSeals)
+        if (s_on.Pardons && Bounty::GetStacks(player) && ledger.Seals >= s_pardonSeals)
             AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, Trinity::StringFormat(
                 "Buy a pardon. ({} seal{}: strike {} marks from your name.)",
                 s_pardonSeals, s_pardonSeals == 1 ? "" : "s", s_pardonStacks), kSenderPardon, 0);
@@ -1994,6 +2203,9 @@ namespace BountyNotices
 
     bool OnGossipSelect(Player* player, GameObject* board, uint32 sender, uint32 action)
     {
+        if (!s_enabled || !s_on.Gossip)
+            return false;
+
         switch (sender)
         {
             case kSenderMenu:
@@ -2033,9 +2245,23 @@ class custom_bounty_notices_world : public WorldScript
 public:
     custom_bounty_notices_world() : WorldScript("custom_bounty_notices_world") { }
 
+    // Every switch takes effect here, on a running realm: .reload config.
     void OnConfigLoad(bool /*reload*/) override
     {
         LoadNoticeConfig();
+        ApplySwitches();
+    }
+
+    static void ApplySwitches()
+    {
+        // The core rule and the dispatch are switched by their owners; the
+        // notices only say what they want.
+        PairStance::SetEnabled(s_on.Stances);
+        playerbot::PveManager::SetNoticeDispatchAllowed(s_enabled && s_on.Dispatch);
+
+        std::lock_guard<std::mutex> guard(g_lock);
+        ReconcileAllLocked();
+        UpdateAnyLocked();
     }
 
     void OnStartup() override
@@ -2107,6 +2333,9 @@ public:
             return;
         _sinceTick = 0;
 
+        // Views refresh whatever the switches say: switching the feature off
+        // is itself a change somebody's client has to be told about.
+        RefreshStaleViews();
         if (s_enabled)
             Tick();
     }
@@ -2120,9 +2349,11 @@ class custom_bounty_notices_player : public PlayerScript
 public:
     custom_bounty_notices_player() : PlayerScript("custom_bounty_notices_player") { }
 
+    // Loaded whether or not the feature is switched on, so switching it on
+    // with .reload config picks up everybody already online.
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
-        if (!s_enabled || !s_tablesReady || !player || BarracksHardcore::IsPlayerbot(player))
+        if (!s_tablesReady || !player || BarracksHardcore::IsPlayerbot(player))
             return;
 
         LoadLedger(player);
@@ -2203,7 +2434,7 @@ public:
 
     void OnLogout(Player* player) override
     {
-        if (!s_enabled || !player || !g_any.load(std::memory_order_relaxed))
+        if (!player || !g_any.load(std::memory_order_relaxed))
         {
             if (player)
             {

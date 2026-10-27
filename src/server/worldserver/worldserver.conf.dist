@@ -4827,6 +4827,201 @@ Centurion.BountyBoard.GameObjectEntry = 900310
 Centurion.BountyBoard.ReachYards = 15
 Centurion.BountyBoard.GossipTextId = 900310
 
+###################################################################################################
+# CENTURION BOUNTY-BOARD NOTICES (custom_bounty_notices.cpp, addon CENTURION_BountyBoard)
+#
+#    Every key below is read on .reload config and takes effect at once on a running realm - no
+#    rebuild, no restart. A part switched off stops immediately: its notices freeze (they stay in
+#    the quest log; nothing hunts, expires or pays until it is back on), and whatever it had put
+#    in force on the bots - truces, feuds, errands, guards - is taken back. Switching it on again
+#    restores all of it for whoever is online.
+#
+#    Centurion.BountyBoard.Notices.Enable
+#        Description: The whole feature. Off, the boards only list the bots, as before. Needs
+#                     quests 60010-60015 and items 4486/3557 in the world DB, and titles 210/211
+#                     in CharTitles.dbc for the titles; the character tables are created at startup.
+#        Default:     0 - (off)
+#
+#    Centurion.BountyBoard.Notices.Hunt.Enable
+#        Description: Hunt notices - find the bot the notice names and kill it.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Hunt.RequireWarMode
+#        Description: Only War Mode players may take hunt notices. 0 opens them to anyone: the
+#                     holder and their quarry are then hostile to each other War Mode or not.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Hunt.Escorts.Enable
+#        Description: A hunted bot aggressive enough (EscortTemper) calls one or two nearby bots
+#                     to guard it.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Mokgora.Enable
+#        Description: Mok'gora notices - the bot walks to the holder and challenges them to a
+#                     duel to the death. Needs Centurion.Mokgora.Enable = 1 as well.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Mokgora.Truce.Enable
+#        Description: On its way to the holder the challenger is not red and no blow lands
+#                     either way, War Mode or not.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Mokgora.FeudOnRefusal.Enable
+#        Description: Refusing the challenge, letting it lapse or tearing the notice up makes the
+#                     bot hostile to the holder (War Mode or not) and sends it after them, for
+#                     FeudMinutes or until one of them dies. 0 just fails the notice.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Recovery.Enable
+#        Description: Recovery notices - go after a bot carrying gear it took off your body.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Recovery.Feud.Enable
+#        Description: The thief and the holder are hostile to each other whatever War Mode says.
+#                     0 leaves only War Mode players able to fight it.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.ShowTakenFrom.Enable
+#        Description: The board marks gear a bot took off somebody's body, and whose it was
+#                     ("Thief" notices, the red corner and "Taken from X's body" on a poster).
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Hints.Enable
+#        Description: "Word on the road" chat lines telling a hunter where their quarry went.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Ledger.Enable
+#        Description: The Hunter's Ledger counts collected notices into ranks. 0 freezes every
+#                     rank and switches all four perks below off with it.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Ledger.Perk.Area.Enable        (Tracker: where in a zone)
+#    Centurion.BountyBoard.Notices.Ledger.Perk.Temper.Enable      (Bloodhound: temperament)
+#    Centurion.BountyBoard.Notices.Ledger.Perk.Coin.Enable        (Manhunter: coin carried)
+#    Centurion.BountyBoard.Notices.Ledger.Perk.TwoNotices.Enable  (Headsman: two notices at once)
+#        Description: What each Ledger rank reads off the board.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Keepsakes.Enable
+#        Description: Handing a notice in gives the readable poster (item KeepsakeItem).
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Tabard.Enable
+#        Description: Reaching Headsman gives the tabard (item TabardItem).
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Titles.Enable
+#        Description: Headsman (HeadsmanTitle) at the top rank, "the Relentless"
+#                     (RelentlessTitle) for a notice from every board zone.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Pardons.Enable
+#        Description: Seals buy pardons at a board: PardonStacks notoriety stacks struck off for
+#                     PardonSeals seals, once per PardonCooldownMinutes.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Reward.Money.Enable
+#    Centurion.BountyBoard.Notices.Reward.Experience.Enable
+#    Centurion.BountyBoard.Notices.Reward.Seals.Enable
+#        Description: What handing a notice in pays.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Gossip.Enable
+#        Description: The board's own menu for players without the addon (take a notice, the
+#                     Ledger, pardons).
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Stances.Enable
+#        Description: The core rule that lets one bot and one player be friendly (a truce) or
+#                     hostile (a feud) whatever War Mode says. 0 is the emergency switch: truces,
+#                     feuds and recovery/hunt hostility all stop, and the rest keeps working.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Dispatch.Enable
+#        Description: A bot on a notice errand far from its player may be landed at the edge of
+#                     their sight (never closer than 210 yards). 0 makes it walk the whole way.
+#        Default:     1
+#
+#    Tuning (all reloadable):
+#        MinLevel 10, Minutes 120 (a notice's life), HintSeconds 180, QuarryGoneMinutes 20,
+#        LevelsAbove 5 (no notice on a bot more levels above you, none on a grey one),
+#        FeudMinutes 10, EscortTemper 60 / EscortTemperTwo 80 (1 / 2 guards), EscortMax 2,
+#        EscortReachYards 400, CreditYards 100 (a group member this close shares the kill),
+#        MoneyBase 2000 + MoneyPerLevel 150 x quarry level + MoneyPerKill 300 x its kills (KillCap
+#        20), HuntBubbles 2 / MokgoraBubbles 3 / RecoveryBubbles 0 (twentieths of a level),
+#        MokgoraMoney 1.5 / RecoveryMoney 0.5 (money multipliers), CappedMoney 1.5 (at the level
+#        cap, instead of experience), SealsHunt 1 / SealsMokgora 2 / SealsRecovery 1,
+#        RankAt "5,15,35,75", KeepsakeItem 4486, TabardItem 3557, HeadsmanTitle 210,
+#        RelentlessTitle 211, PardonSeals 1, PardonStacks 10, PardonCooldownMinutes 30,
+#        HuntQuest1/2 60010/60013, MokgoraQuest1/2 60011/60014, RecoveryQuest1/2 60012/60015.
+#
+
+Centurion.BountyBoard.Notices.Enable = 0
+Centurion.BountyBoard.Notices.Hunt.Enable = 1
+Centurion.BountyBoard.Notices.Hunt.RequireWarMode = 1
+Centurion.BountyBoard.Notices.Hunt.Escorts.Enable = 1
+Centurion.BountyBoard.Notices.Mokgora.Enable = 1
+Centurion.BountyBoard.Notices.Mokgora.Truce.Enable = 1
+Centurion.BountyBoard.Notices.Mokgora.FeudOnRefusal.Enable = 1
+Centurion.BountyBoard.Notices.Recovery.Enable = 1
+Centurion.BountyBoard.Notices.Recovery.Feud.Enable = 1
+Centurion.BountyBoard.Notices.ShowTakenFrom.Enable = 1
+Centurion.BountyBoard.Notices.Hints.Enable = 1
+Centurion.BountyBoard.Notices.Ledger.Enable = 1
+Centurion.BountyBoard.Notices.Ledger.Perk.Area.Enable = 1
+Centurion.BountyBoard.Notices.Ledger.Perk.Temper.Enable = 1
+Centurion.BountyBoard.Notices.Ledger.Perk.Coin.Enable = 1
+Centurion.BountyBoard.Notices.Ledger.Perk.TwoNotices.Enable = 1
+Centurion.BountyBoard.Notices.Keepsakes.Enable = 1
+Centurion.BountyBoard.Notices.Tabard.Enable = 1
+Centurion.BountyBoard.Notices.Titles.Enable = 1
+Centurion.BountyBoard.Notices.Pardons.Enable = 1
+Centurion.BountyBoard.Notices.Reward.Money.Enable = 1
+Centurion.BountyBoard.Notices.Reward.Experience.Enable = 1
+Centurion.BountyBoard.Notices.Reward.Seals.Enable = 1
+Centurion.BountyBoard.Notices.Gossip.Enable = 1
+Centurion.BountyBoard.Notices.Stances.Enable = 1
+Centurion.BountyBoard.Notices.Dispatch.Enable = 1
+
+Centurion.BountyBoard.Notices.MinLevel = 10
+Centurion.BountyBoard.Notices.Minutes = 120
+Centurion.BountyBoard.Notices.HintSeconds = 180
+Centurion.BountyBoard.Notices.QuarryGoneMinutes = 20
+Centurion.BountyBoard.Notices.LevelsAbove = 5
+Centurion.BountyBoard.Notices.FeudMinutes = 10
+Centurion.BountyBoard.Notices.EscortTemper = 60
+Centurion.BountyBoard.Notices.EscortTemperTwo = 80
+Centurion.BountyBoard.Notices.EscortMax = 2
+Centurion.BountyBoard.Notices.EscortReachYards = 400
+Centurion.BountyBoard.Notices.CreditYards = 100
+Centurion.BountyBoard.Notices.MoneyBase = 2000
+Centurion.BountyBoard.Notices.MoneyPerLevel = 150
+Centurion.BountyBoard.Notices.MoneyPerKill = 300
+Centurion.BountyBoard.Notices.KillCap = 20
+Centurion.BountyBoard.Notices.HuntBubbles = 2
+Centurion.BountyBoard.Notices.MokgoraBubbles = 3
+Centurion.BountyBoard.Notices.RecoveryBubbles = 0
+Centurion.BountyBoard.Notices.MokgoraMoney = 1.5
+Centurion.BountyBoard.Notices.RecoveryMoney = 0.5
+Centurion.BountyBoard.Notices.CappedMoney = 1.5
+Centurion.BountyBoard.Notices.SealsHunt = 1
+Centurion.BountyBoard.Notices.SealsMokgora = 2
+Centurion.BountyBoard.Notices.SealsRecovery = 1
+Centurion.BountyBoard.Notices.RankAt = "5,15,35,75"
+Centurion.BountyBoard.Notices.KeepsakeItem = 4486
+Centurion.BountyBoard.Notices.TabardItem = 3557
+Centurion.BountyBoard.Notices.HeadsmanTitle = 210
+Centurion.BountyBoard.Notices.RelentlessTitle = 211
+Centurion.BountyBoard.Notices.PardonSeals = 1
+Centurion.BountyBoard.Notices.PardonStacks = 10
+Centurion.BountyBoard.Notices.PardonCooldownMinutes = 30
+Centurion.BountyBoard.Notices.HuntQuest1 = 60010
+Centurion.BountyBoard.Notices.HuntQuest2 = 60013
+Centurion.BountyBoard.Notices.MokgoraQuest1 = 60011
+Centurion.BountyBoard.Notices.MokgoraQuest2 = 60014
+Centurion.BountyBoard.Notices.RecoveryQuest1 = 60012
+Centurion.BountyBoard.Notices.RecoveryQuest2 = 60015
+
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217

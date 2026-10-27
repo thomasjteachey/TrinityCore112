@@ -19450,6 +19450,9 @@ namespace
     // long as somebody is after them. Same lock.
     std::unordered_set<uint64> g_NoticeHeldBots;
     std::atomic<bool> g_AnyNoticeErrand{ false };
+    // Centurion.BountyBoard.Notices.Dispatch.Enable: whether a bot on an errand
+    // may be landed near its person, or must walk the whole way.
+    std::atomic<bool> g_NoticeDispatchAllowed{ true };
 
     // Close enough to say it to their face: Mok'gora's own challenge range is
     // ten yards, and a step inside it leaves room for the person to shuffle.
@@ -19486,6 +19489,9 @@ namespace
     // bot in a fight, a watcher in the way) and this simply asks again.
     void RequestNoticeDispatch(uint64 botRaw, ObjectGuid target)
     {
+        if (!g_NoticeDispatchAllowed.load(std::memory_order_relaxed))
+            return;
+
         PveTimePoint const now = PveClock::now();
         {
             std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
@@ -19608,7 +19614,7 @@ namespace
                 if (errand.Arrived)
                     SetNoticeErrandArrived(rawGuid, false);
 
-                if (distance > kNoticeWalkYards)
+                if (distance > kNoticeWalkYards && g_NoticeDispatchAllowed.load(std::memory_order_relaxed))
                 {
                     RequestNoticeDispatch(rawGuid, errand.Target);
                     return true;
@@ -19668,7 +19674,7 @@ namespace
                 if (state.engaged)
                     DisengagePveCombat(bot, state);
 
-                if (distance > kNoticeWalkYards)
+                if (distance > kNoticeWalkYards && g_NoticeDispatchAllowed.load(std::memory_order_relaxed))
                 {
                     RequestNoticeDispatch(rawGuid, errand.Target);
                     return true;
@@ -19753,6 +19759,11 @@ namespace playerbot
         std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
         uint64 const raw = bot.GetRawValue();
         return g_NoticeHeldBots.count(raw) != 0 || g_NoticeErrands.count(raw) != 0;
+    }
+
+    void PveManager::SetNoticeDispatchAllowed(bool allowed)
+    {
+        g_NoticeDispatchAllowed.store(allowed, std::memory_order_relaxed);
     }
 
     uint8 PveManager::GetBotTemperament(Player const* bot)

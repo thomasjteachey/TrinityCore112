@@ -44,6 +44,7 @@ namespace
     std::shared_mutex g_lock;
     std::map<PairKey, PairStance::Stance> g_stances;
     std::atomic<bool> g_any{ false };
+    std::atomic<bool> g_enabled{ true };
 
     std::mutex g_staleLock;
     std::unordered_set<uint64> g_stale;
@@ -104,7 +105,9 @@ namespace PairStance
 
     void ClearAllFor(ObjectGuid who)
     {
-        if (who.IsEmpty() || !Any())
+        // The registry, not Any(): a pair must still be clearable while the
+        // switch is off, or switching it back on would resurrect it.
+        if (who.IsEmpty() || !g_any.load(std::memory_order_relaxed))
             return;
 
         uint64 const raw = who.GetRawValue();
@@ -162,7 +165,18 @@ namespace PairStance
 
     bool Any()
     {
-        return g_any.load(std::memory_order_relaxed);
+        return g_enabled.load(std::memory_order_relaxed) && g_any.load(std::memory_order_relaxed);
+    }
+
+    void SetEnabled(bool enabled)
+    {
+        if (g_enabled.exchange(enabled) == enabled)
+            return;
+
+        // Every pair just changed colour, one way or the other.
+        std::shared_lock<std::shared_mutex> guard(g_lock);
+        for (auto const& [key, stance] : g_stances)
+            MarkStale(key.first, key.second);
     }
 
     bool TakeStaleViews(std::vector<ObjectGuid>& out)
