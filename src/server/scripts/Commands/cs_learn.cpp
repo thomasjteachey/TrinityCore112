@@ -24,15 +24,20 @@ EndScriptData */
 
 #include "ScriptMgr.h"
 #include "Chat.h"
+#include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "Language.h"
 #include "ObjectMgr.h"
+#include "Opcodes.h"
 #include "Pet.h"
 #include "Player.h"
 #include "RBAC.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "StringFormat.h"
+#include "WorldPacket.h"
 #include "WorldSession.h"
+#include <sstream>
 
 using namespace Trinity::ChatCommands;
 class learn_commandscript : public CommandScript
@@ -63,6 +68,7 @@ public:
         static ChatCommandTable learnCommandTable =
         {
             { "",       HandleLearnCommand,                  LANG_COMMAND_LEARN_HELP,               rbac::RBAC_PERM_COMMAND_LEARN,               Console::No },
+            { "taxi",   HandleLearnTaxiCommand,                                                     rbac::RBAC_PERM_COMMAND_LEARN,               Console::Yes },
             { "all",    learnAllCommandTable },
             { "my",     learnMyCommandTable }
         };
@@ -114,6 +120,83 @@ public:
         if (GetTalentSpellCost(spell->GetFirstRankSpell()->Id))
             targetPlayer->SendTalentsInfoData(false);
 
+        return true;
+    }
+
+    // .learn taxi <node> [node...] [player]
+    // Teaches flight paths by TaxiNodes id. Node ids come first because a bare
+    // number in the player slot would be read as a character guid. With no name
+    // it uses the selected player, or yourself. An online character learns them
+    // at once (the client re-reads known nodes each time a flight map opens); an
+    // offline one gets them written to characters.taximask for its next login.
+    // Console::Yes, so it also works over SOAP.
+    static bool HandleLearnTaxiCommand(ChatHandler* handler, std::vector<uint32> const& nodes, Optional<PlayerIdentifier> player)
+    {
+        if (!player)
+            player = PlayerIdentifier::FromTargetOrSelf(handler);
+        if (!player)
+        {
+            handler->SendSysMessage(LANG_PLAYER_NOT_FOUND);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        // Only nodes that are in sTaxiNodesMask: LoadTaxiMask drops every other
+        // bit at login, so teaching one would not survive a relog.
+        for (uint32 node : nodes)
+        {
+            uint32 const field = (node - 1) / 32;
+            if (!node || field >= TaxiMaskSize || !sTaxiNodesStore.LookupEntry(node)
+                || !(sTaxiNodesMask[field] & (1u << ((node - 1) % 32))))
+            {
+                handler->SendSysMessage(Trinity::StringFormat("{} is not a flight path node.", node));
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+        }
+
+        uint32 learned = 0;
+        if (Player* target = player->GetConnectedPlayer())
+        {
+            for (uint32 node : nodes)
+                if (target->m_taxi.SetTaximaskNode(node))
+                    ++learned;
+
+            if (learned)
+            {
+                WorldPacket msg(SMSG_NEW_TAXI_PATH, 0); // "New flight path discovered!"
+                target->SendDirectMessage(&msg);
+            }
+        }
+        else
+        {
+            QueryResult result = CharacterDatabase.PQuery("SELECT taximask FROM characters WHERE guid = {}", player->GetGUID().GetCounter());
+            if (!result)
+            {
+                handler->SendSysMessage(LANG_PLAYER_NOT_FOUND);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+
+            PlayerTaxi taxi;
+            taxi.LoadTaxiMask(result->Fetch()[0].GetString());
+            for (uint32 node : nodes)
+                if (taxi.SetTaximaskNode(node))
+                    ++learned;
+
+            if (learned)
+            {
+                std::ostringstream ss;
+                ss << taxi;
+                CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_TAXIMASK);
+                stmt->setString(0, ss.str());
+                stmt->setUInt32(1, player->GetGUID().GetCounter());
+                CharacterDatabase.Execute(stmt);
+            }
+        }
+
+        handler->SendSysMessage(Trinity::StringFormat("{} learned {} new flight path(s), {} already known{}.",
+            player->GetName(), learned, nodes.size() - learned, player->IsConnected() ? "" : " (offline: saved for next login)"));
         return true;
     }
 
