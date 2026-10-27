@@ -639,6 +639,7 @@ namespace
     float ScoreItemForSpec(Player const* bot, ItemTemplate const* proto);
     GameObject* FindRegisteredDeathChest(Player* bot, uint32 entry, float maxDistance);
     bool IsAuctionableSurplus(Player* bot, Item* item, bool ignoreLotSize = false);
+    uint32 CountFreeBagSlots(Player* bot);
     bool BotSkins(Player const* bot);
     bool CanHuntDevilsaur(Player const* bot, Creature const* creature);
     void HoldLootFromAuction(ObjectGuid itemGuid, uint32 seconds, ObjectGuid owner);
@@ -999,6 +1000,111 @@ namespace
         }
 
         return restoresMana;
+    }
+
+    // A potion, elixir or flask - alchemy stock people buy.
+    //
+    // Not by subclass alone: the classic import filed most potions under Flask
+    // (Minor Healing Potion is subclass 3) and a few under plain Consumable. The
+    // shared cooldown category is the reliable signal - 4 is the potion
+    // cooldown, 79 the elixir one - so either test is enough. Food, drink and
+    // booze have their own rules elsewhere and are never potions here.
+    constexpr uint32 kPotionSpellCategory = 4;
+    constexpr uint32 kElixirSpellCategory = 79;
+
+    bool IsPotionTemplate(ItemTemplate const* proto)
+    {
+        if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE || !ConsumableUseSpell(proto))
+            return false;
+
+        if (IsFoodTemplate(proto) || IsDrinkTemplate(proto) || IsBoozeTemplate(proto))
+            return false;
+
+        switch (proto->SubClass)
+        {
+            case ITEM_SUBCLASS_POTION:
+            case ITEM_SUBCLASS_ELIXIR:
+            case ITEM_SUBCLASS_FLASK:
+                return true;
+            default:
+                break;
+        }
+
+        uint32 const category = proto->Spells[0].SpellCategory;
+        return category == kPotionSpellCategory || category == kElixirSpellCategory;
+    }
+
+    // How much one swallow hands back directly: health, or mana. A direct heal
+    // or energize only, the same test the PvP potion picker uses, so this keeps
+    // exactly the potions a bot would reach for in a fight.
+    int32 RestorePotionAmount(Player const* bot, ItemTemplate const* proto, bool mana)
+    {
+        SpellInfo const* spellInfo = ConsumableUseSpell(proto);
+        if (!spellInfo)
+            return 0;
+
+        int32 amount = 0;
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if (!effect.IsEffect())
+                continue;
+
+            if (!mana && effect.Effect == SPELL_EFFECT_HEAL)
+                amount = std::max(amount, effect.CalcValue(bot));
+            else if (mana && effect.Effect == SPELL_EFFECT_ENERGIZE && effect.MiscValue == int32(POWER_MANA))
+                amount = std::max(amount, effect.CalcValue(bot));
+        }
+        return amount;
+    }
+
+    // The potions a bot keeps for itself: its single best healing potion, and
+    // its best mana potion if it has a mana bar. Everything else it carries is
+    // auction stock. Best is judged among what it can drink at its level.
+    bool IsKeptRestorePotion(Player* bot, ItemTemplate const* proto)
+    {
+        if (!bot || !IsPotionTemplate(proto) || proto->RequiredLevel > bot->GetLevel())
+            return false;
+
+        bool const manaUser = UsesMana(bot);
+        bool const heals = RestorePotionAmount(bot, proto, false) > 0;
+        bool const restoresMana = manaUser && RestorePotionAmount(bot, proto, true) > 0;
+        if (!heals && !restoresMana)
+            return false;
+
+        uint32 bestHeal = 0, bestMana = 0;
+        int32 bestHealAmount = 0, bestManaAmount = 0;
+        ForEachBagItem(bot, [&](Item* item, uint8 /*bag*/, uint8 /*slot*/)
+        {
+            ItemTemplate const* held = item->GetTemplate();
+            if (!IsPotionTemplate(held) || held->RequiredLevel > bot->GetLevel())
+                return;
+
+            if (int32 const amount = RestorePotionAmount(bot, held, false); amount > bestHealAmount)
+            {
+                bestHealAmount = amount;
+                bestHeal = held->ItemId;
+            }
+
+            if (manaUser)
+                if (int32 const amount = RestorePotionAmount(bot, held, true); amount > bestManaAmount)
+                {
+                    bestManaAmount = amount;
+                    bestMana = held->ItemId;
+                }
+        });
+
+        return (heals && proto->ItemId == bestHeal) || (restoresMana && proto->ItemId == bestMana);
+    }
+
+    // A potion the hoard trimmers must leave alone: the auction house will take
+    // it on the next listing run, and there is still room to wait for that.
+    // With selling off, or the pack down to its last slot, the trimmers go back
+    // to treating it like any other consumable.
+    bool PotionWaitsForAuction(Player* bot, Item* item)
+    {
+        ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+        return IsPotionTemplate(proto) && playerbot::PveManager::GetConfig().auctionSellEnabled &&
+            CountFreeBagSlots(bot) >= 2 && IsAuctionableSurplus(bot, item, /*ignoreLotSize*/ true);
     }
 
     void RemoveRestAuras(Player* player)
@@ -1805,6 +1911,10 @@ namespace
             if (proto->Class == ITEM_CLASS_MISC && item->IsNotEmptyBag())
                 return;
 
+            // Spare potions are auction stock now; the listing pass takes them.
+            if (PotionWaitsForAuction(bot, item))
+                return;
+
             if (++seen[proto->ItemId] > cap)
                 surplus.emplace_back(bag, slot);
         });
@@ -1847,6 +1957,10 @@ namespace
         {
             ItemTemplate const* proto = item->GetTemplate();
             if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
+                return;
+
+            // Not counted, so not trimmed: see DiscardHoardedDuplicates.
+            if (PotionWaitsForAuction(bot, item))
                 return;
 
             held[proto->ItemId] += item->GetCount();
@@ -5450,11 +5564,15 @@ namespace
                 sellable = !wantsToWear;
             }
 
-            // Mana potions on a rage or energy user. Sold rather than binned,
-            // because a merchant pays for them and the bot will never drink one.
+            // Mana potions on a rage or energy user. The bot will never drink
+            // one, but a person will buy it, so it goes to the house like any
+            // other spare potion. The merchant only gets it when that route is
+            // closed: selling switched off, the potion not listable, or the
+            // pack too full to wait for the next listing run.
             if (!sellable && IsUselessManaConsumable(bot, proto) &&
                 !IsQuestRequiredItem(bot, proto->ItemId))
-                sellable = true;
+                sellable = !playerbot::PveManager::GetConfig().auctionSellEnabled ||
+                CountFreeBagSlots(bot) < 2 || !IsAuctionableSurplus(bot, item);
 
             // A stat scroll the bot is too low to read - but only once the house
             // has a copy up for people to buy. Until then it waits for the
@@ -12026,14 +12144,20 @@ namespace
         }
 
         // Never sell the tools of the trade: food, water, ammunition, bandages,
-        // potions, quest items or keys.
+        // quest items or keys.
         switch (proto->Class)
         {
         case ITEM_CLASS_CONSUMABLE:
-            // ...with one exception: a stat scroll the house has none of. One
+            // ...with two exceptions. A stat scroll the house has none of: one
             // goes up so a person can always buy one; the rest are read (see
             // BuffScrollTable).
             if (GetBuffScroll(proto->ItemId) && !IsScrollOnAuction(bot, proto->ItemId))
+                break;
+            // And potions, elixirs and flasks, which people want and bots only
+            // hoard. The bot keeps its best healing potion, and its best mana
+            // potion if it uses mana - what it drinks in a fight - and lists the
+            // rest instead of vendoring or trimming them.
+            if (IsPotionTemplate(proto) && !IsKeptRestorePotion(bot, proto))
                 break;
             return false;
         case ITEM_CLASS_QUEST:
