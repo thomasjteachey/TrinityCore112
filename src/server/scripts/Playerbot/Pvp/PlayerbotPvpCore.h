@@ -291,6 +291,17 @@ public:
     // SPELLMOD_RANGE modifiers - Hawk Eye, the Rift's Summoner's Focus - as
     // Spell::GetMinMaxRange takes them, before combat reach.
     static float SpellMaxRange(Unit const* caster, SpellInfo const* spellInfo);
+    // The same against one target: its friendly or hostile range, as
+    // WorldObject::GetSpellMaxRangeForTarget picks.
+    static float SpellMaxRange(Unit const* caster, SpellInfo const* spellInfo, Unit const* target);
+    // What the bot's SPELLMOD_RANGE modifiers leave of its own class spells'
+    // reach, never above 1: the median over the class spells it knows that are
+    // cast at a range, worked out again every two seconds. The configured cast
+    // and heal distances and the ranged positioning bands are multiplied by it,
+    // so a match that shortens ranges (Summoner's Rift's Summoner's Focus)
+    // brings bots in with it, and a talent that lengthens them (Hawk Eye)
+    // leaves them standing where they always did.
+    static float SpellRangeFactor(Player const* player);
 
     static PvpValues CollectValues(Player const* player);
     // PvE combat engagement: the PvE manager marks a bot as fighting creatures

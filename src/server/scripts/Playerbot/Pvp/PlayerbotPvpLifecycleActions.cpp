@@ -2748,7 +2748,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return false;
     }
 
-    CombatPositioningProfile GetCombatPositioningProfile(Player const* player)
+    CombatPositioningProfile BaseCombatPositioningProfile(Player const* player)
     {
         if (!player)
             return {};
@@ -2805,6 +2805,25 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         case CLASS_DRUID: return { 4.0f, 18.0f, 28.0f, true, true, true, "druid-hybrid" };
         default: return { 0.0f, 3.0f, 8.0f, false, false, true, "default-melee" };
         }
+    }
+
+    // The band a ranged bot holds is where its spells reach, so it shrinks with
+    // them (PvpCore::SpellRangeFactor): at the Rift's shorter ranges a mage
+    // holding 27-36 yards out could cast nothing, and the hold-band stop fought
+    // the class layer's walk back into range. The near edge keeps it off melee
+    // and stays put. Hunters are left alone: DriveHunterKiteLoop already holds
+    // them inside their true modified Auto Shot range.
+    CombatPositioningProfile GetCombatPositioningProfile(Player const* player)
+    {
+        CombatPositioningProfile profile = BaseCombatPositioningProfile(player);
+        if (!player || !profile.primarilyRanged || player->GetClass() == CLASS_HUNTER)
+            return profile;
+        float const factor = playerbot::PvpCore::SpellRangeFactor(player);
+        if (factor >= 1.0f)
+            return profile;
+        profile.preferredIdealRange = std::max(profile.preferredMinRange, profile.preferredIdealRange * factor);
+        profile.preferredMaxPressureRange = std::max(profile.preferredIdealRange, profile.preferredMaxPressureRange * factor);
+        return profile;
     }
 
     bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)

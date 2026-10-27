@@ -2846,7 +2846,7 @@ float ComputeLosRecoveryRange(Player const* player, Unit const* target, float ma
     float const closeFloor = std::max(3.0f, playerbot::PvpCore::GetConfig().closeRange);
     float const upperBound = maxRange > 0.0f
         ? std::max(1.0f, maxRange - 3.0f)
-        : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+        : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange * playerbot::PvpCore::SpellRangeFactor(player) - 1.0f);
 
     // Keep recovery closer than max cast distance to re-acquire LOS, but avoid
     // forcing a near-melee collapse that causes immediate spacing corrections.
@@ -6022,7 +6022,7 @@ void PvpClassActions::DismountToFight(Player* player, Unit const* victim)
         if (ammoReady)
             if (SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75))
             {
-                float const shootReach = player->GetSpellMaxRangeForTarget(victim, autoShotInfo);
+                float const shootReach = playerbot::PvpCore::SpellMaxRange(player, autoShotInfo, victim);
                 inReach = shootReach > 0.0f && player->IsWithinDistInMap(victim, shootReach);
             }
     }
@@ -6658,7 +6658,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 }
 
                 float desiredRange = std::max(1.0f,
-                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f));
+                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange * PvpCore::SpellRangeFactor(player) - 1.0f));
                 Unit* approachTarget = movementTarget;
                 if (approachTarget && !player->IsValidAttackTarget(approachTarget))
                 {

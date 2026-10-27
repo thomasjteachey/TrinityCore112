@@ -1022,6 +1022,10 @@ bool IsHunterWithinAutoShotBand(Player const* player, Unit const* target)
     float GetConfiguredMeleeRange() { return g_PvpCoreConfig.meleeRange; }
     float GetConfiguredCloseRange() { return g_PvpCoreConfig.closeRange; }
     float GetConfiguredLongRange() { return g_PvpCoreConfig.longRange; }
+    // The configured cast and heal distances as this bot's range modifiers
+    // leave its spells (PvpCore::SpellRangeFactor), for where it walks to.
+    float GetConfiguredSpellRangeFor(Player const* player) { return GetConfiguredSpellRange() * playerbot::PvpCore::SpellRangeFactor(player); }
+    float GetConfiguredHealRangeFor(Player const* player) { return GetConfiguredHealRange() * playerbot::PvpCore::SpellRangeFactor(player); }
 
 bool IsHunterExactDeadZone(Player const* player, Unit const* target)
 {
@@ -9096,6 +9100,76 @@ float PvpCore::SpellMaxRange(Unit const* caster, SpellInfo const* spellInfo)
     return range;
 }
 
+float PvpCore::SpellMaxRange(Unit const* caster, SpellInfo const* spellInfo, Unit const* target)
+{
+    if (!spellInfo || !caster || !target)
+        return SpellMaxRange(caster, spellInfo);
+    float range = caster->GetSpellMaxRangeForTarget(target, spellInfo);
+    if (range > 0.0f)
+        if (Player* modOwner = caster->GetSpellModOwner())
+            modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_RANGE, range, nullptr);
+    return range;
+}
+
+namespace
+{
+    struct SpellRangeFactorState
+    {
+        float factor = 1.0f;
+        uint32 computedMs = 0;
+    };
+
+    std::unordered_map<uint64, SpellRangeFactorState> g_SpellRangeFactorByBotGuid;
+    constexpr uint32 kSpellRangeFactorRefreshMs = 2000;
+
+    float ComputeSpellRangeFactor(Player const* player)
+    {
+        ChrClassesEntry const* classEntry = sChrClassesStore.LookupEntry(player->GetClass());
+        if (!classEntry || !classEntry->SpellClassSet)
+            return 1.0f;
+        Player* modOwner = player->GetSpellModOwner();
+        if (!modOwner)
+            return 1.0f;
+
+        std::vector<float> ratios;
+        for (PlayerSpellMap::value_type const& known : player->GetSpellMap())
+        {
+            if (known.second.state == PLAYERSPELL_REMOVED || known.second.disabled || !known.second.active)
+                continue;
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(known.first);
+            if (!spellInfo || spellInfo->SpellFamilyName != classEntry->SpellClassSet || spellInfo->IsPassive() ||
+                !spellInfo->RangeEntry || (spellInfo->RangeEntry->Flags & SPELL_RANGE_MELEE))
+                continue;
+            float const raw = spellInfo->GetMaxRange(false);
+            if (raw <= 0.0f || raw >= 50000.0f)
+                continue;
+            float modded = raw;
+            modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_RANGE, modded, nullptr);
+            ratios.push_back(modded / raw);
+        }
+        if (ratios.empty())
+            return 1.0f;
+        std::nth_element(ratios.begin(), ratios.begin() + ratios.size() / 2, ratios.end());
+        return std::clamp(ratios[ratios.size() / 2], 0.1f, 1.0f);
+    }
+}
+
+float PvpCore::SpellRangeFactor(Player const* player)
+{
+    if (!player)
+        return 1.0f;
+    // One bot is only ever updated on its own map's thread, so the value is
+    // this thread's to touch; only the container's structure is shared.
+    SpellRangeFactorState& state = playerbot::LockedGetOrCreate(g_SpellRangeFactorByBotGuid, player->GetGUID().GetRawValue());
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (!state.computedMs || nowMs - state.computedMs >= kSpellRangeFactorRefreshMs)
+    {
+        state.factor = ComputeSpellRangeFactor(player);
+        state.computedMs = std::max<uint32>(1, nowMs);
+    }
+    return state.factor;
+}
+
 bool PvpCore::CanMageBlinkOutOfControl(Player const* player)
 {
     return IsMageBlinkableControl(player) && IsSpellReady(player, 1953);
@@ -9811,11 +9885,11 @@ PvpValues PvpCore::CollectValues(Player const* player)
         if (losRecoveryTarget && !player->IsWithinLOSInMap(losRecoveryTarget) && !movementPreventedByRoot)
         {
             SpellInfo const* recoverySpellInfo = sSpellMgr->GetSpellInfo(context.spellId);
-            float const spellMaxRange = recoverySpellInfo ? player->GetSpellMaxRangeForTarget(losRecoveryTarget, recoverySpellInfo) : 0.0f;
+            float const spellMaxRange = recoverySpellInfo ? playerbot::PvpCore::SpellMaxRange(player, recoverySpellInfo, losRecoveryTarget) : 0.0f;
             float const currentDistance = player->GetDistance(losRecoveryTarget);
             float const maxFollowRange = spellMaxRange > 0.0f
                 ? std::max(1.5f, spellMaxRange - 1.0f)
-                : std::max(1.5f, GetConfiguredSpellRange() - 1.0f);
+                : std::max(1.5f, GetConfiguredSpellRangeFor(player) - 1.0f);
             float const desiredRange = std::clamp(currentDistance - 2.0f, 1.5f, maxFollowRange);
 
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, losRecoveryTarget->GetGUID(),
@@ -9954,7 +10028,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
                     context.selfCast = false;
                 }
                 else if (context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
-                    distance > (GetConfiguredSpellRange() + kRangedSpacingEnterOutOfRangeBuffer) &&
+                    distance > (GetConfiguredSpellRangeFor(player) + kRangedSpacingEnterOutOfRangeBuffer) &&
                     !IsHunterWithinAutoShotBand(player, spacingTarget))
                 {
                     // Some classic spell entries report atypical range metadata,
@@ -9965,7 +10039,7 @@ PvpValues PvpCore::CollectValues(Player const* player)
                     // pull them back inward while kiting just because an instant shot
                     // would prefer a slightly shorter configured spell distance.
                     ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
-                        ComputeApproachFollowRange(GetConfiguredSpellRange()), "reach spell", "enemy outside configured cast distance", 82.0f);
+                        ComputeApproachFollowRange(GetConfiguredSpellRangeFor(player)), "reach spell", "enemy outside configured cast distance", 82.0f);
                     context.spellId = 0;
                     context.itemEntry = 0;
                     context.targetMode = PvpClassSpellContext::TargetMode::None;
@@ -9984,10 +10058,10 @@ PvpValues PvpCore::CollectValues(Player const* player)
             if (allyMovementTarget)
             {
                 float const distance = player->GetDistance(allyMovementTarget);
-                if (distance > GetConfiguredHealRange())
+                if (distance > GetConfiguredHealRangeFor(player))
                 {
                     ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, allyMovementTarget->GetGUID(),
-                        ComputeApproachFollowRange(GetConfiguredHealRange()), "reach party member to heal", "party member to heal out of spell range", 72.0f);
+                        ComputeApproachFollowRange(GetConfiguredHealRangeFor(player)), "reach party member to heal", "party member to heal out of spell range", 72.0f);
                 }
             }
         }
@@ -10002,11 +10076,11 @@ PvpValues PvpCore::CollectValues(Player const* player)
             if (movementTarget)
             {
                 float const distance = player->GetDistance(movementTarget);
-                if (distance > (GetConfiguredSpellRange() + kRangedSpacingEnterOutOfRangeBuffer) &&
+                if (distance > (GetConfiguredSpellRangeFor(player) + kRangedSpacingEnterOutOfRangeBuffer) &&
                     !IsHunterWithinAutoShotBand(player, movementTarget))
                 {
                     ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, movementTarget->GetGUID(),
-                        ComputeApproachFollowRange(GetConfiguredSpellRange()), "reach spell", "enemy out of spell range", 70.0f);
+                        ComputeApproachFollowRange(GetConfiguredSpellRangeFor(player)), "reach spell", "enemy out of spell range", 70.0f);
                 }
                 else if (IsHunterExactDeadZone(player, movementTarget))
                 {
