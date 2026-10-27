@@ -6796,6 +6796,16 @@ Centurion.Rift.PlayerXpRate = 1.5
 Centurion.Rift.FlatHonorMultiplier = 2.0
 
 #
+#    Centurion.Rift.ExperienceMultiplier
+#        Description: Multiplier on the experience Summoner's Rift pays below the
+#                     level cap (its honor converted by
+#                     Centurion.Battleground.XpInsteadOfHonor). Does not change the
+#                     honor paid at the cap. .reload config applies a change at once.
+#        Default:     4.0 - (a League match is long; owner 2026-10-27)
+
+Centurion.Rift.ExperienceMultiplier = 4.0
+
+#
 #    Centurion.Rift.UnitLevelRate
 #        Description: Summoner's Rift: how fast minions, jungle monsters and
 #                     structures level with the champions - the share of the way
