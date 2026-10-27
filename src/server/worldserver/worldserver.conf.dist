@@ -6800,11 +6800,12 @@ Centurion.Rift.FlatHonorMultiplier = 2.0
 #        Description: Multiplier on the experience Summoner's Rift pays below the
 #                     level cap (its honor converted by
 #                     Centurion.Battleground.XpInsteadOfHonor). Does not change the
-#                     honor paid at the cap. .reload config applies a change at once.
-#        Default:     16.0 - (a League match is long; owner 2026-10-27, doubled
-#                     twice since the first 4.0)
+#                     honor paid at the cap. The experience is given to the real
+#                     character when it leaves the match, not to its champion.
+#                     .reload config applies a change at once.
+#        Default:     1.0 - (the payout already pays for the match's length)
 
-Centurion.Rift.ExperienceMultiplier = 16.0
+Centurion.Rift.ExperienceMultiplier = 1.0
 
 #
 #    Centurion.Rift.UnitLevelRate

@@ -191,6 +191,7 @@ namespace
         uint8 RealLevel = 1;
         uint32 RealXp = 0;
         uint32 RealMoney = 0;
+        uint32 BankedXp = 0;         // what the match paid the real character (BankExperience)
         bool Persistent = true;      // false for a transient copy: nothing is written down
 
         uint8 StartLevel = START_LEVEL;
@@ -292,6 +293,9 @@ namespace
     // real skills and pet ranks are put back from memory only, never after a crash.
     bool StashSkillsColumn = false;
     bool StashPetColumn = false;
+    // and its `banked_xp` (2026-10-27): what a match paid in experience (BankExperience),
+    // for a character restored from the stash rather than by Leave.
+    bool StashBankColumn = false;
     // The characters whose skills follow the tournament's rules while they are in a match
     // (Tournament::AlwaysMaxWeaponSkill / AlwaysMaxSkillForLevel ask UsesMatchSkills): a
     // leaf lock of its own, never held while calling out, because those are asked from
@@ -2183,6 +2187,7 @@ void ProbeStorage()
     WeaponTablePresent = CharacterDatabase.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_weapons'") != nullptr;
     StashSkillsColumn = CharacterDatabase.Query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash' AND COLUMN_NAME = 'skills'") != nullptr;
     StashPetColumn = CharacterDatabase.Query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash' AND COLUMN_NAME = 'pet_spells'") != nullptr;
+    StashBankColumn = CharacterDatabase.Query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'custom_rift_stash' AND COLUMN_NAME = 'banked_xp'") != nullptr;
     if (!StoragePresent)
     {
         TC_LOG_INFO("server.loading", ">> Summoner's Rift progression off: `custom_rift_stash` is absent.");
@@ -2201,6 +2206,45 @@ bool IsInMatch(Player const* player)
 {
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
     return player && Find(player);
+}
+
+uint8 RealLevel(Player const* player)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = player ? Find(player) : nullptr;
+    return state ? state->RealLevel : 0;
+}
+
+uint32 RealXp(Player const* player)
+{
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    State const* state = player ? Find(player) : nullptr;
+    return state ? state->RealXp + state->BankedXp : 0;
+}
+
+bool BankExperience(Player* player, uint32 xp)
+{
+    if (!player)
+        return false;
+
+    uint32 total = 0;
+    bool write = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(StateMutex);
+        State* state = Find(player);
+        if (!state)
+            return false;
+        state->BankedXp += xp;
+        total = state->BankedXp;
+        write = state->Persistent && StashBankColumn;
+    }
+
+    // Written down too: a character that is gone when the match lets it go is
+    // put back from the stash at its next login (RestoreFromStash), not by Leave.
+    if (write)
+        CharacterDatabase.PExecute("UPDATE custom_rift_stash SET banked_xp = {} WHERE guid = {}",
+            total, player->GetGUID().GetCounter());
+    return true;
 }
 
 bool UsesMatchSkills(Player const* player)
@@ -2372,6 +2416,11 @@ void Leave(Player* player)
     if (state.Persistent)
         CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
     SendLine(player, "RIFT:END");
+
+    // What the match paid in experience (BankExperience), now that the real level is
+    // back: the levels it buys are the character's own.
+    if (state.BankedXp)
+        player->GiveXP(state.BankedXp, nullptr);
 }
 
 uint32 ShopPrice(Player* player, uint32 item, uint32 price, std::vector<uint32>& consumed)
@@ -2402,8 +2451,9 @@ namespace
     // copy of the real build while a match holds the character.
     bool RestoreFromStash(Player* player)
     {
-    QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money, talents, actions, {}, {} FROM custom_rift_stash WHERE guid = {}",
-        StashSkillsColumn ? "skills" : "''", StashPetColumn ? "pet_spells" : "''", player->GetGUID().GetCounter());
+    QueryResult row = CharacterDatabase.PQuery("SELECT real_level, real_xp, money, talents, actions, {}, {}, {} FROM custom_rift_stash WHERE guid = {}",
+        StashSkillsColumn ? "skills" : "''", StashPetColumn ? "pet_spells" : "''", StashBankColumn ? "banked_xp" : "0",
+        player->GetGUID().GetCounter());
     SetMatchSkills(player, false);
     // A login while the match still held the character got the match's spell list,
     // without the real ranks it hides. The client clears every bar button whose
@@ -2454,6 +2504,10 @@ namespace
     ForgetRecall(player);
     CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
     TC_LOG_INFO("bg.battleground", "Rift: {} restored from the stash of a match it left; level {}, experience, money, talents and bars back.", player->GetName(), realLevel);
+    // and what the match paid in experience, as Leave gives it.
+    // (BIGINT either way: the column, or the literal 0 read in its place.)
+    if (uint64 const banked = fields[7].GetUInt64())
+        player->GiveXP(uint32(banked), nullptr);
     return true;
     }
 }

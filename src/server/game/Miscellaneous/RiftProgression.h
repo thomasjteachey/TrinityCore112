@@ -74,6 +74,13 @@ namespace RiftProgression
 
     // True while this character is playing a Rift match under these rules.
     TC_GAME_API bool IsInMatch(Player const* player);
+    // The real character under a champion: its level, and its experience with what
+    // the match has paid it so far (0 for both outside a match). Experience given
+    // to the champion is wiped when Leave puts the real level back, so what a match
+    // pays is held instead (BankExperience) and given to the real character there.
+    TC_GAME_API uint8 RealLevel(Player const* player);
+    TC_GAME_API uint32 RealXp(Player const* player);
+    TC_GAME_API bool BankExperience(Player* player, uint32 xp);
     // A world character in a match: its skills follow the tournament's rules there
     // (Tournament::AlwaysMaxWeaponSkill, AlwaysMaxSkillForLevel), its real ones come back
     // on the way out. Safe to ask from anywhere: it takes no lock but its own.

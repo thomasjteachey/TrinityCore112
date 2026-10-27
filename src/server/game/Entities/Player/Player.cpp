@@ -8398,8 +8398,17 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     // achievements) - that the rollback then strips. The hold hands the loan
     // back before it pays out a run (BattlegroundVHR::EndBattleground), so the
     // borrowed-level refusal only ever meets an award that arrives mid-run.
+    //
+    // A Summoner's Rift champion plays the whole match on a borrowed level too,
+    // and leaving puts back the level and experience it walked in with
+    // (RiftProgression::Leave): experience given to the champion was wiped
+    // there, and a capped character's honor, turned into experience on a
+    // champion below the cap, went with it. So in the Rift the real level
+    // decides, and the experience is held for the real character and given to
+    // it on the way out (RiftProgression::BankExperience).
     bool heldBelowCap = false;
-    uint8 const realLevel = VioletHoldBoons::GetBaseLevel(this);
+    bool const inRift = RiftProgression::IsInMatch(this);
+    uint8 const realLevel = inRift ? RiftProgression::RealLevel(this) : VioletHoldBoons::GetBaseLevel(this);
     bool const ownSession = GetSession() && !GetSession()->IsVirtualSession();
     bool const keepsHonorBelowCap = ownSession && HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
     if (honor > 0 && !keepsHonorBelowCap && realLevel < GetUInt32Value(PLAYER_FIELD_MAX_LEVEL) &&
@@ -8409,13 +8418,13 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
         honor = 0;
         heldBelowCap = true;
 
-        if (realLevel == GetLevel() && ownSession)
+        if ((inRift || realLevel == GetLevel()) && ownSession)
         {
             Battleground const* bg = GetBattleground();
             uint32 const cap = GetUInt32Value(PLAYER_FIELD_MAX_LEVEL);
             uint32 const topLevelBelowCap = cap > 1 ? cap - 1 : 1;
 
-            uint32 referenceLevel = std::clamp<uint32>(GetLevel(), 1, topLevelBelowCap);
+            uint32 referenceLevel = std::clamp<uint32>(realLevel, 1, topLevelBelowCap);
             if (bg)
             {
                 uint32 const low = std::max<uint32>(1, bg->GetMinLevel());
@@ -8427,7 +8436,7 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
                 // there the character's own level, held inside the bracket, is used.
                 referenceLevel = (low + high) / 2;
                 if (high - low > 10)
-                    referenceLevel = std::clamp<uint32>(GetLevel(), low, high);
+                    referenceLevel = std::clamp<uint32>(realLevel, low, high);
             }
 
             uint32 const honorPerLevel = std::max<uint32>(1, sWorld->getIntConfig(CONFIG_CENTURION_BG_XP_HONOR_PER_LEVEL));
@@ -8446,13 +8455,14 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
             else if (bg && bg->GetTypeID() == BATTLEGROUND_VHR)
                 xp = uint64(double(xp) *
                     double(sWorld->getFloatConfig(CONFIG_CENTURION_VHR_EXPERIENCE_MULTIPLIER)));
-            // Summoner's Rift too: a League match runs far longer than its payout
-            // pays a leveling character for (owner 2026-10-27: "up the summoner's
-            // rift exp by about 300%", then doubled twice the same day). Read here
-            // like the Rift's other keys, so .reload config applies at once.
+            // Summoner's Rift has its own as well, 1.0. It was raised to 16 on
+            // 2026-10-27 while the Rift's experience was still being wiped on the
+            // way out (above), and set back with that fix: a match's payout is
+            // already the hourly rate times its length. Read here like the Rift's
+            // other keys, so .reload config applies at once.
             else if (bg && bg->GetTypeID() == BATTLEGROUND_SRF)
                 xp = uint64(double(xp) *
-                    double(std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.ExperienceMultiplier", 16.0f))));
+                    double(std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.ExperienceMultiplier", 1.0f))));
 
             // Never past the cap. GiveXP stops leveling at max level and parks the
             // rest where nothing reads it, so the share of an award that would
@@ -8460,19 +8470,23 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
             // cap, honor is what they should be earning. Bounding by what is left
             // to the cap also keeps the grant far inside a uint32.
             uint64 toCap = 0;
-            for (uint32 level = GetLevel(); level < cap; ++level)
+            for (uint32 level = realLevel; level < cap; ++level)
                 toCap += sObjectMgr->GetXPForLevel(uint8(level));
-            toCap -= std::min<uint64>(toCap, GetXP());
+            toCap -= std::min<uint64>(toCap, inRift ? RiftProgression::RealXp(this) : GetXP());
 
             uint64 const grant = std::min(xp, toCap);
             if (grant)
-                GiveXP(uint32(grant), nullptr);
+            {
+                // In the Rift it is held for the real character (see above).
+                if (!inRift || !RiftProgression::BankExperience(this, uint32(grant)))
+                    GiveXP(uint32(grant), nullptr);
+            }
 
             // That leftover only once this award has really reached the cap. An
             // experience hook - a challenge mode's rate, the War Mode zone stop -
             // can leave the character short of it, and short of it they get no
-            // honor.
-            if (xp > grant && IsMaxLevel())
+            // honor. In the Rift what is held is exactly what reaches the cap.
+            if (xp > grant && (inRift || IsMaxLevel()))
                 honor = int32(uint64(awarded) * (xp - grant) / xp);
         }
     }
