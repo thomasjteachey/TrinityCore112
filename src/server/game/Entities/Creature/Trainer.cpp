@@ -18,12 +18,14 @@
 #include "Trainer.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
+#include "DBCStores.h"
 #include "NPCPackets.h"
 #include "Pet.h"
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "WorldSession.h"
+#include <unordered_map>
 
 namespace Trainer
 {
@@ -157,6 +159,89 @@ namespace
         for (auto const& requirePair : sSpellMgr->GetSpellsRequiredForSpellBounds(trainerSpellInfo->Id))
             add(requirePair.second);
     }
+
+    // A spell one of your class's talents teaches is the talent's to give: a
+    // trainer will not sell it to you until you know that talent.
+    //
+    // A trainer row has no class of its own (a weapon master's list is shared
+    // by everyone who walks up to it), so the only class gate is the DBC's
+    // SkillLineAbility/SkillRaceClassInfo, and those are stock 3.3.5, where a
+    // shaman trains Two-Handed Axes (197) and Maces (199) like a warrior does.
+    // Here a shaman gets both from the Enhancement talent Two-Handed Axes and
+    // Maces (16269), and four weapon masters were selling them for ten silver
+    // to shamans of any level (Longshaft, 2026-10-26).
+    //
+    // The DBC cannot just drop the shaman bit. 197 and 199 are never saved per
+    // character; they are re-derived from the skill at every login through that
+    // same class mask, so a talented shaman would lose the weapons as well.
+    //
+    // Audited 2026-10-27 against every trainer_spell row on Centurion: 16269 ->
+    // 197/199 is the only place a talent's learn effect meets a trainer row.
+    struct TalentTaughtSpell
+    {
+        uint32 ClassMask;
+        TalentEntry const* Talent;
+    };
+
+    std::unordered_multimap<uint32, TalentTaughtSpell> BuildTalentTaughtSpells()
+    {
+        std::unordered_multimap<uint32, TalentTaughtSpell> taught;
+        for (TalentEntry const* talent : sTalentStore)
+        {
+            TalentTabEntry const* tab = sTalentTabStore.LookupEntry(talent->TabID);
+            if (!tab || !tab->ClassMask)
+                continue; // pet talents have no class
+
+            for (uint32 rankSpell : talent->SpellRank)
+            {
+                SpellInfo const* rankInfo = rankSpell ? sSpellMgr->GetSpellInfo(rankSpell) : nullptr;
+                if (!rankInfo)
+                    continue;
+
+                for (SpellEffectInfo const& effect : rankInfo->GetEffects())
+                    if (effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) && effect.TriggerSpell)
+                        taught.emplace(effect.TriggerSpell, TalentTaughtSpell{ tab->ClassMask, talent });
+            }
+        }
+
+        return taught;
+    }
+
+    bool IsSpellWaitingOnTalent(Player const* player, uint32 spellId)
+    {
+        static std::unordered_multimap<uint32, TalentTaughtSpell> const taught = BuildTalentTaughtSpells();
+
+        auto const bounds = taught.equal_range(spellId);
+        for (auto itr = bounds.first; itr != bounds.second; ++itr)
+        {
+            if (!(itr->second.ClassMask & player->GetClassMask()))
+                continue;
+
+            bool knowsTalent = false;
+            for (uint32 rankSpell : itr->second.Talent->SpellRank)
+                if (rankSpell && player->HasSpell(rankSpell))
+                    knowsTalent = true;
+
+            if (!knowsTalent)
+                return true;
+        }
+
+        return false;
+    }
+
+    // The row's own spell, or any spell it teaches.
+    bool IsTrainerSpellWaitingOnTalent(Player const* player, uint32 trainerSpellId)
+    {
+        if (IsSpellWaitingOnTalent(player, trainerSpellId))
+            return true;
+
+        for (SpellEffectInfo const& effect : sSpellMgr->AssertSpellInfo(trainerSpellId)->GetEffects())
+            if (effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) && effect.TriggerSpell &&
+                IsSpellWaitingOnTalent(player, effect.TriggerSpell))
+                return true;
+
+        return false;
+    }
 }
 
     bool Spell::IsCastable() const
@@ -181,6 +266,11 @@ namespace
         for (Spell const& trainerSpell : _spells)
         {
             if (!player->IsSpellFitByClassAndRace(trainerSpell.SpellId))
+                continue;
+
+            // Hidden, like a spell for another class. Someone who already knows
+            // it through the talent still sees it, greyed as known.
+            if (!player->HasSpell(trainerSpell.SpellId) && IsTrainerSpellWaitingOnTalent(player, trainerSpell.SpellId))
                 continue;
 
             SpellInfo const* trainerSpellInfo = sSpellMgr->AssertSpellInfo(trainerSpell.SpellId);
@@ -322,6 +412,10 @@ namespace
 
         // check race/class requirement
         if (!player->IsSpellFitByClassAndRace(trainerSpell->SpellId))
+            return SpellState::Unavailable;
+
+        // a spell the player's class only gets from a talent they don't know
+        if (IsTrainerSpellWaitingOnTalent(player, trainerSpell->SpellId))
             return SpellState::Unavailable;
 
         // check skill requirement
