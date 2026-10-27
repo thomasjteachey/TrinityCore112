@@ -129,6 +129,34 @@ namespace Mokgora
     bool Decline(Player* target);
     bool Withdraw(Player* challenger);
 
+    // --- a bot's challenge ------------------------------------------------
+
+    // The one Mok'gora a bot throws: a bounty-board Mok'gora notice, whose
+    // quarry walks up to the person who took it. Taking the notice was asking
+    // to be challenged, and the person still answers the box like any other
+    // offer - nothing here skips their consent. Every other gate holds.
+    //
+    // World thread only, like the rest of the offers. False, with `why` filled
+    // for the log, when it cannot be issued right now; the caller tries again.
+    TC_GAME_API bool ChallengeFromBot(Player* bot, Player* target, std::string& why);
+
+    // Take back a bot's outstanding challenge without a word to anyone but the
+    // person holding the box - the notice behind it has ended.
+    TC_GAME_API void CancelBotChallenge(ObjectGuid bot);
+
+    enum class BotChallengeAnswer : uint8
+    {
+        Accepted,   // the flag is planted - the duel itself reports how it ends
+        Declined,
+        Lapsed,     // left unanswered
+        Gone,       // one of them logged out, or it went stale before the flag
+    };
+
+    // Told how each bot-issued challenge was answered. One listener: the
+    // bounty board is the only thing that asks a bot to challenge anybody.
+    using BotChallengeListener = void (*)(ObjectGuid bot, ObjectGuid target, BotChallengeAnswer answer);
+    TC_GAME_API void SetBotChallengeListener(BotChallengeListener listener);
+
     // --- hooks ------------------------------------------------------------
 
     // CMSG_MESSAGECHAT, before the command parser. Returns true when the

@@ -51,6 +51,7 @@
 #include "Log.h"
 #include "LootMgr.h"
 #include "Miscellaneous/BotPvePower.h"
+#include "Miscellaneous/PairStance.h"
 #include "Miscellaneous/RiftLeague.h"
 #include "Miscellaneous/RiftProgression.h"
 #include "Miscellaneous/TournamentMode.h"
@@ -16221,6 +16222,21 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                     IsManagedPlayerbotAccountIdForDisplay(ffaBotOwner->GetSession()->GetAccountId()) &&
                     (!target->GetSession() || !IsManagedPlayerbotAccountIdForDisplay(target->GetSession()->GetAccountId()));
 
+                // A bounty-board notice's pair (PairStance) overrides the War
+                // Mode answer for this one viewer: a truce shows the bot green
+                // with its FFA byte down even to War Mode, a feud shows it red
+                // even with War Mode off. IsValidAttackTarget enforces the same
+                // two rules, so the client and the server agree.
+                //
+                // Asked of any bot, armed or not: a feud holds where the fleet
+                // is not armed as well, and a bot shown green there could
+                // attack somebody whose client would not let them hit back.
+                // Only the truce needs the bot armed to mean anything.
+                PairStance::Stance const pairStance = (PairStance::Any() && target != this && ffaBotOwner &&
+                    ffaBotOwner->GetSession() && !GetMap()->IsBattlegroundOrArena() &&
+                    IsManagedPlayerbotAccountIdForDisplay(ffaBotOwner->GetSession()->GetAccountId()))
+                    ? PairStance::Between(this, target) : PairStance::Stance::None;
+
                 uint32 squadViewFaction = 0;
                 if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this &&
                     Battleground::GetSquadViewFaction(this, target, squadViewFaction))
@@ -16231,8 +16247,17 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                     // and lets them fight (BattlegroundSquadStart).
                     fieldBuffer << squadViewFaction;
                 }
+                else if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this &&
+                    pairStance == PairStance::Stance::Feud)
+                {
+                    // A feud: an enemy player's faction, the same answer the
+                    // armed-bot branch below gives a War Mode viewer.
+                    fieldBuffer << uint32(target->GetTeamId() == TEAM_ALLIANCE ? 2 : 1);
+                }
                 else if (index == UNIT_FIELD_FACTIONTEMPLATE && target != this && isArmedBotUnit &&
-                    (!target->IsFFAPvP() || Tournament::IsTournamentCharacter(target)))
+                    pairStance != PairStance::Stance::Feud &&
+                    (!target->IsFFAPvP() || Tournament::IsTournamentCharacter(target) ||
+                        pairStance == PairStance::Stance::Truce))
                 {
                     // War Mode off, or a tournament character, whom the fleet
                     // ignores: friendly, whatever faction it really is.
@@ -16250,6 +16275,15 @@ void Unit::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player const* t
                     // how to hate, and the armed bot carries the PvP flag, so
                     // this resolves exactly like an enemy player.
                     fieldBuffer << uint32(target->GetTeamId() == TEAM_ALLIANCE ? 2 : 1);
+                }
+                else if (index == UNIT_FIELD_BYTES_2 && target != this &&
+                    pairStance == PairStance::Stance::Truce &&
+                    (m_uint32Values[UNIT_FIELD_BYTES_2] & (uint32(UNIT_BYTE2_FLAG_FFA_PVP) << 8)))
+                {
+                    // Two FFA bytes read hostile to the client whatever the
+                    // faction says, so a truce takes the bot's down for this
+                    // viewer, the way a tournament character's is below.
+                    fieldBuffer << (m_uint32Values[UNIT_FIELD_BYTES_2] & ~(uint32(UNIT_BYTE2_FLAG_FFA_PVP) << 8));
                 }
                 else if (index == UNIT_FIELD_BYTES_2 && target != this &&
                     (m_uint32Values[UNIT_FIELD_BYTES_2] & (uint32(UNIT_BYTE2_FLAG_FFA_PVP) << 8)) &&

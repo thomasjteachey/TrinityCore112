@@ -910,6 +910,29 @@ void ClearBounty(Player* player)
     g_stacks.erase(player->GetGUID().GetRawValue());
 }
 
+uint32 ReduceStacks(Player* player, uint32 by)
+{
+    if (!player || !by || !s_spellId)
+        return 0;
+
+    Aura* aura = player->GetAura(s_spellId);
+    if (!aura)
+        return 0;
+
+    uint32 const have = aura->GetStackAmount();
+    if (by >= have)
+    {
+        ClearBounty(player);
+        return have;
+    }
+
+    // Down, not up: ModStackAmount only restarts the clock on the way up, so
+    // what is left keeps the time it already had.
+    aura->ModStackAmount(-int32(by));
+    WriteRegistry(player, aura->GetStackAmount(), aura->GetDuration());
+    return by;
+}
+
 bool Enabled()
 {
     return s_enabled;

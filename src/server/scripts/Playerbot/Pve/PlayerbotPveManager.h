@@ -399,6 +399,37 @@ public:
 
     static void OnBotLogout(Player const* player);
 
+    // --- bounty-board notices (scripts/Custom/custom_bounty_notices.cpp) ----
+    //
+    // A notice can put one bot on a scripted errand while it lasts. The notice
+    // script decides who and when, and must clear the errand when the notice
+    // ends; the manager owns the walking, the dispatch and the fighting.
+    enum class NoticeErrandKind : uint8
+    {
+        Approach = 1,   // walk up to a person and stand facing them (a Mok'gora challenger)
+        Escort   = 2,   // stay beside another bot and join its fights (a hunted bot's friends)
+        Pursue   = 3,   // go after a person it is in a feud with and fight them
+    };
+    static void SetNoticeErrand(ObjectGuid bot, NoticeErrandKind kind, ObjectGuid target);
+    static void ClearNoticeErrand(ObjectGuid bot);
+    static bool HasNoticeErrand(ObjectGuid bot);
+    // An Approach errand that is standing in challenge range of its person.
+    static bool IsNoticeErrandArrived(ObjectGuid bot);
+
+    // A bot somebody holds a notice on: kept online and out of battleground
+    // queues until released. Bots on an errand are held as well.
+    static void SetNoticeHeld(ObjectGuid bot, bool held);
+    static bool IsNoticeHeld(ObjectGuid bot);
+
+    // How aggressive this bot is by nature, 1-100 (the same figure the hunt
+    // schedule and the GM stats feed read).
+    static uint8 GetBotTemperament(Player const* bot);
+
+    // Whose death chest this item came out of, while the bot that looted it is
+    // still holding it back from the auction house for them. World or map
+    // thread; takes its own lock.
+    static bool GetChestLootOwner(ObjectGuid itemGuid, ObjectGuid& owner);
+
     // World-population shedding policy. The population manager owns sessions
     // and login/logout; the PvE manager owns the facts those decisions need:
     // drifter/local roles, local home zones, and death-chest auction holds.

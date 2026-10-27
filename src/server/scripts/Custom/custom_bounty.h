@@ -66,6 +66,11 @@ namespace Bounty
     // Notoriety turn-in, which can optionally settle the debt it just sold.
     void ClearBounty(Player* player);
 
+    // Take up to `by` stacks off, leaving the rest on the clock they already
+    // had; all of them clears the bounty. Returns how many came off. With the
+    // player in hand - a bounty-board pardon, bought at a board.
+    uint32 ReduceStacks(Player* player, uint32 by);
+
     // 0.0 at no bounty, 1.0 at the cap. Every escalation below is a straight
     // line along this, so one number tunes how fast the world turns on you.
     float Fraction(uint32 stacks);

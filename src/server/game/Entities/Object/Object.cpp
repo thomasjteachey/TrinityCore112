@@ -31,6 +31,7 @@
 #include "Map.h"
 #include "MiscPackets.h"
 #include "Miscellaneous/BotUpdatePolicy.h"
+#include "Miscellaneous/PairStance.h"
 #include "Miscellaneous/RiftProgression.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MovementInfo.h"
@@ -3131,6 +3132,20 @@ ReputationRank WorldObject::GetReactionTo(WorldObject const* target) const
                     }
                 }
 
+                // A bounty-board notice's pair (PairStance): a Mok'gora
+                // challenger on its way is friendly whatever either FFA byte
+                // says, a feud is hostile whatever War Mode says. Below the
+                // duel line, so the Mok'gora itself still reads hostile.
+                switch (PairStance::Between(selfPlayerOwner, targetPlayerOwner))
+                {
+                    case PairStance::Stance::Truce:
+                        return REP_FRIENDLY;
+                    case PairStance::Stance::Feud:
+                        return REP_HOSTILE;
+                    default:
+                        break;
+                }
+
                 // same group - checks dependant only on our faction - skip FFA_PVP for example
                 if (selfPlayerOwner->IsInRaidWith(targetPlayerOwner))
                     return REP_FRIENDLY; // return true to allow config option AllowTwoSide.Interaction.Group to work
@@ -3672,6 +3687,39 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
         if (!goOwner || !goOwner->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED))
             if (unitTarget && !unitTarget->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED))
                 return IsHostileTo(unitTarget) || unitTarget->IsHostileTo(this);
+    }
+
+    // A bounty-board notice's pair (PairStance), ahead of everything War Mode
+    // decides below. A truce holds while a Mok'gora challenger walks up - no
+    // first blow either way - until the two of them are actually dueling. A
+    // feud makes them fair game whatever either one's War Mode says, except in
+    // a sanctuary, which shelters a feud as it shelters everything else.
+    switch (PairStance::Between(this, target))
+    {
+        case PairStance::Stance::Truce:
+        {
+            Player const* a = GetAffectingPlayer();
+            Player const* b = target->GetAffectingPlayer();
+            bool const dueling = a && b && a->duel && a->duel->Opponent == b &&
+                a->duel->State == DUEL_STATE_IN_PROGRESS;
+            if (!dueling)
+                return false;
+            break;
+        }
+        case PairStance::Stance::Feud:
+        {
+            Unit const* targetUnitForFeud = target->ToUnit();
+            Player const* a = GetAffectingPlayer();
+            Player const* b = target->GetAffectingPlayer();
+            bool const sheltered = (unit && unit->IsInSanctuary()) ||
+                (targetUnitForFeud && targetUnitForFeud->IsInSanctuary()) ||
+                (a && a->IsInSanctuary()) || (b && b->IsInSanctuary());
+            if (!sheltered)
+                return true;
+            return false;
+        }
+        default:
+            break;
     }
 
     // War Mode off: the fleet is scenery, in both directions.

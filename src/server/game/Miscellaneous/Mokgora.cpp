@@ -125,7 +125,18 @@ namespace
         ObjectGuid Challenger;
         ObjectGuid Target;
         time_t Expires = 0;
+        // A bounty-board quarry's challenge (ChallengeFromBot). The only offer
+        // whose challenger is a bot, and the only one anybody is told about.
+        bool BotIssued = false;
     };
+
+    Mokgora::BotChallengeListener BotListener = nullptr;
+
+    void TellListener(Offer const& offer, Mokgora::BotChallengeAnswer answer)
+    {
+        if (offer.BotIssued && BotListener)
+            BotListener(offer.Challenger, offer.Target, answer);
+    }
 
     // Keyed by the person who has to answer. One at a time in either
     // direction: two boxes on one screen is how somebody clicks the wrong one.
@@ -244,7 +255,7 @@ namespace
     // Every reason a challenge cannot be issued, in the order they are asked.
     // Returns an empty string when it can. The text is written to be read by
     // the player who typed the command, so it says what THEY should do.
-    std::string WhyNot(Player* challenger, Player* target)
+    std::string WhyNot(Player* challenger, Player* target, bool botIssued = false)
     {
         if (!Config.Enabled)
             return "Mok'gora is not enabled on this realm.";
@@ -256,8 +267,10 @@ namespace
             return "You cannot challenge yourself.";
 
         // A person may throw it at a bot, and the bot takes it up - see
-        // Challenge. A bot never throws one: nothing would be choosing to.
-        if (IsBot(challenger))
+        // Challenge. A bot never throws one: nothing would be choosing to -
+        // except a bounty-board quarry, whose challenge the person asked for
+        // by taking the notice (ChallengeFromBot).
+        if (IsBot(challenger) && !botIssued)
             return "A bot cannot issue a Mok'gora.";
 
         // Nor a transient copy - a bounty hunter, a battleground fill, a lobby
@@ -728,25 +741,28 @@ bool Accept(Player* target)
         return true;
     }
 
-    Player* challenger = ObjectAccessor::FindPlayer(offer->Challenger);
+    Offer const answered = *offer;
+    Player* challenger = ObjectAccessor::FindPlayer(answered.Challenger);
     Offers.erase(target->GetGUID());
 
     if (!challenger)
     {
         Say(target, Banner("They are gone."));
         CloseBox(target, "GONE");
+        TellListener(answered, BotChallengeAnswer::Gone);
         return true;
     }
 
     // Everything is asked again. Between the offer and the answer either of
     // them could have walked off, started a fight, stepped into a sanctuary or
     // died, and the box on the screen knows none of that.
-    if (std::string const reason = WhyNot(challenger, target); !reason.empty())
+    if (std::string const reason = WhyNot(challenger, target, answered.BotIssued); !reason.empty())
     {
         Say(target, Banner(reason));
         Say(challenger, Banner(Trinity::StringFormat("The Mok'gora with {} cannot go ahead: {}",
             target->GetName(), reason)));
         CloseBox(target, "STALE");
+        TellListener(answered, BotChallengeAnswer::Gone);
         return true;
     }
 
@@ -756,10 +772,12 @@ bool Accept(Player* target)
         Say(target, Banner(why));
         Say(challenger, Banner(why));
         CloseBox(target, "FAILED");
+        TellListener(answered, BotChallengeAnswer::Gone);
         return true;
     }
 
     CloseBox(target, "ACCEPTED");
+    TellListener(answered, BotChallengeAnswer::Accepted);
     return true;
 }
 
@@ -775,7 +793,8 @@ bool Decline(Player* target)
         return true;
     }
 
-    Player* challenger = ObjectAccessor::FindPlayer(offer->Challenger);
+    Offer const answered = *offer;
+    Player* challenger = ObjectAccessor::FindPlayer(answered.Challenger);
     Offers.erase(target->GetGUID());
 
     Say(target, Banner("You refuse the Mok'gora."));
@@ -787,7 +806,79 @@ bool Decline(Player* target)
         SendAddonLine(challenger, "CCGAME\tMOKGORA:CLOSE:REFUSED");
     }
 
+    TellListener(answered, BotChallengeAnswer::Declined);
     return true;
+}
+
+bool ChallengeFromBot(Player* bot, Player* target, std::string& why)
+{
+    if (!Config.Enabled)
+    {
+        why = "Mok'gora is not enabled on this realm.";
+        return false;
+    }
+
+    if (!bot || !target || !target->GetSession())
+    {
+        why = "There is nobody there.";
+        return false;
+    }
+
+    if (!IsBot(bot) || IsBot(target))
+    {
+        why = "Only a bot challenges a person this way.";
+        return false;
+    }
+
+    if (std::string const reason = WhyNot(bot, target, true); !reason.empty())
+    {
+        why = reason;
+        return false;
+    }
+
+    Offer offer;
+    offer.Challenger = bot->GetGUID();
+    offer.Target = target->GetGUID();
+    offer.Expires = GameTime::GetGameTime() + Config.OfferSeconds;
+    offer.BotIssued = true;
+    Offers[target->GetGUID()] = offer;
+
+    // The same box and the same words as a person's challenge: what the person
+    // is agreeing to does not change because a bot is the one asking.
+    SendAddonLine(target, Trinity::StringFormat("CCGAME\tMOKGORA:OFFER:{}:{}:{}:{}",
+        bot->GetName(), bot->GetLevel(), uint32(bot->GetClass()), Config.OfferSeconds));
+
+    Say(target, Banner(Trinity::StringFormat(
+        "{} (level {}) has challenged you to MOK'GORA - a duel to the death.",
+        bot->GetName(), bot->GetLevel())));
+    Say(target, Banner("Your opponent will be able to kill you. Fleeing, or logging out, "
+        "earns you Coward! for three days."));
+    Say(target, Banner(Trinity::StringFormat(
+        "Type |cff20ff20/mokgora accept|r to fight, or |cffff2020/mokgora decline|r to refuse. {} seconds.",
+        Config.OfferSeconds)));
+
+    return true;
+}
+
+void CancelBotChallenge(ObjectGuid bot)
+{
+    for (auto itr = Offers.begin(); itr != Offers.end(); ++itr)
+    {
+        if (itr->second.Challenger != bot || !itr->second.BotIssued)
+            continue;
+
+        ObjectGuid const targetGuid = itr->second.Target;
+        Offers.erase(itr);
+
+        if (Player* target = ObjectAccessor::FindPlayer(targetGuid))
+            CloseBox(target, "WITHDRAWN");
+        return;
+    }
+}
+
+void SetBotChallengeListener(BotChallengeListener listener)
+{
+    BotListener = listener;
 }
 
 bool Withdraw(Player* challenger)
@@ -908,19 +999,23 @@ void OnLogout(Player* player)
     // Drop anything they had outstanding, in either direction.
     if (Offer const* offer = FindOfferTo(player->GetGUID()))
     {
-        if (Player* challenger = ObjectAccessor::FindPlayer(offer->Challenger))
+        Offer const lapsed = *offer;
+        if (Player* challenger = ObjectAccessor::FindPlayer(lapsed.Challenger))
             Say(challenger, Banner(Trinity::StringFormat("{} has gone. The challenge lapses.", player->GetName())));
         Offers.erase(player->GetGUID());
+        TellListener(lapsed, BotChallengeAnswer::Gone);
     }
     if (Offer const* offer = FindOfferFrom(player->GetGUID()))
     {
-        ObjectGuid const targetGuid = offer->Target;
+        Offer const lapsed = *offer;
+        ObjectGuid const targetGuid = lapsed.Target;
         Offers.erase(targetGuid);
         if (Player* target = ObjectAccessor::FindPlayer(targetGuid))
         {
             Say(target, Banner(Trinity::StringFormat("{} has gone. The challenge lapses.", player->GetName())));
             CloseBox(target, "GONE");
         }
+        TellListener(lapsed, BotChallengeAnswer::Gone);
     }
 
     if (!IsFighting(player) || !player->IsAlive())
@@ -966,6 +1061,12 @@ void Update()
         return;
 
     time_t const now = GameTime::GetGameTime();
+
+    // Told after the sweep, not during it: the listener is free to come back in
+    // here, and an erase underneath this loop's iterator is the one thing it
+    // must never be able to cause.
+    std::vector<Offer> lapsedFromBots;
+
     for (auto itr = Offers.begin(); itr != Offers.end(); )
     {
         if (itr->second.Expires > now)
@@ -985,8 +1086,14 @@ void Update()
             SendAddonLine(challenger, "CCGAME\tMOKGORA:CLOSE:EXPIRED");
         }
 
+        if (itr->second.BotIssued)
+            lapsedFromBots.push_back(itr->second);
+
         itr = Offers.erase(itr);
     }
+
+    for (Offer const& offer : lapsedFromBots)
+        TellListener(offer, BotChallengeAnswer::Lapsed);
 }
 
 // -------------------------------------------------------------------------

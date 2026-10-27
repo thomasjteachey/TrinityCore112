@@ -55,6 +55,7 @@
 #include "Item.h"
 #include "Log.h"
 #include "Loot.h"
+#include "Miscellaneous/PairStance.h"
 #include "MapManager.h"
 #include "Map.h"
 #include "ModelIgnoreFlags.h"
@@ -581,6 +582,11 @@ namespace
     {
         uint64 HumanRawGuid = 0;
         float DropDistance = 210.0f;
+        // A bounty-board notice errand (a Mok'gora challenger, or a bot in a
+        // feud) - the person asked for this bot by name, so the War Mode and
+        // level gates that guard an unasked-for hunter do not apply. The
+        // 210 yard landing rule still does.
+        bool NoticeErrand = false;
     };
     std::unordered_map<uint64, GuardianTeleportRequest> g_PendingGuardianTeleports;
     // Bots that need a vendor with none in walking range: the world thread
@@ -3707,11 +3713,17 @@ namespace
             if (spot.MapId != bot->GetMapId())
                 continue;
 
+            // A bounty-board feud (PairStance): this one person is fair game to
+            // this one bot whatever War Mode, the aggro budget or the level rule
+            // say - a refused Mok'gora, or somebody come for their own gear.
+            bool const feud = PairStance::Any() &&
+                PairStance::Get(bot->GetGUID(), spot.Guid) == PairStance::Stance::Feud;
+
             // War Mode off and no bounty: not somebody to start on. This is the
             // proactive path by its own definition (see the comment below), so
             // the gate belongs here and nowhere near IsValidAttackTarget - a bot
             // must still be able to fight this person back.
-            if (!spot.Huntable)
+            if (!spot.Huntable && !feud)
                 continue;
 
             // Timid, so only a bounty is worth breaking cover for.
@@ -3750,7 +3762,7 @@ namespace
             // This function is ONLY proactive acquisition. Never volunteer for an
             // uphill PvP fight; retaliation is selected from getAttackers() below
             // and deliberately ignores this level rule.
-            if (!IsProactivePlayerLevelAcceptable(bot, candidate))
+            if (!feud && !IsProactivePlayerLevelAcceptable(bot, candidate))
                 continue;
 
             // Never each other: bots are one team (the pseudo-faction rule
@@ -3762,7 +3774,7 @@ namespace
             // The bot simply looks elsewhere and falls through to grinding or
             // travel, which is behaviour it already has. The figure is computed
             // on the world thread; with the budget off it is INT32_MAX.
-            if (spot.AggroSlotsFree <= 0)
+            if (spot.AggroSlotsFree <= 0 && !feud)
                 continue;
 
             float const distance = bot->GetDistance(candidate);
@@ -14752,14 +14764,24 @@ namespace
 
             // The request may have sat in the queue while either character leveled.
             // Revalidate the proactive safety rule at execution time too.
-            if (!IsProactivePlayerLevelAcceptable(bot, human))
+            if (!request.NoticeErrand && !IsProactivePlayerLevelAcceptable(bot, human))
                 continue;
 
             // And while War Mode was switched off, or a bounty ran out. This is
             // the last line before somebody is teleported at a person, so it is
             // the one that has to be right even if a queued request outlived the
             // reason it was queued.
-            if (!HumanMayBeHunted(human->GetGUID()))
+            //
+            // A notice errand answers to the notice instead: it is cleared the
+            // moment the notice ends, and a request queued for one that has
+            // since ended is dropped here.
+            if (request.NoticeErrand ? !playerbot::PveManager::HasNoticeErrand(bot->GetGUID()) : !HumanMayBeHunted(human->GetGUID()))
+                continue;
+
+            // The hunting rules above already keep an ordinary hunter out of
+            // dungeons and off a flight path; a notice errand skipped them, so
+            // it asks for itself. The errand asks again in a while.
+            if (request.NoticeErrand && (human->IsInFlight() || !human->GetMap() || human->GetMap()->Instanceable()))
                 continue;
 
             // Land at the EDGE of the player's sight, not on top of them. A guardian
@@ -19397,10 +19419,357 @@ namespace
             state.walkFallbackUntil = now + std::chrono::seconds(15);
     }
 
+    // ------------------------------------------------------------------
+    // Bounty-board notice errands
+    // ------------------------------------------------------------------
+    //
+    // A notice can put ONE bot on a scripted errand for as long as it lasts:
+    // walk up to the person who took a Mok'gora notice and wait to challenge
+    // them, guard the quarry of a hunt notice, or come after somebody it is in
+    // a feud with. The notice script (custom_bounty_notices.cpp) decides who
+    // and when and clears the errand the moment the notice ends; this owns how
+    // the bot gets there, because the walk, the dispatch queue and the engaged
+    // combat tick all live in this file.
+    //
+    // While an errand stands it replaces the bot's own fast tick - no questing,
+    // no wandering off, no picking somebody else to hunt - EXCEPT in a fight,
+    // which the ordinary tick keeps: a bot on its way to a duel still defends
+    // itself, and a bodyguard joins its quarry's fight through the usual assist.
+
+    struct NoticeErrand
+    {
+        playerbot::PveManager::NoticeErrandKind Kind = playerbot::PveManager::NoticeErrandKind::Approach;
+        ObjectGuid Target;
+        bool Arrived = false;
+        PveTimePoint NextDispatchAt{};
+    };
+
+    std::mutex g_NoticeErrandLock;
+    std::unordered_map<uint64, NoticeErrand> g_NoticeErrands;
+    // Bots a notice names: kept online and out of battleground queues for as
+    // long as somebody is after them. Same lock.
+    std::unordered_set<uint64> g_NoticeHeldBots;
+    std::atomic<bool> g_AnyNoticeErrand{ false };
+
+    // Close enough to say it to their face: Mok'gora's own challenge range is
+    // ten yards, and a step inside it leaves room for the person to shuffle.
+    constexpr float kNoticeChallengeYards = 7.0f;
+    // A bodyguard stands this close to the one it guards.
+    constexpr float kNoticeEscortYards = 12.0f;
+    // Further than this, or on another map, and the bot is dispatched rather
+    // than walked - through the same 210 yard landing every hunter uses.
+    constexpr float kNoticeWalkYards = 300.0f;
+
+    bool FindNoticeErrand(uint64 rawGuid, NoticeErrand& out)
+    {
+        if (!g_AnyNoticeErrand.load(std::memory_order_relaxed))
+            return false;
+
+        std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
+        auto const itr = g_NoticeErrands.find(rawGuid);
+        if (itr == g_NoticeErrands.end())
+            return false;
+        out = itr->second;
+        return true;
+    }
+
+    void SetNoticeErrandArrived(uint64 rawGuid, bool arrived)
+    {
+        std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
+        auto const itr = g_NoticeErrands.find(rawGuid);
+        if (itr != g_NoticeErrands.end())
+            itr->second.Arrived = arrived;
+    }
+
+    // Ask the world thread to land this bot at the edge of the person's sight.
+    // Paced, because the drain drops a request it cannot serve right now (the
+    // bot in a fight, a watcher in the way) and this simply asks again.
+    void RequestNoticeDispatch(uint64 botRaw, ObjectGuid target)
+    {
+        PveTimePoint const now = PveClock::now();
+        {
+            std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
+            auto const itr = g_NoticeErrands.find(botRaw);
+            if (itr == g_NoticeErrands.end() || now < itr->second.NextDispatchAt)
+                return;
+            itr->second.NextDispatchAt = now + std::chrono::seconds(20);
+        }
+
+        GuardianTeleportRequest request;
+        request.HumanRawGuid = target.GetRawValue();
+        request.DropDistance = PvePlayerTeleportMinimumDistance;
+        request.NoticeErrand = true;
+
+        std::lock_guard<std::mutex> guard(g_PvePendingLock);
+        g_PendingGuardianTeleports[botRaw] = request;
+    }
+
+    // Walk towards a unit on this map, re-aimed as it moves, closing the last
+    // stretch by following rather than by journey (a journey ends twenty yards
+    // short by design).
+    void WalkTowardsForNotice(Player* bot, PveBotState& state, Unit* target, float distance, float standOff)
+    {
+        PveTimePoint const now = PveClock::now();
+
+        if (distance <= 25.0f || now < state.walkFallbackUntil)
+        {
+            state.journeyActive = false;
+            playerbot::PvpClassActions::IssueFollowMovement(bot, target, standOff);
+            return;
+        }
+
+        if (!state.journeyActive || target->GetExactDist2d(state.journeyX, state.journeyY) > 25.0f)
+            StartWalkedJourney(state, uint16(bot->GetMapId()), target->GetPositionX(), target->GetPositionY(),
+                target->GetPositionZ(), 0, distance);
+
+        PveTimePoint const walkBanBefore = state.walkFallbackUntil;
+        AdvanceWalkedJourney(bot, state);
+        // A failed walk bans walking for ten minutes - right for an errand with
+        // a teleport behind it, far too long for this one. Follow for a bit.
+        if (state.walkFallbackUntil != walkBanBefore)
+            state.walkFallbackUntil = now + std::chrono::seconds(15);
+    }
+
+    // Map thread, the bot's own tick. True when the errand owned this tick and
+    // the ordinary fast tick must not run.
+    bool RunNoticeErrandTick(Player* bot, PveBotState& state)
+    {
+        uint64 const rawGuid = bot->GetGUID().GetRawValue();
+        NoticeErrand errand;
+        if (!FindNoticeErrand(rawGuid, errand))
+            return false;
+
+        using Kind = playerbot::PveManager::NoticeErrandKind;
+
+        // Dead: the slow tick's death recovery stands it back up as usual.
+        if (!bot->IsAlive())
+            return false;
+
+        // A fight the errand did not start belongs to the ordinary tick - the
+        // bot defends itself, and a bodyguard joins its quarry's fight through
+        // the usual assist. A pursuit's own fight is run below.
+        if (bot->IsInCombat() && errand.Kind != Kind::Pursue)
+        {
+            if (errand.Arrived)
+                SetNoticeErrandArrived(rawGuid, false);
+            return false;
+        }
+
+        PveTimePoint const now = PveClock::now();
+        if (now < state.nextFastTick)
+            return true;
+        state.nextFastTick = now + std::chrono::milliseconds(250);
+
+        if (bot->HasUnitState(UNIT_STATE_CONTROLLED))
+            return true;
+
+        // Same map only. Anybody further away than that is reached by dispatch.
+        Player* target = ObjectAccessor::GetPlayer(*bot, errand.Target);
+        if (!target || !target->IsInWorld())
+        {
+            if (state.engaged)
+                DisengagePveCombat(bot, state);
+            state.journeyActive = false;
+            if (errand.Arrived)
+                SetNoticeErrandArrived(rawGuid, false);
+            if (errand.Kind != Kind::Escort)
+                RequestNoticeDispatch(rawGuid, errand.Target);
+            return true;
+        }
+
+        float const distance = bot->GetDistance(target);
+
+        switch (errand.Kind)
+        {
+            case Kind::Approach:
+            {
+                if (state.engaged)
+                    DisengagePveCombat(bot, state);
+
+                if (!target->IsAlive())
+                {
+                    if (errand.Arrived)
+                        SetNoticeErrandArrived(rawGuid, false);
+                    state.journeyActive = false;
+                    return true;
+                }
+
+                if (distance <= kNoticeChallengeYards && bot->IsWithinLOSInMap(target))
+                {
+                    state.journeyActive = false;
+                    if (bot->isMoving())
+                        bot->StopMoving();
+                    bot->SetFacingToObject(target);
+                    if (!errand.Arrived)
+                        SetNoticeErrandArrived(rawGuid, true);
+                    return true;
+                }
+
+                if (errand.Arrived)
+                    SetNoticeErrandArrived(rawGuid, false);
+
+                if (distance > kNoticeWalkYards)
+                {
+                    RequestNoticeDispatch(rawGuid, errand.Target);
+                    return true;
+                }
+
+                WalkTowardsForNotice(bot, state, target, distance, 4.0f);
+                return true;
+            }
+            case Kind::Escort:
+            {
+                // Guarding another bot. Its fight is joined through the usual
+                // assist once it starts one, which needs the ordinary tick.
+                if (target->IsInCombat() || !target->IsAlive())
+                    return false;
+
+                if (distance <= kNoticeEscortYards)
+                {
+                    state.journeyActive = false;
+                    return true;
+                }
+
+                WalkTowardsForNotice(bot, state, target, distance, 5.0f);
+                return true;
+            }
+            case Kind::Pursue:
+            {
+                if (!target->IsAlive())
+                {
+                    if (state.engaged)
+                        DisengagePveCombat(bot, state);
+                    state.journeyActive = false;
+                    return true;
+                }
+
+                // The feud is what makes this legal; a sanctuary still shelters
+                // them, and then the bot simply waits outside.
+                bool const attackable = bot->IsValidAttackTarget(target) && bot->CanSeeOrDetect(target);
+                bool const keepsFighting = state.engaged && attackable && distance <= kTransientHunterDisengageYards;
+                bool const opensFight = !state.engaged && attackable && distance <= kTransientHunterEngageYards &&
+                    bot->IsWithinLOSInMap(target);
+
+                if (keepsFighting || opensFight)
+                {
+                    state.journeyActive = false;
+                    if (opensFight || bot->GetTarget() != target->GetGUID())
+                    {
+                        bot->SetSelection(target->GetGUID());
+                        playerbot::PvpCore::SetPveCombatEngagement(bot->GetGUID(), true);
+                        state.engaged = true;
+                        state.engagedSince = now;
+                    }
+
+                    ExecuteEngagedCombatTick(bot, state);
+                    return true;
+                }
+
+                if (state.engaged)
+                    DisengagePveCombat(bot, state);
+
+                if (distance > kNoticeWalkYards)
+                {
+                    RequestNoticeDispatch(rawGuid, errand.Target);
+                    return true;
+                }
+
+                WalkTowardsForNotice(bot, state, target, distance, 1.0f);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 }
 
 namespace playerbot
 {
+    void PveManager::SetNoticeErrand(ObjectGuid bot, NoticeErrandKind kind, ObjectGuid target)
+    {
+        if (bot.IsEmpty() || target.IsEmpty())
+            return;
+
+        std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
+        NoticeErrand& errand = g_NoticeErrands[bot.GetRawValue()];
+        if (errand.Kind != kind || errand.Target != target)
+        {
+            errand.Kind = kind;
+            errand.Target = target;
+            errand.Arrived = false;
+            errand.NextDispatchAt = {};
+        }
+        g_AnyNoticeErrand.store(true, std::memory_order_relaxed);
+    }
+
+    void PveManager::ClearNoticeErrand(ObjectGuid bot)
+    {
+        {
+            std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
+            if (!g_NoticeErrands.erase(bot.GetRawValue()))
+                return;
+            g_AnyNoticeErrand.store(!g_NoticeErrands.empty() || !g_NoticeHeldBots.empty(),
+                std::memory_order_relaxed);
+        }
+
+        // Let go of the walk it was on, so the ordinary tick does not carry on
+        // to wherever the errand last pointed it. World thread, maps idle.
+        if (PveBotState* state = playerbot::LockedFind(g_PveBotStateByGuid, bot.GetRawValue()))
+            state->journeyActive = false;
+    }
+
+    bool PveManager::HasNoticeErrand(ObjectGuid bot)
+    {
+        if (!g_AnyNoticeErrand.load(std::memory_order_relaxed))
+            return false;
+
+        std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
+        return g_NoticeErrands.count(bot.GetRawValue()) != 0;
+    }
+
+    bool PveManager::IsNoticeErrandArrived(ObjectGuid bot)
+    {
+        NoticeErrand errand;
+        return FindNoticeErrand(bot.GetRawValue(), errand) && errand.Arrived;
+    }
+
+    void PveManager::SetNoticeHeld(ObjectGuid bot, bool held)
+    {
+        std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
+        if (held)
+            g_NoticeHeldBots.insert(bot.GetRawValue());
+        else
+            g_NoticeHeldBots.erase(bot.GetRawValue());
+        g_AnyNoticeErrand.store(!g_NoticeErrands.empty() || !g_NoticeHeldBots.empty(),
+            std::memory_order_relaxed);
+    }
+
+    bool PveManager::IsNoticeHeld(ObjectGuid bot)
+    {
+        if (!g_AnyNoticeErrand.load(std::memory_order_relaxed))
+            return false;
+
+        std::lock_guard<std::mutex> guard(g_NoticeErrandLock);
+        uint64 const raw = bot.GetRawValue();
+        return g_NoticeHeldBots.count(raw) != 0 || g_NoticeErrands.count(raw) != 0;
+    }
+
+    uint8 PveManager::GetBotTemperament(Player const* bot)
+    {
+        return bot ? GetBotAggression(bot) : 0;
+    }
+
+    bool PveManager::GetChestLootOwner(ObjectGuid itemGuid, ObjectGuid& owner)
+    {
+        std::lock_guard<std::mutex> guard(g_AuctionHoldLock);
+        auto const itr = g_AuctionHoldByItem.find(itemGuid.GetRawValue());
+        if (itr == g_AuctionHoldByItem.end() || itr->second.Owner.IsEmpty())
+            return false;
+        owner = itr->second.Owner;
+        return true;
+    }
+
     void PveManager::LoadConfig()
     {
         g_PveConfig.enabled = sConfigMgr->GetBoolDefault("Playerbot.Pve.Enable", false);
@@ -19677,6 +20046,20 @@ namespace playerbot
         if (bot->duel && bot->duel->Opponent == human &&
             bot->duel->State == DUEL_STATE_IN_PROGRESS)
             return true;
+
+        // A bounty-board notice's pair (PairStance). A truce is a promise of no
+        // first blow while a Mok'gora challenger walks up; a feud is consent the
+        // other way round - a refused Mok'gora, or a person come for the bot
+        // carrying their gear - whatever War Mode or the level rule below say.
+        switch (PairStance::Get(bot->GetGUID(), human->GetGUID()))
+        {
+            case PairStance::Stance::Truce:
+                return false;
+            case PairStance::Stance::Feud:
+                return true;
+            default:
+                break;
+        }
 
         // Bot on bot is a different question, answered elsewhere (the open-world
         // no-friendly-fire rule in Object.cpp). Nothing here should stop it.
@@ -21322,6 +21705,27 @@ namespace playerbot
             return;
         }
 
+        // A bounty-board notice errand owns this bot: only death recovery from
+        // the slow tick, and the errand in place of the fast tick - no errands of
+        // its own, no relocation, nobody else to hunt. A fight hands it back to
+        // the ordinary ticks below for as long as it lasts.
+        if (g_AnyNoticeErrand.load(std::memory_order_relaxed) && PveManager::HasNoticeErrand(guid))
+        {
+            if (!player->IsInCombat())
+            {
+                if (now >= state.nextSlowTick)
+                {
+                    state.nextSlowTick = now + std::chrono::milliseconds(cfg.slowTickMs);
+                    RunDeathRecovery(player, state, cfg);
+                }
+
+                if (RunNoticeErrandTick(player, state))
+                    return;
+            }
+            else if (RunNoticeErrandTick(player, state))
+                return;
+        }
+
         if (now >= state.nextSlowTick)
         {
             state.nextSlowTick = now + std::chrono::milliseconds(cfg.slowTickMs);
@@ -21377,6 +21781,16 @@ namespace playerbot
         PvpCore::SetPveCombatEngagement(player->GetGUID(), false);
         LockedErase(g_PveBotStateByGuid, rawGuid);
 
+        // A notice errand dies with the session; the notice script hears about
+        // the logout itself and decides what that means for the notice.
+        if (g_AnyNoticeErrand.load(std::memory_order_relaxed))
+        {
+            std::lock_guard<std::mutex> errandGuard(g_NoticeErrandLock);
+            g_NoticeErrands.erase(rawGuid);
+            g_AnyNoticeErrand.store(!g_NoticeErrands.empty() || !g_NoticeHeldBots.empty(),
+                std::memory_order_relaxed);
+        }
+
         std::lock_guard<std::mutex> guard(g_PvePendingLock);
         g_PendingSummonsByBotGuid.erase(rawGuid);
         g_PendingGroupInviteAccepts.erase(rawGuid);
@@ -21399,6 +21813,12 @@ namespace playerbot
         uint64 const rawGuid = player->GetGUID().GetRawValue();
         PveBotState stateCopy;
         if (LockedGetCopy(g_PveBotStateByGuid, rawGuid, stateCopy) && !stateCopy.masterGuid.IsEmpty())
+            return true;
+
+        // Named on a bounty-board notice somebody is carrying, or on an errand
+        // for one: it must still be out in the world when they get there - not
+        // logged out by the rebalancer, not queued into a battleground.
+        if (IsNoticeHeld(player->GetGUID()))
             return true;
 
         return HasPendingSummon(player->GetGUID());

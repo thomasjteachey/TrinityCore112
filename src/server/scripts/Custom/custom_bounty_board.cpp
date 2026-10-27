@@ -67,6 +67,8 @@
 // every character. A pet's or a totem's blow is its master's.
 
 #include "custom_barracks_hardcore.h"
+#include "custom_bounty_board.h"
+#include "custom_bounty_notices.h"
 
 #include "Bag.h"
 #include "Chat.h"
@@ -418,6 +420,11 @@ namespace
         }
         out.Flush();
 
+        // What this reader in particular may see of them: their own notices,
+        // gear off their body, and what their Ledger rank reads. Before the
+        // end marker, so the addon has it when it draws.
+        BountyNotices::SendBoardExtras(viewer, zoneId, bots);
+
         SendTagged(viewer, "BBRE", head + std::to_string(bots.size()));
     }
 
@@ -428,7 +435,7 @@ namespace
         // Only a bot that is still on a board. One that died or walked out of
         // the contested zones since the board was read says so, rather than
         // handing over a list of gear it no longer has.
-        Player const* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guidLow));
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guidLow));
         if (!IsOnTheBoard(bot))
         {
             SendTagged(viewer, "BBPE", head + "0");
@@ -457,6 +464,10 @@ namespace
         TalentSplit const talents = ReadTalents(bot);
         SendTagged(viewer, "BBPT", Trinity::StringFormat("{}{},{},{}|", head,
             talents.Points[0], talents.Points[1], talents.Points[2]));
+
+        // Whose body each piece came off, and which notices this reader may
+        // take on the bot.
+        BountyNotices::SendPosterExtras(viewer, bot);
 
         SendTagged(viewer, "BBPE", head + "1");
     }
@@ -513,6 +524,11 @@ namespace
             return;
 
         std::string_view const verb = argument.substr(0, colon);
+
+        // Taking, tearing up and paying for notices (custom_bounty_notices.cpp).
+        if (BountyNotices::HandleRequest(player, verb, argument.substr(colon + 1)))
+            return;
+
         Optional<uint32> const id = Trinity::StringTo<uint32>(argument.substr(colon + 1));
         if (!id)
             return;
@@ -521,6 +537,7 @@ namespace
         {
             SendZoneList(player);
             SendNotices(player, *id);
+            BountyNotices::SendLedgerAndNotices(player);
         }
         else if (verb == "ZONE")
             SendNotices(player, *id);
@@ -606,6 +623,50 @@ namespace
             }
             handler.SendSysMessage(line);
         }
+    }
+}
+
+// What the notices need to know about the board, answered by the board's own
+// rules (custom_bounty_board.h).
+namespace BountyBoard
+{
+    bool IsOnTheBoard(Player const* bot)
+    {
+        return ::IsOnTheBoard(bot);
+    }
+
+    uint32 LifetimeKills(ObjectGuid::LowType guid)
+    {
+        return ::LifetimeKills(guid);
+    }
+
+    std::string NoticeName(Player const* bot)
+    {
+        return ::NoticeName(bot);
+    }
+
+    std::string ZoneName(uint32 zoneId)
+    {
+        return ::ZoneName(zoneId);
+    }
+
+    std::vector<uint32> BoardZones()
+    {
+        std::lock_guard<std::mutex> guard(s_boardZonesLock);
+        std::vector<uint32> zones(s_boardZones.begin(), s_boardZones.end());
+        std::sort(zones.begin(), zones.end());
+        return zones;
+    }
+
+    bool IsAtABoard(Player const* player)
+    {
+        return player && ::IsAtABoard(player);
+    }
+
+    void SendTagged(Player* viewer, std::string const& tag, std::string const& payload)
+    {
+        if (viewer)
+            ::SendTagged(viewer, tag, payload);
     }
 }
 
@@ -705,8 +766,13 @@ public:
             AddBoardZone(me->GetZoneId());
             if (s_enabled)
             {
+                // Touching a board hands in every finished notice - before the
+                // board opens, so the addon reads the ledger as it now stands.
+                BountyNotices::OnBoardTouched(player, me);
+
                 SendTagged(player, "BBOP", std::to_string(me->GetZoneId()));
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Read the notices.", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
+                BountyNotices::AddGossipOptions(player);
             }
             SendGossipMenuFor(player, s_gossipTextId, me->GetGUID());
             return true;
@@ -716,7 +782,13 @@ public:
         // world thread and may read the whole fleet.
         bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
         {
+            uint32 const sender = GetGossipSenderFor(player, gossipListId);
             uint32 const action = GetGossipActionFor(player, gossipListId);
+
+            // The notices' own options: they close the menu or open the next.
+            if (s_enabled && BountyNotices::OnGossipSelect(player, me, sender, action))
+                return true;
+
             CloseGossipMenuFor(player);
             if (s_enabled && action == GOSSIP_ACTION_INFO_DEF + 1)
                 WriteNoticesToChat(player, me->GetZoneId());
