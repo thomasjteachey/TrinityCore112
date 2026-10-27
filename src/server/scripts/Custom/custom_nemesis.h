@@ -73,6 +73,10 @@ namespace Nemesis
     // challenge until that is settled. Any thread.
     bool IsHunting(ObjectGuid bot);
 
+    // The Warchief of the zone it stands in right now - what a bounty-board
+    // posse is raised against. Any thread.
+    bool IsWarchief(ObjectGuid bot);
+
     // --- the board (world thread) -------------------------------------------
 
     // BBNX after a zone's notices: which of them are nemeses.

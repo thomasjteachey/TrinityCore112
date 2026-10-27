@@ -35,6 +35,7 @@ void AddSC_custom_weekly_deaths();
 void AddSC_custom_bounty_board();
 void AddSC_custom_bounty_notices();
 void AddSC_custom_nemesis();
+void AddSC_custom_bounty_writs();
 void AddSC_custom_notoriety();
 void AddSC_custom_graceful_shutdown();
 void AddSC_custom_bot_map_feed();
@@ -106,6 +107,7 @@ void AddCustomScripts()
     AddSC_custom_bounty_board();
     AddSC_custom_bounty_notices();
     AddSC_custom_nemesis();
+    AddSC_custom_bounty_writs();
     AddSC_custom_notoriety();
     AddSC_custom_graceful_shutdown();
     AddSC_custom_bot_map_feed();

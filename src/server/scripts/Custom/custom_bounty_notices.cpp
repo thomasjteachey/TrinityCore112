@@ -38,22 +38,28 @@
 //
 // Added to the board addon's protocol (custom_bounty_board.cpp has the rest):
 //
-//   client -> server  CCGAMEREQ\tBOUNTY:TAKE:<guid>:<H|M|R>    take a notice
-//                     CCGAMEREQ\tBOUNTY:DROP:<H|M|R>:<slot>    tear one up
+//   client -> server  CCGAMEREQ\tBOUNTY:TAKE:<guid>:<H|M|R|P>  take a notice (P: raise a posse)
+//                     CCGAMEREQ\tBOUNTY:DROP:<H|M|R|P>:<slot>  tear one up
 //                     CCGAMEREQ\tBOUNTY:LEDGER:0               ledger + notices
-//                     CCGAMEREQ\tBOUNTY:PARDON:0               spend seals
+//                     CCGAMEREQ\tBOUNTY:SHOP:0                 the Quartermaster's list
+//                     CCGAMEREQ\tBOUNTY:BUY:<itemId>           spend seals on it
 //
 //   server -> client  BBRX:<zoneId>|<guid>,<flags>,<temper>,<coin>,<area>;...
 //                         flags 1 yours, 2 carries your gear, 4 a Mok'gora is out
 //                         temper/coin are -1 and area empty below the rank
+//                     BBMW:<zoneId>|<guid>,<collectedBy>        the zone's Most Wanted today
 //                     BBPO:<guid>|<slot>,<itemId>,<owner>;...  taken from a body
 //                     BBPX:<guid>|<hunt>,<mokgora>,<recovery>  may you take it
+//                     BBPP:<guid>|<posse>                      ...as a posse
+//                     BBMP:<guid>|<multiplier x10>,<collectedBy> it is today's Most Wanted
 //                     BBLG:<rank>,<collected>,<next>,<seals>,<hunts>,<mokgora>,
-//                          <recovered>,<zonesDone>,<zonesTotal>,<pardonIn>,
-//                          <maxNotices>,<pardonStacks>,<pardonSeals>,<notoriety>
+//                          <recovered>,<zonesDone>,<zonesTotal>,0,<maxNotices>,
+//                          0,0,0,<features>,<posses>,<rank1>..<rank4> (the zeros were pardons)
 //                     BBNA:<kind>,<slot>,<guid>,<level>,<class>,<zoneId>,
 //                          <complete>,<expiresIn>,<name>;...
 //                     BBNE:<count>
+//                     BBSH:<itemId>,<price>,<count>;...         the Quartermaster's list
+//                     BBSE:<seals>
 //                     BBMS:<1 ok, 0 refused>|<text>
 
 #include "custom_bounty_notices.h"
@@ -112,6 +118,7 @@ namespace
         Hunt     = 1,
         Mokgora  = 2,
         Recovery = 3,
+        Posse    = 4,   // a party's notice on a zone's Warchief
     };
 
     constexpr uint8 kSlots = 2;
@@ -128,7 +135,7 @@ namespace
     uint8 s_minLevel = 10;
     // [kind - 1][slot]. Two of each, so a Headsman can carry two at once and
     // somebody robbed by two bots can go after both.
-    uint32 s_questIds[3][kSlots] = { { 60010, 60013 }, { 60011, 60014 }, { 60012, 60015 } };
+    uint32 s_questIds[4][kSlots] = { { 60010, 60013 }, { 60011, 60014 }, { 60012, 60015 }, { 60016, 60017 } };
     uint32 s_noticeMinutes = 120;
     uint32 s_hintSeconds = 180;
     uint32 s_quarryGoneMinutes = 20;
@@ -168,9 +175,26 @@ namespace
     uint32 s_headsmanTitle = 210;
     uint32 s_relentlessTitle = 211;
 
-    uint32 s_pardonSeals = 1;
-    uint32 s_pardonStacks = 10;
-    uint32 s_pardonCooldownMinutes = 30;
+    uint32 s_sealsPosse = 3;
+    float s_posseMoney = 2.0f;
+    float s_posseBubbles = 3.0f;
+    uint32 s_posseMinGroup = 2;
+
+    float s_mostWantedMultiplier = 3.0f;
+    uint32 s_mostWantedResetHour = 6;
+    uint32 s_mostWantedMissingMinutes = 30;
+
+    // The Quartermaster: what seals buy. Centurion.BountyBoard.Notices.Shop.Items,
+    // "itemId:price[:count]" comma-separated.
+    struct ShopItem
+    {
+        uint32 ItemId = 0;
+        uint32 Price = 0;
+        uint32 Count = 1;
+    };
+    std::vector<ShopItem> s_shop;
+    constexpr char const* kDefaultShop = "929:1:5,1710:1:5,3928:2:5,13446:3:5,5634:2,3387:4,13452:4,13510:15,"
+        "8529:2:5,8485:10,11023:10,23192:25,1973:25,19872:150";
 
     // Every part of the feature can be switched off on its own, live, with
     // .reload config. A part switched off stops at once: its notices freeze
@@ -195,9 +219,13 @@ namespace
         bool PerkCoin = true;           // Manhunter reads coin
         bool PerkTwoNotices = true;     // Headsman carries two
         bool Keepsakes = true;          // the readable poster on hand-in
+        bool KeepsakesByMail = true;    // ...sent to the mailbox, never into the bags
         bool Tabard = true;             // the Headsman's tabard
         bool Titles = true;             // Headsman and the Relentless
-        bool Pardons = true;            // seals buy notoriety off
+        bool Posse = true;              // posse notices on a zone's Warchief
+        bool PosseFeud = true;          // ...that the whole party may fight, War Mode or not
+        bool MostWanted = true;         // a pinned bot a day in every zone, paying more
+        bool Shop = true;               // seals buy things from the Quartermaster
         bool RewardMoney = true;
         bool RewardExperience = true;
         bool RewardSeals = true;
@@ -215,16 +243,18 @@ namespace
     constexpr uint32 kSenderTakeMokgora = 900312;
     constexpr uint32 kSenderTakeRecovery = 900313;
     constexpr uint32 kSenderLedger = 900314;
-    constexpr uint32 kSenderPardon = 900315;
+    constexpr uint32 kSenderShop = 900315;
+    constexpr uint32 kSenderBuy = 900316;
+    constexpr uint32 kSenderTakePosse = 900317;
 
     void LoadNoticeConfig()
     {
         s_enabled = sConfigMgr->GetBoolDefault("Centurion.BountyBoard.Notices.Enable", false);
         s_minLevel = uint8(std::clamp(sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.MinLevel", 10), 1, 80));
 
-        static char const* const kindKeys[3] = { "Hunt", "Mokgora", "Recovery" };
-        uint32 const defaults[3][kSlots] = { { 60010, 60013 }, { 60011, 60014 }, { 60012, 60015 } };
-        for (uint8 k = 0; k < 3; ++k)
+        static char const* const kindKeys[4] = { "Hunt", "Mokgora", "Recovery", "Posse" };
+        uint32 const defaults[4][kSlots] = { { 60010, 60013 }, { 60011, 60014 }, { 60012, 60015 }, { 60016, 60017 } };
+        for (uint8 k = 0; k < 4; ++k)
             for (uint8 s = 0; s < kSlots; ++s)
                 s_questIds[k][s] = uint32(std::max(0, sConfigMgr->GetIntDefault(
                     Trinity::StringFormat("Centurion.BountyBoard.Notices.{}Quest{}", kindKeys[k], s + 1), int32(defaults[k][s]))));
@@ -253,6 +283,27 @@ namespace
         s_sealsHunt = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.SealsHunt", 1)));
         s_sealsMokgora = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.SealsMokgora", 2)));
         s_sealsRecovery = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.SealsRecovery", 1)));
+        s_sealsPosse = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.SealsPosse", 3)));
+        s_posseMoney = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.BountyBoard.Notices.PosseMoney", 2.0f));
+        s_posseBubbles = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.BountyBoard.Notices.PosseBubbles", 3.0f));
+        s_posseMinGroup = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.Posse.MinGroup", 2), 1, 40));
+        s_mostWantedMultiplier = std::clamp(sConfigMgr->GetFloatDefault("Centurion.BountyBoard.Notices.MostWanted.Multiplier", 3.0f), 1.0f, 20.0f);
+        s_mostWantedResetHour = uint32(std::clamp(sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.MostWanted.ResetHour", 6), 0, 23));
+        s_mostWantedMissingMinutes = uint32(std::max(5, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.MostWanted.MissingMinutes", 30)));
+
+        s_shop.clear();
+        std::string const shop = sConfigMgr->GetStringDefault("Centurion.BountyBoard.Notices.Shop.Items", kDefaultShop);
+        for (std::string_view entry : Trinity::Tokenize(shop, ',', false))
+        {
+            std::vector<std::string_view> const parts = Trinity::Tokenize(entry, ':', false);
+            if (parts.size() < 2)
+                continue;
+            Optional<uint32> const itemId = Trinity::StringTo<uint32>(parts[0]);
+            Optional<uint32> const price = Trinity::StringTo<uint32>(parts[1]);
+            Optional<uint32> const count = parts.size() > 2 ? Trinity::StringTo<uint32>(parts[2]) : Optional<uint32>(1);
+            if (itemId && *itemId && price && count && *count)
+                s_shop.push_back({ *itemId, *price, *count });
+        }
 
         s_rankAt.clear();
         std::string const rankAt = sConfigMgr->GetStringDefault("Centurion.BountyBoard.Notices.RankAt", "5,15,35,75");
@@ -268,9 +319,6 @@ namespace
         s_headsmanTitle = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.HeadsmanTitle", 210)));
         s_relentlessTitle = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.RelentlessTitle", 211)));
 
-        s_pardonSeals = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.PardonSeals", 1)));
-        s_pardonStacks = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.PardonStacks", 10)));
-        s_pardonCooldownMinutes = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.BountyBoard.Notices.PardonCooldownMinutes", 30)));
 
         auto const on = [](char const* key) { return sConfigMgr->GetBoolDefault(
             Trinity::StringFormat("Centurion.BountyBoard.Notices.{}", key), true); };
@@ -290,9 +338,13 @@ namespace
         s_on.PerkCoin = on("Ledger.Perk.Coin.Enable");
         s_on.PerkTwoNotices = on("Ledger.Perk.TwoNotices.Enable");
         s_on.Keepsakes = on("Keepsakes.Enable");
+        s_on.KeepsakesByMail = on("Keepsakes.Mail.Enable");
         s_on.Tabard = on("Tabard.Enable");
         s_on.Titles = on("Titles.Enable");
-        s_on.Pardons = on("Pardons.Enable");
+        s_on.Posse = on("Posse.Enable");
+        s_on.PosseFeud = on("Posse.Feud.Enable");
+        s_on.MostWanted = on("MostWanted.Enable");
+        s_on.Shop = on("Shop.Enable");
         s_on.RewardMoney = on("Reward.Money.Enable");
         s_on.RewardExperience = on("Reward.Experience.Enable");
         s_on.RewardSeals = on("Reward.Seals.Enable");
@@ -309,9 +361,10 @@ namespace
             return false;
         switch (kind)
         {
-            case Kind::Hunt:    return s_on.Hunt;
-            case Kind::Mokgora: return s_on.Mokgora;
-            default:            return s_on.Recovery;
+            case Kind::Hunt:     return s_on.Hunt;
+            case Kind::Mokgora:  return s_on.Mokgora;
+            case Kind::Recovery: return s_on.Recovery;
+            default:             return s_on.Posse;
         }
     }
 
@@ -325,9 +378,11 @@ namespace
     // BBLG's last field: which parts the addon should draw.
     uint32 FeatureBits()
     {
-        return (s_on.Ledger ? 1u : 0u) | (s_on.Pardons ? 2u : 0u) | (s_on.PerkArea ? 4u : 0u) |
+        // 2 was pardons, gone: an older addon reads it as "the board sells none".
+        return (s_on.Ledger ? 1u : 0u) | (s_on.PerkArea ? 4u : 0u) |
             (s_on.PerkTemper ? 8u : 0u) | (s_on.PerkCoin ? 16u : 0u) | (s_on.PerkTwoNotices ? 32u : 0u) |
-            (s_on.Titles ? 64u : 0u) | (s_on.ShowTakenFrom ? 128u : 0u);
+            (s_on.Titles ? 64u : 0u) | (s_on.ShowTakenFrom ? 128u : 0u) | (s_on.Shop ? 256u : 0u) |
+            (s_on.MostWanted ? 1024u : 0u) | (KindOn(Kind::Posse) ? 2048u : 0u);
     }
 
     uint32 QuestFor(Kind kind, uint8 slot)
@@ -341,7 +396,8 @@ namespace
         {
             case Kind::Hunt:     return 'H';
             case Kind::Mokgora:  return 'M';
-            default:             return 'R';
+            case Kind::Recovery: return 'R';
+            default:             return 'P';
         }
     }
 
@@ -352,6 +408,7 @@ namespace
             case 'H': out = Kind::Hunt;     return true;
             case 'M': out = Kind::Mokgora;  return true;
             case 'R': out = Kind::Recovery; return true;
+            case 'P': out = Kind::Posse;    return true;
             default:  return false;
         }
     }
@@ -385,6 +442,8 @@ namespace
         bool Dueling = false;
         time_t NextChallengeTryAt = 0;
         time_t NextNagAt = 0;
+        time_t WaitingSince = 0;       // a challenger standing there, not yet able to ask
+        bool WaitLogged = false;
         std::vector<ObjectGuid> Escorts;
     };
 
@@ -395,7 +454,7 @@ namespace
         uint32 Mokgora = 0;
         uint32 Recovered = 0;
         uint32 Seals = 0;
-        time_t PardonAt = 0;
+        uint32 Posses = 0;
         std::set<uint32> Zones;
     };
 
@@ -574,10 +633,10 @@ namespace
             return;
 
         CharacterDatabase.PExecute(
-            "REPLACE INTO character_bounty_ledger (guid, collected, hunts, mokgora, recovered, seals, pardonAt) "
-            "VALUES ({}, {}, {}, {}, {}, {}, {})",
+            "REPLACE INTO character_bounty_ledger (guid, collected, hunts, mokgora, recovered, seals, pardonAt, posses) "
+            "VALUES ({}, {}, {}, {}, {}, {}, 0, {})",
             guid.GetCounter(), ledger.Collected, ledger.Hunts, ledger.Mokgora, ledger.Recovered, ledger.Seals,
-            uint32(ledger.PardonAt));
+            ledger.Posses);
     }
 
     void LoadLedger(Player* player)
@@ -588,7 +647,7 @@ namespace
         Ledger ledger;
         ObjectGuid::LowType const low = player->GetGUID().GetCounter();
         if (QueryResult result = CharacterDatabase.PQuery(
-                "SELECT collected, hunts, mokgora, recovered, seals, pardonAt FROM character_bounty_ledger WHERE guid = {}", low))
+                "SELECT collected, hunts, mokgora, recovered, seals, posses FROM character_bounty_ledger WHERE guid = {}", low))
         {
             Field* fields = result->Fetch();
             ledger.Collected = fields[0].GetUInt32();
@@ -596,7 +655,7 @@ namespace
             ledger.Mokgora = fields[2].GetUInt32();
             ledger.Recovered = fields[3].GetUInt32();
             ledger.Seals = fields[4].GetUInt32();
-            ledger.PardonAt = time_t(fields[5].GetUInt32());
+            ledger.Posses = fields[5].GetUInt32();
         }
 
         if (QueryResult result = CharacterDatabase.PQuery(
@@ -656,6 +715,15 @@ namespace
             GrantTitle(player, s_relentlessTitle, "the Relentless");
     }
 
+    void MailItem(Player* player, Item* item, GameObject* from, std::string const& subject, std::string const& body)
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        item->SaveToDB(trans);
+        MailSender const sender = from ? MailSender(from) : MailSender(MAIL_NORMAL, 0);
+        MailDraft(subject, body).AddItem(item).SendMailTo(trans, MailReceiver(player), sender);
+        CharacterDatabase.CommitTransaction(trans);
+    }
+
     void GiveOrMail(Player* player, Item* item, GameObject* from, char const* subject, char const* body)
     {
         ItemPosCountVec dest;
@@ -666,11 +734,7 @@ namespace
             return;
         }
 
-        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-        item->SaveToDB(trans);
-        MailSender const sender = from ? MailSender(from) : MailSender(MAIL_NORMAL, 0);
-        MailDraft(subject, body).AddItem(item).SendMailTo(trans, MailReceiver(player), sender);
-        CharacterDatabase.CommitTransaction(trans);
+        MailItem(player, item, from, subject, body);
         Tell(player, "Your bags are full. It has been sent to your mailbox.");
     }
 
@@ -793,6 +857,15 @@ namespace
                 // not land a blow on what they took the notice for, so the pair
                 // feuds. With War Mode required there is nothing to add.
                 if (on && !s_on.HuntRequireWarMode)
+                    PutStance(notice.Quarry, notice.Holder, PairStance::Stance::Feud);
+                else
+                    PairStance::Clear(notice.Quarry, notice.Holder);
+                break;
+            case Kind::Posse:
+                // The whole party may fight the Warchief, War Mode or not (and
+                // it them): shared with the holder's group, and every member of
+                // a posse holds a notice of their own anyway.
+                if (on && s_on.PosseFeud)
                     PutStance(notice.Quarry, notice.Holder, PairStance::Stance::Feud);
                 else
                     PairStance::Clear(notice.Quarry, notice.Holder);
@@ -1079,6 +1152,21 @@ namespace
 
     // Why this person may not take this kind of notice on this bot right now,
     // as a code for the addon; "ok" when they may. `slot` gets the free slot.
+    // People in the player's party or raid, the player included. Bots may ride
+    // along but do not count. World thread.
+    uint32 PosseSize(Player* player)
+    {
+        Group* group = player->GetGroup();
+        if (!group)
+            return 1;
+
+        uint32 people = 0;
+        for (GroupReference* ref = group->GetFirstMember(); ref != nullptr; ref = ref->next())
+            if (Player* member = ref->GetSource(); member && !BarracksHardcore::IsPlayerbot(member))
+                ++people;
+        return std::max<uint32>(people, 1);
+    }
+
     std::string WhyNot(Player* player, Player* bot, Kind kind, uint8& slot)
     {
         slot = 0;
@@ -1115,6 +1203,17 @@ namespace
             case Kind::Recovery:
                 if (!CarriesGearOf(bot, player->GetGUID()))
                     return "none";
+                break;
+            case Kind::Posse:
+                // The zone's Warchief only, and only for a party: a posse is
+                // the board's group content. No War Mode needed - the notice
+                // makes it fair game to the whole party.
+                if (!Nemesis::IsWarchief(bot->GetGUID()))
+                    return "chief";
+                if (PosseSize(player) < s_posseMinGroup)
+                    return "group";
+                if (!levelOk)
+                    return "level";
                 break;
         }
 
@@ -1184,6 +1283,8 @@ namespace
         if (code == "full")  return "You carry as many notices as the board will trust you with. Finish one first.";
         if (code == "taken") return "Somebody else's challenge is already on its way to them.";
         if (code == "grave") return "That one has crawled out of a grave for somebody. The board will not post it until that is settled.";
+        if (code == "chief") return "Only a zone's Warchief draws a posse.";
+        if (code == "group") return Trinity::StringFormat("A posse needs at least {} of you in a party. Group up first.", s_posseMinGroup);
         if (code == "none")  return "They carry nothing of yours.";
         if (code == "quest") return "Your quest log is full.";
         return "The board will not give you that notice.";
@@ -1231,26 +1332,53 @@ namespace
 
     void SendFirstHint(Player* holder, Notice& notice, Player* quarry);
 
-    void TakeNotice(Player* player, ObjectGuid::LowType botLow, Kind kind)
+    // A duel request to or from a bot that is still unanswered on a second look
+    // at least five seconds later. The fleet answers one on the spot (accepts,
+    // or refuses out loud - playerbot_loader's OnDuelRequest), so one still open
+    // is stuck, and it holds both sides "in a duel" for good: a Mok'gora
+    // challenger stood beside its person waiting for it to end, and nothing
+    // ended it until one of the two died. World thread.
+    void ClearStuckDuelRequest(Player* player, time_t now)
     {
-        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(botLow));
+        static std::unordered_map<uint64, std::pair<uint64, time_t>> seen;   // player -> (opponent, first seen)
+        uint64 const key = player->GetGUID().GetRawValue();
 
-        uint8 slot = 0;
-        std::string const code = bot ? WhyNot(player, bot, kind, slot) : std::string("gone");
-        if (code != "ok")
+        Player* opponent = player->duel ? player->duel->Opponent : nullptr;
+        bool const stuckShape = opponent && player->duel->State == DUEL_STATE_CHALLENGED &&
+            (BarracksHardcore::IsPlayerbot(player) || BarracksHardcore::IsPlayerbot(opponent));
+        if (!stuckShape)
         {
-            Result(player, false, WhyNotText(code));
+            seen.erase(key);
             return;
         }
 
+        uint64 const other = opponent->GetGUID().GetRawValue();
+        auto const itr = seen.find(key);
+        if (itr == seen.end() || itr->second.first != other)
+        {
+            seen[key] = { other, now };
+            return;
+        }
+        if (now - itr->second.second < 5)
+            return;
+
+        seen.erase(itr);
+        TC_LOG_INFO("scripts", "Bounty notices: cleared a duel request between {} and {} that was never answered.",
+            player->GetName(), opponent->GetName());
+        player->DuelComplete(DUEL_INTERRUPTED);
+    }
+
+    // Into the quest log, the registry and the table, and in force on the bots.
+    // The new notice's id, or 0 when the quest would not go in. World thread.
+    uint32 AddNoticeFor(Player* player, Player* bot, Kind kind, uint8 slot, std::vector<ObjectGuid> const& escorts)
+    {
         uint32 const questId = QuestFor(kind, slot);
         Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest)
+            return 0;
         player->AddQuestAndCheckCompletion(quest, nullptr);
         if (player->GetQuestStatus(questId) == QUEST_STATUS_NONE)
-        {
-            Result(player, false, "The notice would not go into your quest log.");
-            return;
-        }
+            return 0;
 
         time_t const now = GameTime::GetGameTime();
 
@@ -1267,12 +1395,6 @@ namespace
         notice.ZoneId = bot->GetZoneId();
         notice.TakenAt = now;
         notice.ExpiresAt = now + time_t(s_noticeMinutes) * MINUTE;
-
-        // The hunted hear it. An aggressive bot does not wait to be found alone.
-        std::vector<ObjectGuid> escorts;
-        uint8 const temper = playerbot::PveManager::GetBotTemperament(bot);
-        if (kind == Kind::Hunt && s_on.HuntEscorts && temper >= s_escortTemper)
-            escorts = PickEscorts(bot, std::min<uint32>(s_escortMax, temper >= s_escortTemperTwo ? 2 : 1));
 
         uint32 id = 0;
         {
@@ -1293,9 +1415,37 @@ namespace
         }
 
         SaveNotice(notice);
+        return id;
+    }
 
-        std::string const who = Trinity::StringFormat("{} (level {} {})", notice.QuarryName,
-            uint32(notice.QuarryLevel), ClassWord(notice.QuarryClass));
+    void TakeNotice(Player* player, ObjectGuid::LowType botLow, Kind kind)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(botLow));
+
+        uint8 slot = 0;
+        std::string const code = bot ? WhyNot(player, bot, kind, slot) : std::string("gone");
+        if (code != "ok")
+        {
+            Result(player, false, WhyNotText(code));
+            return;
+        }
+
+        // The hunted hear it. An aggressive bot does not wait to be found alone.
+        std::vector<ObjectGuid> escorts;
+        uint8 const temper = playerbot::PveManager::GetBotTemperament(bot);
+        if (kind == Kind::Hunt && s_on.HuntEscorts && temper >= s_escortTemper)
+            escorts = PickEscorts(bot, std::min<uint32>(s_escortMax, temper >= s_escortTemperTwo ? 2 : 1));
+
+        uint32 const id = AddNoticeFor(player, bot, kind, slot, escorts);
+        if (!id)
+        {
+            Result(player, false, "The notice would not go into your quest log.");
+            return;
+        }
+
+        std::string const name = BountyBoard::NoticeName(bot);
+        std::string const who = Trinity::StringFormat("{} (level {} {})", name, uint32(bot->GetLevel()),
+            ClassWord(bot->GetClass()));
 
         switch (kind)
         {
@@ -1303,7 +1453,7 @@ namespace
                 Result(player, true, Trinity::StringFormat("You tear down the notice on {}. Kill them, then touch any bounty board.", who));
                 if (!escorts.empty())
                     Tell(player, Trinity::StringFormat("Word travels fast. {} has heard you are coming, and {} at their side.",
-                        notice.QuarryName, escorts.size() == 1 ? "a friend now stands" : "two friends now stand"));
+                        name, escorts.size() == 1 ? "a friend now stands" : "two friends now stand"));
                 break;
             case Kind::Mokgora:
                 Result(player, true, Trinity::StringFormat("You tear down the notice on {}. They will come to you and "
@@ -1315,6 +1465,45 @@ namespace
                     "from your body. Until it is back in your hands, they are your enemy and you are theirs - "
                     "War Mode or not.", who));
                 break;
+            case Kind::Posse:
+            {
+                // The whole party rides: everybody in it here in the zone who
+                // may take the notice gets their own copy, and their own pay.
+                std::string const zone = BountyBoard::ZoneName(bot->GetZoneId());
+                uint32 riders = 0;
+                if (Group* group = player->GetGroup())
+                    for (GroupReference* ref = group->GetFirstMember(); ref != nullptr; ref = ref->next())
+                    {
+                        Player* member = ref->GetSource();
+                        if (!member || member == player || !member->IsInWorld() || BarracksHardcore::IsPlayerbot(member) ||
+                            member->GetZoneId() != player->GetZoneId())
+                            continue;
+
+                        uint8 memberSlot = 0;
+                        std::string const memberCode = WhyNot(member, bot, Kind::Posse, memberSlot);
+                        if (memberCode == "held")
+                            continue;   // already riding
+                        if (memberCode != "ok" || !AddNoticeFor(member, bot, Kind::Posse, memberSlot, {}))
+                        {
+                            Tell(member, Trinity::StringFormat("{} raised a posse against {}, but you cannot ride with it: {}",
+                                player->GetName(), name, memberCode == "ok" ? std::string("your quest log is full.")
+                                    : WhyNotText(memberCode)));
+                            continue;
+                        }
+
+                        ++riders;
+                        Tell(member, Trinity::StringFormat("{} raised a posse against {}, Warchief of {}. You ride with it: "
+                            "bring it down together, then touch any bounty board.", player->GetName(), who, zone));
+                        SendNoticeList(member);
+                    }
+
+                Result(player, true, Trinity::StringFormat("You raise a posse against {}, Warchief of {}{}. Bring it down "
+                    "together, then touch any bounty board.{}", who, zone,
+                    riders ? Trinity::StringFormat(" - {} of your party ride{} with you", riders, riders == 1 ? "s" : "")
+                           : std::string(),
+                    s_on.PosseFeud ? " It is fair game to every one of you, War Mode or not." : ""));
+                break;
+            }
         }
 
         if (kind != Kind::Mokgora && s_on.Hints)
@@ -1327,7 +1516,7 @@ namespace
         SendNoticeList(player);
 
         TC_LOG_INFO("scripts", "Bounty notices: {} took a {} notice on {} (level {}, temper {}, {} escort(s)).",
-            player->GetName(), KindCode(kind), notice.QuarryName, uint32(notice.QuarryLevel), uint32(temper), escorts.size());
+            player->GetName(), KindCode(kind), name, uint32(bot->GetLevel()), uint32(temper), escorts.size());
     }
 
     // ---------------------------------------------------------------- hints
@@ -1388,14 +1577,236 @@ namespace
         uint8 const rank = RankFor(ledger.Collected);
         auto const [done, total] = ZoneProgress(ledger);
 
-        time_t const now = GameTime::GetGameTime();
-        time_t const pardonReady = ledger.PardonAt + time_t(s_pardonCooldownMinutes) * MINUTE;
-        uint32 const pardonIn = pardonReady > now ? uint32(pardonReady - now) : 0;
-
-        BountyBoard::SendTagged(viewer, "BBLG", Trinity::StringFormat("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        // Fields 10 and 12-14 were pardons: zero, so an older addon still reads the
+        // rest where it expects it. Then the four rank thresholds, so the Ledger
+        // can say what each rank takes.
+        std::string thresholds;
+        for (uint8 i = 0; i < kTopRank; ++i)
+            thresholds += Trinity::StringFormat(",{}", i < s_rankAt.size() ? s_rankAt[i] : 0u);
+        BountyBoard::SendTagged(viewer, "BBLG", Trinity::StringFormat("{},{},{},{},{},{},{},{},{},0,{},0,0,0,{},{}{}",
             uint32(rank), ledger.Collected, NextRankAt(ledger.Collected), ledger.Seals, ledger.Hunts, ledger.Mokgora,
-            ledger.Recovered, done, total, pardonIn, MaxNotices(rank), s_pardonStacks, s_pardonSeals,
-            Bounty::GetStacks(viewer), FeatureBits()));
+            ledger.Recovered, done, total, MaxNotices(rank), FeatureBits(), ledger.Posses, thresholds));
+    }
+
+    // ---------------------------------------------------------------- Most Wanted
+
+    // Every board zone pins one bot a day: the one with the most player kills
+    // this week (its lifetime count breaks a tie). The first notice collected on
+    // it that day pays the multiplier, and the collector's name is stamped
+    // across its poster until the day turns.
+    struct MostWantedPin
+    {
+        uint32 Day = 0;
+        ObjectGuid Bot;
+        std::string Name;
+        std::string CollectedBy;
+        time_t MissingSince = 0;   // runtime only
+    };
+    std::unordered_map<uint32, MostWantedPin> g_mostWanted;               // zone -> today's pin, under g_lock
+    std::unordered_map<uint32, std::map<uint32, uint32>> g_botDayKills;   // bot low guid -> day -> kills, under g_lock
+
+    // The board's day, turning over at MostWanted.ResetHour (server clock, UTC).
+    uint32 DayIndex(time_t at)
+    {
+        return uint32(std::max<time_t>(0, at - time_t(s_mostWantedResetHour) * HOUR) / DAY);
+    }
+
+    uint32 WeekKillsLocked(uint32 botLow, uint32 today)
+    {
+        auto const itr = g_botDayKills.find(botLow);
+        if (itr == g_botDayKills.end())
+            return 0;
+        uint32 kills = 0;
+        for (auto const& [day, count] : itr->second)
+            if (day + 7 > today)
+                kills += count;
+        return kills;
+    }
+
+    // A world bot has killed a person. Any thread.
+    void RecordBotKill(ObjectGuid::LowType botLow)
+    {
+        uint32 const today = DayIndex(GameTime::GetGameTime());
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            std::map<uint32, uint32>& days = g_botDayKills[botLow];
+            ++days[today];
+            while (!days.empty() && days.begin()->first + 7 <= today)
+                days.erase(days.begin());
+        }
+        if (s_tablesReady)
+            CharacterDatabase.PExecute("INSERT INTO character_bounty_bot_kills (bot, day, kills) VALUES ({}, {}, 1) "
+                "ON DUPLICATE KEY UPDATE kills = kills + 1", botLow, today);
+    }
+
+    void SaveMostWanted(uint32 zoneId, MostWantedPin const& pin)
+    {
+        if (!s_tablesReady)
+            return;
+        std::string name = pin.Name;
+        std::string by = pin.CollectedBy;
+        CharacterDatabase.EscapeString(name);
+        CharacterDatabase.EscapeString(by);
+        CharacterDatabase.PExecute("REPLACE INTO character_bounty_mostwanted (zoneId, day, bot, name, collectedBy) "
+            "VALUES ({}, {}, {}, '{}', '{}')", zoneId, pin.Day, pin.Bot.GetCounter(), name, by);
+    }
+
+    // World thread, at startup with the tables in place.
+    void LoadMostWanted()
+    {
+        uint32 const today = DayIndex(GameTime::GetGameTime());
+        CharacterDatabase.DirectExecute(Trinity::StringFormat(
+            "DELETE FROM character_bounty_bot_kills WHERE day + 7 <= {}", today).c_str());
+
+        std::lock_guard<std::mutex> guard(g_lock);
+        g_botDayKills.clear();
+        if (QueryResult result = CharacterDatabase.Query("SELECT bot, day, kills FROM character_bounty_bot_kills"))
+        {
+            do
+            {
+                Field* f = result->Fetch();
+                g_botDayKills[f[0].GetUInt32()][f[1].GetUInt32()] = f[2].GetUInt32();
+            } while (result->NextRow());
+        }
+
+        g_mostWanted.clear();
+        if (QueryResult result = CharacterDatabase.PQuery(
+                "SELECT zoneId, day, bot, name, collectedBy FROM character_bounty_mostwanted WHERE day = {}", today))
+        {
+            do
+            {
+                Field* f = result->Fetch();
+                MostWantedPin pin;
+                pin.Day = f[1].GetUInt32();
+                if (uint32 const bot = f[2].GetUInt32())
+                    pin.Bot = ObjectGuid::Create<HighGuid::Player>(bot);
+                pin.Name = f[3].GetString();
+                pin.CollectedBy = f[4].GetString();
+                g_mostWanted[f[0].GetUInt32()] = pin;
+            } while (result->NextRow());
+        }
+    }
+
+    // World thread, once a minute. A pin whose bot has been off the board for
+    // MostWanted.MissingMinutes moves on to somebody else - unless somebody has
+    // already collected on it: that one stays, stamped, until the day turns.
+    void TickMostWanted()
+    {
+        if (!s_enabled || !s_on.MostWanted || !s_tablesReady)
+            return;
+
+        time_t const now = GameTime::GetGameTime();
+        uint32 const today = DayIndex(now);
+
+        struct Candidate
+        {
+            ObjectGuid Guid;
+            std::string Name;
+            uint32 Lifetime = 0;
+        };
+        std::unordered_map<uint32, std::vector<Candidate>> byZone;
+        for (auto const& [guid, bot] : ObjectAccessor::GetPlayers())
+            if (BountyBoard::IsOnTheBoard(bot))
+                byZone[bot->GetZoneId()].push_back({ bot->GetGUID(), BountyBoard::NoticeName(bot),
+                    BountyBoard::LifetimeKills(bot->GetGUID().GetCounter()) });
+        std::vector<uint32> const zones = BountyBoard::BoardZones();
+
+        std::vector<std::pair<uint32, MostWantedPin>> saves;
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            for (uint32 zoneId : zones)
+            {
+                MostWantedPin& pin = g_mostWanted[zoneId];
+                std::vector<Candidate> const& bots = byZone[zoneId];
+
+                ObjectGuid skip;
+                if (pin.Day == today && !pin.Bot.IsEmpty())
+                {
+                    if (!pin.CollectedBy.empty())
+                        continue;
+                    bool const here = std::any_of(bots.begin(), bots.end(),
+                        [&pin](Candidate const& c) { return c.Guid == pin.Bot; });
+                    if (here)
+                    {
+                        pin.MissingSince = 0;
+                        continue;
+                    }
+                    if (!pin.MissingSince)
+                    {
+                        pin.MissingSince = now;
+                        continue;
+                    }
+                    if (now - pin.MissingSince < time_t(s_mostWantedMissingMinutes) * MINUTE)
+                        continue;
+                    skip = pin.Bot;   // gone to ground: pin somebody else
+                }
+
+                Candidate const* best = nullptr;
+                uint32 bestWeek = 0;
+                for (Candidate const& c : bots)
+                {
+                    if (c.Guid == skip)
+                        continue;
+                    uint32 const week = WeekKillsLocked(c.Guid.GetCounter(), today);
+                    if (!week && !c.Lifetime)
+                        continue;   // nobody is Most Wanted for killing nobody
+                    if (!best || week > bestWeek || (week == bestWeek && c.Lifetime > best->Lifetime))
+                    {
+                        best = &c;
+                        bestWeek = week;
+                    }
+                }
+
+                if (!best)
+                {
+                    if (pin.Day != today || !pin.Bot.IsEmpty())
+                    {
+                        pin = MostWantedPin();
+                        pin.Day = today;
+                        saves.emplace_back(zoneId, pin);
+                    }
+                    continue;
+                }
+
+                pin.Day = today;
+                pin.Bot = best->Guid;
+                pin.Name = best->Name;
+                pin.CollectedBy.clear();
+                pin.MissingSince = 0;
+                saves.emplace_back(zoneId, pin);
+            }
+        }
+
+        for (auto const& [zoneId, pin] : saves)
+        {
+            SaveMostWanted(zoneId, pin);
+            if (!pin.Bot.IsEmpty())
+                TC_LOG_INFO("scripts", "Bounty notices: {} is Most Wanted in {} today.", pin.Name, BountyBoard::ZoneName(zoneId));
+        }
+    }
+
+    // The first notice collected on today's pin takes the stamp. True when this
+    // one did. Any thread.
+    bool ClaimMostWanted(ObjectGuid bot, std::string const& by)
+    {
+        uint32 const today = DayIndex(GameTime::GetGameTime());
+        uint32 zone = 0;
+        MostWantedPin claimed;
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            for (auto& [zoneId, pin] : g_mostWanted)
+                if (pin.Day == today && pin.Bot == bot && pin.CollectedBy.empty())
+                {
+                    pin.CollectedBy = by;
+                    zone = zoneId;
+                    claimed = pin;
+                    break;
+                }
+        }
+        if (!zone)
+            return false;
+        SaveMostWanted(zone, claimed);
+        return true;
     }
 
     // ---------------------------------------------------------------- collecting
@@ -1417,6 +1828,7 @@ namespace
 
         char const* how = notice.Type == Kind::Mokgora ? "Slain in Mok'gora."
             : notice.Type == Kind::Recovery ? "What was taken, taken back."
+            : notice.Type == Kind::Posse ? "Brought down by a posse."
             : "Hunted down.";
 
         item->SetText(Trinity::StringFormat(
@@ -1426,8 +1838,17 @@ namespace
             stamp.tm_mday, months[std::clamp(stamp.tm_mon, 0, 11)], stamp.tm_year + 1900));
         item->SetFlag(ITEM_FIELD_FLAGS, ITEM_FLAG_MAIL_TEXT_MASK);
 
-        GiveOrMail(player, item, board, "A notice for your wall",
-            "You collected this notice with your bags full. The board's keeper sent it on.");
+        // A trophy, not something to carry about: straight to the mailbox, where
+        // it waits until the player wants it on a wall (or in a bank).
+        if (s_on.KeepsakesByMail)
+        {
+            MailItem(player, item, board, Trinity::StringFormat("Collected: {}", notice.QuarryName),
+                "The board's keeper keeps a copy of every notice it pays out on. This one is yours, for your wall.");
+            Tell(player, Trinity::StringFormat("The notice on {} is in your mailbox, for your wall.", notice.QuarryName));
+        }
+        else
+            GiveOrMail(player, item, board, "A notice for your wall",
+                "You collected this notice with your bags full. The board's keeper sent it on.");
     }
 
     void PayOut(Player* player, Notice const& notice, GameObject* board)
@@ -1449,8 +1870,24 @@ namespace
                 bubbles = s_recoveryBubbles;
                 seals = s_sealsRecovery;
                 break;
+            case Kind::Posse:
+                money = uint32(float(money) * s_posseMoney);
+                bubbles = s_posseBubbles;
+                seals = s_sealsPosse;
+                break;
             default:
                 break;
+        }
+
+        // Today's Most Wanted: the first notice collected on it pays the
+        // multiplier, and the collector's name goes across its poster.
+        bool const mostWanted = s_on.MostWanted && notice.Type != Kind::Recovery &&
+            ClaimMostWanted(notice.Quarry, player->GetName());
+        if (mostWanted)
+        {
+            money = uint32(float(money) * s_mostWantedMultiplier);
+            seals = uint32(std::ceil(float(seals) * s_mostWantedMultiplier));
+            bubbles *= std::min(2.0f, s_mostWantedMultiplier);
         }
 
         uint32 xp = 0;
@@ -1489,6 +1926,7 @@ namespace
                     case Kind::Hunt:     ++ledger.Hunts;     break;
                     case Kind::Mokgora:  ++ledger.Mokgora;   break;
                     case Kind::Recovery: ++ledger.Recovered; break;
+                    case Kind::Posse:    ++ledger.Posses;    break;
                 }
                 ledger.Zones.insert(notice.ZoneId);
             }
@@ -1516,6 +1954,10 @@ namespace
         Tell(player, paid.empty()
             ? Trinity::StringFormat("You hand in the notice on {}.", notice.QuarryName)
             : Trinity::StringFormat("You hand in the notice on {}: {}.", notice.QuarryName, paid));
+
+        if (mostWanted)
+            Tell(player, Trinity::StringFormat("Most Wanted! The board pays {:g} times over for {} today, and your name "
+                "goes across the poster.", s_mostWantedMultiplier, notice.QuarryName));
 
         if (s_on.Keepsakes)
             WriteKeepsake(player, notice, board);
@@ -1559,69 +2001,110 @@ namespace
             player->GetName(), KindCode(notice.Type), notice.QuarryName, money, xp, seals, after.Collected, RankNames[rankAfter]);
     }
 
-    // ---------------------------------------------------------------- pardons
+    // ---------------------------------------------------------------- the Quartermaster
 
-    void Pardon(Player* player)
+    // Seals are the board's own coin. Every notice pays some (a posse and a Most
+    // Wanted more), a slain nemesis pays by its rank, and the board's
+    // Quartermaster takes them for what is on its list (Shop.Items).
+    ShopItem const* FindShopItem(uint32 itemId)
     {
-        Ledger const ledger = LedgerCopy(player->GetGUID());
-        uint32 const stacks = Bounty::GetStacks(player);
-        time_t const now = GameTime::GetGameTime();
-
-        if (!s_enabled || !s_on.Pardons)
-        {
-            Result(player, false, "The board is not selling pardons just now.");
-            return;
-        }
-        if (!stacks)
-        {
-            Result(player, false, "Your name is not in anybody's ledger. There is nothing to pardon.");
-            return;
-        }
-        if (Notoriety::HasLiveContract(player->GetGUID()))
-        {
-            Result(player, false, "Not while you carry Grix's page - it holds your name up for sale.");
-            return;
-        }
-        if (ledger.Seals < s_pardonSeals)
-        {
-            Result(player, false, Trinity::StringFormat("A pardon costs {} seal{}. Collect notices to earn them.",
-                s_pardonSeals, s_pardonSeals == 1 ? "" : "s"));
-            return;
-        }
-        time_t const ready = ledger.PardonAt + time_t(s_pardonCooldownMinutes) * MINUTE;
-        if (now < ready)
-        {
-            Result(player, false, Trinity::StringFormat("The board will not pardon you again for another {} minute{}.",
-                uint32((ready - now + 59) / 60), (ready - now + 59) / 60 == 1 ? "" : "s"));
-            return;
-        }
-
-        uint32 const struck = Bounty::ReduceStacks(player, s_pardonStacks);
-
-        Ledger after;
-        {
-            std::lock_guard<std::mutex> guard(g_lock);
-            Ledger& stored = g_ledgers[player->GetGUID().GetRawValue()];
-            stored.Seals -= std::min(stored.Seals, s_pardonSeals);
-            stored.PardonAt = now;
-            after = stored;
-        }
-        SaveLedger(player->GetGUID(), after);
-
-        Result(player, true, Trinity::StringFormat("The seal is broken and the ink runs: {} mark{} struck from your name.",
-            struck, struck == 1 ? "" : "s"));
-        SendLedger(player);
-
-        TC_LOG_INFO("scripts", "Bounty notices: {} bought a pardon, {} stack(s) struck, {} seal(s) left.",
-            player->GetName(), struck, after.Seals);
+        for (ShopItem const& item : s_shop)
+            if (item.ItemId == itemId)
+                return &item;
+        return nullptr;
     }
 
-    // ---------------------------------------------------------------- the tick
+    void SendShop(Player* viewer)
+    {
+        if (!s_enabled || !s_on.Shop || !viewer)
+            return;
 
-    // Re-send the colour every changed pair shows. Unit::BuildValuesUpdate
-    // works it out per viewer, and nothing in the core dirties the field when a
-    // stance changes, so a client keeps the old colour until told. World
-    // thread, maps idle.
+        Chunker out(viewer, "BBSH", "");
+        for (ShopItem const& item : s_shop)
+            if (sObjectMgr->GetItemTemplate(item.ItemId))
+                out.Add(Trinity::StringFormat("{},{},{}", item.ItemId, item.Price, item.Count));
+        out.Flush();
+        BountyBoard::SendTagged(viewer, "BBSE", std::to_string(LedgerCopy(viewer->GetGUID()).Seals));
+    }
+
+    void Buy(Player* player, uint32 itemId, GameObject* board)
+    {
+        if (!s_enabled || !s_on.Shop || !s_tablesReady)
+        {
+            Result(player, false, "The Quartermaster is not trading just now.");
+            return;
+        }
+
+        ShopItem const* entry = FindShopItem(itemId);
+        ItemTemplate const* proto = entry ? sObjectMgr->GetItemTemplate(entry->ItemId) : nullptr;
+        if (!proto)
+        {
+            Result(player, false, "The Quartermaster has nothing like that on the list.");
+            return;
+        }
+
+        uint32 const price = entry->Price;
+        uint32 const count = std::clamp<uint32>(entry->Count, 1, std::max<uint32>(1, proto->GetMaxStackSize()));
+
+        Ledger after;
+        uint32 had = 0;
+        {
+            std::lock_guard<std::mutex> guard(g_lock);
+            Ledger& ledger = g_ledgers[player->GetGUID().GetRawValue()];
+            had = ledger.Seals;
+            if (ledger.Seals >= price)
+                ledger.Seals -= price;
+            after = ledger;
+        }
+        if (had < price)
+        {
+            Result(player, false, Trinity::StringFormat("That costs {} seal{}, and you have {}. Every notice you collect "
+                "pays more.", price, price == 1 ? "" : "s", had));
+            return;
+        }
+
+        Item* item = Item::CreateItem(entry->ItemId, count, player);
+        if (!item)
+        {
+            // Nothing was handed over, so nothing is kept.
+            {
+                std::lock_guard<std::mutex> guard(g_lock);
+                g_ledgers[player->GetGUID().GetRawValue()].Seals += price;
+            }
+            Result(player, false, "The Quartermaster could not lay hands on one. Nothing was taken.");
+            return;
+        }
+
+        SaveLedger(player->GetGUID(), after);
+        GiveOrMail(player, item, board, "From the Quartermaster", "Paid for in seals at the bounty board.");
+        Result(player, true, Trinity::StringFormat("You trade {} seal{} for {}{}.", price, price == 1 ? "" : "s",
+            count > 1 ? Trinity::StringFormat("{} x ", count) : std::string(), proto->Name1));
+        SendLedger(player);
+        SendShop(player);
+
+        TC_LOG_INFO("scripts", "Bounty notices: {} bought {} x{} for {} seal(s), {} left.", player->GetName(),
+            entry->ItemId, count, price, after.Seals);
+    }
+
+    void GossipShopMenu(Player* player, GameObject* board)
+    {
+        ClearGossipMenuFor(player);
+        uint32 const seals = LedgerCopy(player->GetGUID()).Seals;
+        uint32 shown = 0;
+        for (ShopItem const& item : s_shop)
+        {
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(item.ItemId);
+            if (!proto || shown >= 15)
+                continue;
+            AddGossipItemFor(player, GOSSIP_ICON_VENDOR, Trinity::StringFormat("{}{} - {} seal{}{}",
+                item.Count > 1 ? Trinity::StringFormat("{} x ", item.Count) : std::string(), proto->Name1, item.Price,
+                item.Price == 1 ? "" : "s", seals < item.Price ? " (not enough)" : ""), kSenderBuy, item.ItemId);
+            ++shown;
+        }
+        Tell(player, Trinity::StringFormat("You have {} seal{}.", seals, seals == 1 ? "" : "s"));
+        SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, board->GetGUID());
+    }
+
     // The core follows shared stances onto their groups and re-sends whatever
     // colour changed (PairStance::Update). World thread.
     void RefreshStaleViews()
@@ -1791,6 +2274,7 @@ namespace
             {
                 case Kind::Hunt:
                 case Kind::Recovery:
+                case Kind::Posse:
                 {
                     // Gone from its packs - listed, sold, thrown away - and
                     // there is nothing left to take back.
@@ -1828,10 +2312,25 @@ namespace
                     if (!playerbot::PveManager::IsNoticeErrandArrived(notice.Quarry))
                         break;
 
+                    // A duel request a bot never answered holds both sides "in a
+                    // duel" for good, and the challenger would stand there for it.
+                    ClearStuckDuelRequest(holder, now);
+                    ClearStuckDuelRequest(quarry, now);
+
                     // Somebody already in a duel, or holding another box, is
-                    // asked again in a moment rather than talked over.
-                    bool const busy = holder->duel || quarry->duel ||
-                        Mokgora::HasPendingOffer(holder) || Mokgora::HasPendingOffer(quarry) || !holder->IsAlive();
+                    // asked again in a moment rather than talked over - and told
+                    // what the bot standing beside them is waiting for.
+                    std::string wait;
+                    if (holder->duel)
+                        wait = holder->duel->State == DUEL_STATE_CHALLENGED
+                            ? "you have a duel request out - finish or cancel it" : "you are in a duel";
+                    else if (quarry->duel)
+                        wait = "it is caught up in a duel of its own";
+                    else if (Mokgora::HasPendingOffer(holder))
+                        wait = "you have another Mok'gora to answer first";
+                    else if (Mokgora::HasPendingOffer(quarry))
+                        wait = "it is answering another challenge";
+                    bool const busy = !wait.empty() || !holder->IsAlive();
 
                     std::string why;
                     bool const issued = !busy && Mokgora::ChallengeFromBot(quarry, holder, why);
@@ -1844,17 +2343,34 @@ namespace
                     if (issued)
                     {
                         stored->Challenged = true;
+                        stored->WaitingSince = 0;
+                        stored->WaitLogged = false;
                         quarry->Say(Trinity::StringFormat("{}. You took my notice off the board - now take my challenge. Mok'gora.",
                             holder->GetName()), LANG_UNIVERSAL);
                     }
                     else
                     {
                         stored->NextChallengeTryAt = now + 5;
-                        if (!busy && !why.empty() && now >= stored->NextNagAt)
+                        std::string const reason = busy ? wait : why;
+                        if (!reason.empty() && now >= stored->NextNagAt)
                         {
                             stored->NextNagAt = now + 30;
-                            Tell(holder, Trinity::StringFormat("{} has come for you, but cannot challenge you here: {}",
-                                notice.QuarryName, why));
+                            Tell(holder, busy
+                                ? Trinity::StringFormat("{} has come for you, and waits: {}.", notice.QuarryName, reason)
+                                : Trinity::StringFormat("{} has come for you, but cannot challenge you here: {}",
+                                    notice.QuarryName, reason));
+                        }
+
+                        // Said in the log once a wait runs long, so the next report
+                        // of a challenger that "just follows" can be read back.
+                        if (!stored->WaitingSince)
+                            stored->WaitingSince = now;
+                        else if (!stored->WaitLogged && now - stored->WaitingSince >= 60)
+                        {
+                            stored->WaitLogged = true;
+                            TC_LOG_INFO("scripts", "Bounty notices: {} has waited {}s to challenge {}: {}.",
+                                notice.QuarryName, uint32(now - stored->WaitingSince), holder->GetName(),
+                                !reason.empty() ? reason : (holder->IsAlive() ? "no reason given" : "they are dead"));
                         }
                     }
                     break;
@@ -1956,6 +2472,12 @@ namespace
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Mok'gora: " + who, kSenderTakeMokgora, bot->GetGUID().GetCounter());
                 ++shown;
             }
+            if (KindOn(Kind::Posse) && Nemesis::IsWarchief(bot->GetGUID()))
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Raise a posse against the Warchief: " + who, kSenderTakePosse,
+                    bot->GetGUID().GetCounter());
+                ++shown;
+            }
         }
 
         if (!shown)
@@ -1973,8 +2495,9 @@ namespace
         Tell(player, Trinity::StringFormat("Hunter's Ledger: {} - {} notice{} collected{}.", RankNames[rank],
             ledger.Collected, ledger.Collected == 1 ? "" : "s",
             NextRankAt(ledger.Collected) ? Trinity::StringFormat(" (next rank at {})", NextRankAt(ledger.Collected)) : ""));
-        Tell(player, Trinity::StringFormat("Hunts {}, Mok'gora {}, recovered {}. Seals: {}. Zones: {} of {}.",
-            ledger.Hunts, ledger.Mokgora, ledger.Recovered, ledger.Seals, done, total));
+        Tell(player, Trinity::StringFormat("Hunts {}, Mok'gora {}, recovered {}, posses {}. Seals: {} (spend them with "
+            "the Quartermaster). Zones: {} of {}.", ledger.Hunts, ledger.Mokgora, ledger.Recovered, ledger.Posses,
+            ledger.Seals, done, total));
 
         std::vector<Notice> mine;
         {
@@ -1986,7 +2509,8 @@ namespace
 
         for (Notice const& notice : mine)
             Tell(player, Trinity::StringFormat("Notice: {} on {} (level {}){}.",
-                notice.Type == Kind::Hunt ? "hunt" : notice.Type == Kind::Mokgora ? "Mok'gora" : "recovery",
+                notice.Type == Kind::Hunt ? "hunt" : notice.Type == Kind::Mokgora ? "Mok'gora"
+                    : notice.Type == Kind::Posse ? "posse" : "recovery",
                 notice.QuarryName, uint32(notice.QuarryLevel), notice.Complete ? " - done, hand it in" : ""));
     }
 }
@@ -2044,6 +2568,22 @@ namespace BountyNotices
                 coinValue, areaName));
         }
         out.Flush();
+
+        // The zone's Most Wanted today, with the collector's name once taken.
+        if (s_on.MostWanted)
+        {
+            uint32 const today = DayIndex(GameTime::GetGameTime());
+            std::string line;
+            {
+                std::lock_guard<std::mutex> guard(g_lock);
+                auto const itr = g_mostWanted.find(zoneId);
+                if (itr != g_mostWanted.end() && itr->second.Day == today && !itr->second.Bot.IsEmpty())
+                    line = Trinity::StringFormat("{}|{},{}", zoneId, itr->second.Bot.GetCounter(),
+                        Scrubbed(itr->second.CollectedBy));
+            }
+            if (!line.empty())
+                BountyBoard::SendTagged(viewer, "BBMW", line);
+        }
     }
 
     void SendPosterExtras(Player* viewer, Player* bot)
@@ -2067,6 +2607,27 @@ namespace BountyNotices
         BountyBoard::SendTagged(viewer, "BBPX", Trinity::StringFormat("{}{},{},{}", head,
             WhyNot(viewer, bot, Kind::Hunt, slot), WhyNot(viewer, bot, Kind::Mokgora, slot),
             WhyNot(viewer, bot, Kind::Recovery, slot)));
+        BountyBoard::SendTagged(viewer, "BBPP", head + WhyNot(viewer, bot, Kind::Posse, slot));
+
+        if (s_on.MostWanted)
+        {
+            uint32 const today = DayIndex(GameTime::GetGameTime());
+            bool pinned = false;
+            std::string by;
+            {
+                std::lock_guard<std::mutex> guard(g_lock);
+                for (auto const& [zoneId, pin] : g_mostWanted)
+                    if (pin.Day == today && pin.Bot == bot->GetGUID())
+                    {
+                        pinned = true;
+                        by = pin.CollectedBy;
+                        break;
+                    }
+            }
+            if (pinned)
+                BountyBoard::SendTagged(viewer, "BBMP", Trinity::StringFormat("{}{},{}", head,
+                    uint32(std::lround(s_mostWantedMultiplier * 10.0f)), Scrubbed(by)));
+        }
     }
 
     void SendLedgerAndNotices(Player* viewer)
@@ -2140,9 +2701,16 @@ namespace BountyNotices
             return true;
         }
 
-        if (verb == "PARDON")
+        if (verb == "SHOP")
         {
-            Pardon(player);
+            SendShop(player);
+            return true;
+        }
+
+        if (verb == "BUY")
+        {
+            if (Optional<uint32> const itemId = Trinity::StringTo<uint32>(argument))
+                Buy(player, *itemId, nullptr);
             return true;
         }
 
@@ -2212,15 +2780,13 @@ namespace BountyNotices
         if (!s_enabled || !s_on.Gossip || !s_tablesReady || !player)
             return;
 
-        if (KindOn(Kind::Hunt) || KindOn(Kind::Mokgora) || KindOn(Kind::Recovery))
+        if (KindOn(Kind::Hunt) || KindOn(Kind::Mokgora) || KindOn(Kind::Recovery) || KindOn(Kind::Posse))
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Take a notice down.", kSenderMenu, 0);
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, "My notices and the Hunter's Ledger.", kSenderLedger, 0);
 
-        Ledger const ledger = LedgerCopy(player->GetGUID());
-        if (s_on.Pardons && Bounty::GetStacks(player) && ledger.Seals >= s_pardonSeals)
-            AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, Trinity::StringFormat(
-                "Buy a pardon. ({} seal{}: strike {} marks from your name.)",
-                s_pardonSeals, s_pardonSeals == 1 ? "" : "s", s_pardonStacks), kSenderPardon, 0);
+        if (s_on.Shop && !s_shop.empty())
+            AddGossipItemFor(player, GOSSIP_ICON_VENDOR, Trinity::StringFormat("Spend seals with the Quartermaster. "
+                "(You have {}.)", LedgerCopy(player->GetGUID()).Seals), kSenderShop, 0);
     }
 
     bool OnGossipSelect(Player* player, GameObject* board, uint32 sender, uint32 action)
@@ -2249,9 +2815,16 @@ namespace BountyNotices
                 CloseGossipMenuFor(player);
                 GossipLedger(player);
                 return true;
-            case kSenderPardon:
+            case kSenderShop:
+                GossipShopMenu(player, board);
+                return true;
+            case kSenderBuy:
                 CloseGossipMenuFor(player);
-                Pardon(player);
+                Buy(player, action, board);
+                return true;
+            case kSenderTakePosse:
+                CloseGossipMenuFor(player);
+                TakeNotice(player, action, Kind::Posse);
                 return true;
             default:
                 return false;
@@ -2327,15 +2900,42 @@ public:
             "PRIMARY KEY (guid, zoneId)"
             ") ENGINE=InnoDB");
 
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS character_bounty_mostwanted ("
+            "zoneId INT UNSIGNED NOT NULL PRIMARY KEY,"
+            "day INT UNSIGNED NOT NULL DEFAULT 0,"
+            "bot INT UNSIGNED NOT NULL DEFAULT 0,"
+            "name VARCHAR(64) NOT NULL DEFAULT '',"
+            "collectedBy VARCHAR(32) NOT NULL DEFAULT ''"
+            ") ENGINE=InnoDB");
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS character_bounty_bot_kills ("
+            "bot INT UNSIGNED NOT NULL,"
+            "day INT UNSIGNED NOT NULL,"
+            "kills INT UNSIGNED NOT NULL DEFAULT 0,"
+            "PRIMARY KEY (bot, day)"
+            ") ENGINE=InnoDB");
+
+        // A ledger from before posses has no column for them.
+        char const* const posseColumn = "SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND "
+            "TABLE_NAME = 'character_bounty_ledger' AND COLUMN_NAME = 'posses'";
+        if (!CharacterDatabase.Query(posseColumn))
+            CharacterDatabase.DirectExecute("ALTER TABLE character_bounty_ledger ADD COLUMN posses INT UNSIGNED NOT NULL DEFAULT 0");
+
         // Checked, not assumed: DirectExecute does not say whether it worked,
-        // and a query against a missing table takes the whole realm down.
+        // and a query against a missing table (or column) takes the whole realm
+        // down.
         s_tablesReady = bool(CharacterDatabase.Query(
             "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN "
-            "('character_bounty_notice', 'character_bounty_ledger', 'character_bounty_ledger_zone') HAVING COUNT(*) = 3"));
+            "('character_bounty_notice', 'character_bounty_ledger', 'character_bounty_ledger_zone', "
+            "'character_bounty_mostwanted', 'character_bounty_bot_kills') HAVING COUNT(*) = 5")) &&
+            bool(CharacterDatabase.Query(posseColumn));
         if (!s_tablesReady)
             TC_LOG_ERROR("server.loading", "Bounty notices: the notice and ledger tables are missing - notices are off.");
+        else
+            LoadMostWanted();
 
-        for (uint8 k = 0; k < 3; ++k)
+        for (uint8 k = 0; k < 4; ++k)
             for (uint8 s = 0; s < kSlots; ++s)
                 if (s_questIds[k][s] && !sObjectMgr->GetQuestTemplate(s_questIds[k][s]))
                     TC_LOG_ERROR("server.loading", "Bounty notices: quest {} is not in quest_template - that notice "
@@ -2360,10 +2960,20 @@ public:
         RefreshStaleViews();
         if (s_enabled)
             Tick();
+
+        // The Most Wanted pins, once a minute (the first a minute after start,
+        // with the fleet logged back in).
+        _sinceMostWanted += 1000;
+        if (_sinceMostWanted >= 60000)
+        {
+            _sinceMostWanted = 0;
+            TickMostWanted();
+        }
     }
 
 private:
     uint32 _sinceTick = 0;
+    uint32 _sinceMostWanted = 0;
 };
 
 class custom_bounty_notices_player : public PlayerScript
@@ -2502,6 +3112,13 @@ public:
     // the tick's business, because the people owed credit may be anywhere.
     void OnPlayerJustDied(Player* victim, Unit* killer) override
     {
+        // Every person a world bot kills counts toward that bot's week, for the
+        // Most Wanted - whether or not any notice names it.
+        if (s_enabled && s_on.MostWanted && victim && killer && !BarracksHardcore::IsPlayerbot(victim) &&
+            !victim->IsGameMaster())
+            if (Player* bot = killer->GetCharmerOrOwnerPlayerOrPlayerItself(); bot && bot != victim && IsWorldBot(bot))
+                RecordBotKill(bot->GetGUID().GetCounter());
+
         if (!s_enabled || !victim || !g_any.load(std::memory_order_relaxed))
             return;
 

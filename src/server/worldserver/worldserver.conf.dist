@@ -4919,6 +4919,11 @@ Centurion.BountyBoard.GossipTextId = 900310
 #        Description: Handing a notice in gives the readable poster (item KeepsakeItem).
 #        Default:     1
 #
+#    Centurion.BountyBoard.Notices.Keepsakes.Mail.Enable
+#        Description: The keepsake poster is sent to the player's mailbox instead of their bags -
+#                     it is a trophy, and bags fill up. 0 puts it in the bags (mailed only when full).
+#        Default:     1
+#
 #    Centurion.BountyBoard.Notices.Tabard.Enable
 #        Description: Reaching Headsman gives the tabard (item TabardItem).
 #        Default:     1
@@ -4928,10 +4933,27 @@ Centurion.BountyBoard.GossipTextId = 900310
 #                     (RelentlessTitle) for a notice from every board zone.
 #        Default:     1
 #
-#    Centurion.BountyBoard.Notices.Pardons.Enable
-#        Description: Seals buy pardons at a board: PardonStacks notoriety stacks struck off for
-#                     PardonSeals seals, once per PardonCooldownMinutes.
+#    Centurion.BountyBoard.Notices.Posse.Enable
+#        Description: Posse notices on a zone's nemesis Warchief. A party of at least
+#                     Posse.MinGroup people takes one together - everybody in the party who is in
+#                     the zone gets a copy - and each collects the posse pay. Quests 60016/60017.
 #        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Posse.Feud.Enable
+#        Description: The Warchief is fair game to the whole posse's party, War Mode or not.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.MostWanted.Enable
+#        Description: Every board zone pins one bot a day - the most player kills this week - and
+#                     the first notice collected on it pays MostWanted.Multiplier times over and
+#                     stamps the collector's name across its poster until the day turns.
+#        Default:     1
+#
+#    Centurion.BountyBoard.Notices.Shop.Enable
+#    Centurion.BountyBoard.Notices.Shop.Items
+#        Description: The Quartermaster: seals buy what is on the list, "itemId:price[:count]"
+#                     comma-separated. What is bought goes into the bags, or the mailbox if full.
+#        Default:     1, the list below
 #
 #    Centurion.BountyBoard.Notices.Reward.Money.Enable
 #    Centurion.BountyBoard.Notices.Reward.Experience.Enable
@@ -4941,7 +4963,7 @@ Centurion.BountyBoard.GossipTextId = 900310
 #
 #    Centurion.BountyBoard.Notices.Gossip.Enable
 #        Description: The board's own menu for players without the addon (take a notice, the
-#                     Ledger, pardons).
+#                     Ledger, the Quartermaster).
 #        Default:     1
 #
 #    Centurion.BountyBoard.Notices.Stances.Enable
@@ -4972,8 +4994,10 @@ Centurion.BountyBoard.GossipTextId = 900310
 #        MokgoraMoney 1.5 / RecoveryMoney 0.5 (money multipliers), CappedMoney 1.5 (at the level
 #        cap, instead of experience), SealsHunt 1 / SealsMokgora 2 / SealsRecovery 1,
 #        RankAt "5,15,35,75", KeepsakeItem 4486, TabardItem 3557, HeadsmanTitle 210,
-#        RelentlessTitle 211, PardonSeals 1, PardonStacks 10, PardonCooldownMinutes 30,
-#        HuntQuest1/2 60010/60013, MokgoraQuest1/2 60011/60014, RecoveryQuest1/2 60012/60015.
+#        RelentlessTitle 211, SealsPosse 3, PosseMoney 2.0, PosseBubbles 3, Posse.MinGroup 2,
+#        MostWanted.Multiplier 3, MostWanted.ResetHour 6 (server clock, UTC), MostWanted.MissingMinutes
+#        30 (a pin whose bot is off the board this long moves on), HuntQuest1/2 60010/60013,
+#        MokgoraQuest1/2 60011/60014, RecoveryQuest1/2 60012/60015, PosseQuest1/2 60016/60017.
 #
 
 Centurion.BountyBoard.Notices.Enable = 0
@@ -4993,9 +5017,13 @@ Centurion.BountyBoard.Notices.Ledger.Perk.Temper.Enable = 1
 Centurion.BountyBoard.Notices.Ledger.Perk.Coin.Enable = 1
 Centurion.BountyBoard.Notices.Ledger.Perk.TwoNotices.Enable = 1
 Centurion.BountyBoard.Notices.Keepsakes.Enable = 1
+Centurion.BountyBoard.Notices.Keepsakes.Mail.Enable = 1
 Centurion.BountyBoard.Notices.Tabard.Enable = 1
 Centurion.BountyBoard.Notices.Titles.Enable = 1
-Centurion.BountyBoard.Notices.Pardons.Enable = 1
+Centurion.BountyBoard.Notices.Posse.Enable = 1
+Centurion.BountyBoard.Notices.Posse.Feud.Enable = 1
+Centurion.BountyBoard.Notices.MostWanted.Enable = 1
+Centurion.BountyBoard.Notices.Shop.Enable = 1
 Centurion.BountyBoard.Notices.Reward.Money.Enable = 1
 Centurion.BountyBoard.Notices.Reward.Experience.Enable = 1
 Centurion.BountyBoard.Notices.Reward.Seals.Enable = 1
@@ -5033,15 +5061,68 @@ Centurion.BountyBoard.Notices.KeepsakeItem = 4486
 Centurion.BountyBoard.Notices.TabardItem = 3557
 Centurion.BountyBoard.Notices.HeadsmanTitle = 210
 Centurion.BountyBoard.Notices.RelentlessTitle = 211
-Centurion.BountyBoard.Notices.PardonSeals = 1
-Centurion.BountyBoard.Notices.PardonStacks = 10
-Centurion.BountyBoard.Notices.PardonCooldownMinutes = 30
+Centurion.BountyBoard.Notices.SealsPosse = 3
+Centurion.BountyBoard.Notices.PosseMoney = 2.0
+Centurion.BountyBoard.Notices.PosseBubbles = 3
+Centurion.BountyBoard.Notices.Posse.MinGroup = 2
+Centurion.BountyBoard.Notices.MostWanted.Multiplier = 3
+Centurion.BountyBoard.Notices.MostWanted.ResetHour = 6
+Centurion.BountyBoard.Notices.MostWanted.MissingMinutes = 30
+Centurion.BountyBoard.Notices.Shop.Items = "929:1:5,1710:1:5,3928:2:5,13446:3:5,5634:2,3387:4,13452:4,13510:15,8529:2:5,8485:10,11023:10,23192:25,1973:25,19872:150"
 Centurion.BountyBoard.Notices.HuntQuest1 = 60010
 Centurion.BountyBoard.Notices.HuntQuest2 = 60013
 Centurion.BountyBoard.Notices.MokgoraQuest1 = 60011
 Centurion.BountyBoard.Notices.MokgoraQuest2 = 60014
 Centurion.BountyBoard.Notices.RecoveryQuest1 = 60012
 Centurion.BountyBoard.Notices.RecoveryQuest2 = 60015
+Centurion.BountyBoard.Notices.PosseQuest1 = 60016
+Centurion.BountyBoard.Notices.PosseQuest2 = 60017
+
+###################################################################################################
+# CENTURION VENGEANCE WRITS (custom_bounty_writs.cpp, addon CENTURION_BountyBoard)
+#
+#    Killed out in the open world - by a world bot or another player - a player has WindowMinutes
+#    to put gold on the killer's head at any bounty board. The board holds it; whoever kills the
+#    target next earns it (not on the poster's account, not grouped with the target) and collects
+#    it at any board. Unearned writs go back by mail after Hours, less FeePct. Posters are never
+#    named. Every key is read on .reload config.
+#
+#    Centurion.BountyBoard.Writs.Enable
+#        Description: The whole feature. The table is created at startup.
+#        Default:     0 - (off)
+#
+#    Centurion.BountyBoard.Writs.WindowMinutes
+#        Description: How long after a death its killer can be posted.
+#        Default:     60
+#
+#    Centurion.BountyBoard.Writs.Hours
+#    Centurion.BountyBoard.Writs.FeePct
+#        Description: How long a writ stands, and what the board keeps when it goes back unearned.
+#        Default:     24, 10
+#
+#    Centurion.BountyBoard.Writs.MaxPerPoster
+#        Description: Open writs one player may have out at once.
+#        Default:     3
+#
+#    Centurion.BountyBoard.Writs.Amounts
+#        Description: The amounts on offer, in copper (up to four buttons on the board).
+#        Default:     "10000,50000,250000,1000000"
+#
+#    Centurion.BountyBoard.Writs.TellTarget
+#    Centurion.BountyBoard.Writs.Gossip.Enable
+#        Description: A player with a price on their head is told the amount (never who); the
+#                     board's menu offers a writ on a recent killer for players without the addon.
+#        Default:     1, 1
+#
+
+Centurion.BountyBoard.Writs.Enable = 0
+Centurion.BountyBoard.Writs.WindowMinutes = 60
+Centurion.BountyBoard.Writs.Hours = 24
+Centurion.BountyBoard.Writs.FeePct = 10
+Centurion.BountyBoard.Writs.MaxPerPoster = 3
+Centurion.BountyBoard.Writs.Amounts = "10000,50000,250000,1000000"
+Centurion.BountyBoard.Writs.TellTarget = 1
+Centurion.BountyBoard.Writs.Gossip.Enable = 1
 
 ###################################################################################################
 # CENTURION NEMESIS (custom_nemesis.cpp, addon CENTURION_BountyBoard)

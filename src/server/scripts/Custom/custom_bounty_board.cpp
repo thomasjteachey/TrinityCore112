@@ -69,6 +69,7 @@
 #include "custom_barracks_hardcore.h"
 #include "custom_bounty_board.h"
 #include "custom_bounty_notices.h"
+#include "custom_bounty_writs.h"
 #include "custom_nemesis.h"
 
 #include "Bag.h"
@@ -426,6 +427,7 @@ namespace
         // end marker, so the addon has it when it draws.
         BountyNotices::SendBoardExtras(viewer, zoneId, bots);
         Nemesis::SendBoardRows(viewer, zoneId, bots);
+        BountyWrits::SendZoneWrits(viewer, zoneId, bots);
 
         SendTagged(viewer, "BBRE", head + std::to_string(bots.size()));
     }
@@ -471,6 +473,7 @@ namespace
         // take on the bot.
         BountyNotices::SendPosterExtras(viewer, bot);
         Nemesis::SendPosterLine(viewer, bot);
+        BountyWrits::SendPosterWrit(viewer, bot);
 
         SendTagged(viewer, "BBPE", head + "1");
     }
@@ -532,6 +535,8 @@ namespace
         // and paying for notices (custom_bounty_notices.cpp).
         if (Nemesis::HandleRequest(player, verb, argument.substr(colon + 1)))
             return;
+        if (BountyWrits::HandleRequest(player, verb, argument.substr(colon + 1)))
+            return;
         if (BountyNotices::HandleRequest(player, verb, argument.substr(colon + 1)))
             return;
 
@@ -545,6 +550,7 @@ namespace
             SendNotices(player, *id);
             BountyNotices::SendLedgerAndNotices(player);
             Nemesis::SendBoardState(player);
+            BountyWrits::SendBoardState(player);
         }
         else if (verb == "ZONE")
             SendNotices(player, *id);
@@ -776,11 +782,13 @@ public:
                 // Touching a board hands in every finished notice - before the
                 // board opens, so the addon reads the ledger as it now stands.
                 BountyNotices::OnBoardTouched(player, me);
+                BountyWrits::OnBoardTouched(player);
 
                 SendTagged(player, "BBOP", std::to_string(me->GetZoneId()));
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Read the notices.", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
                 BountyNotices::AddGossipOptions(player);
                 Nemesis::AddGossipOptions(player);
+                BountyWrits::AddGossipOptions(player);
             }
             SendGossipMenuFor(player, s_gossipTextId, me->GetGUID());
             return true;
@@ -797,6 +805,8 @@ public:
             if (s_enabled && BountyNotices::OnGossipSelect(player, me, sender, action))
                 return true;
             if (s_enabled && Nemesis::OnGossipSelect(player, me, sender, action))
+                return true;
+            if (s_enabled && BountyWrits::OnGossipSelect(player, me, sender, action))
                 return true;
 
             CloseGossipMenuFor(player);

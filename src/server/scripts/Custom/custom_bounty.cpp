@@ -47,6 +47,7 @@
 #include "World.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <limits>
 #include <sstream>
@@ -151,6 +152,9 @@ namespace
     // Guards summoned after each victim, so they can be dismissed the moment
     // the bounty is settled rather than loitering out their timer.
     std::unordered_map<uint64, std::vector<ObjectGuid>> g_guards;
+    // Whether anybody has guards out at all: read on every player's tick, so a
+    // realm with none never takes the lock to find that out.
+    std::atomic<bool> g_anyGuards{ false };
 
     uint32 MaxStacks()
     {
@@ -513,20 +517,24 @@ namespace
     //
     // The summon's own timed despawn stays as the backstop, so a guard whose
     // target logged out mid-fight still leaves on its own.
-    void DismissGuards(Player* victim)
+    // Also called when the target steps into a sanctuary (`sanctuary`): the
+    // guards' AI already refuses to fight there, so they would only stand about
+    // over somebody they cannot touch. True when any were dismissed.
+    bool DismissGuards(Player* victim, bool sanctuary = false)
     {
         if (!victim)
-            return;
+            return false;
 
         std::vector<ObjectGuid> guards;
         {
             std::lock_guard<std::mutex> lock(g_lock);
             auto const itr = g_guards.find(victim->GetGUID().GetRawValue());
             if (itr == g_guards.end())
-                return;
+                return false;
 
             guards.swap(itr->second);
             g_guards.erase(itr);
+            g_anyGuards.store(!g_guards.empty(), std::memory_order_relaxed);
         }
 
         uint32 dismissed = 0;
@@ -537,9 +545,18 @@ namespace
                 ++dismissed;
             }
 
-        if (dismissed)
+        if (dismissed && sanctuary)
+        {
+            if (WorldSession* session = victim->GetSession())
+                ChatHandler(session).SendSysMessage("|cffff2020The Centurion Guards will not follow you into a "
+                    "sanctuary. They will be waiting when you leave.|r");
+            TC_LOG_INFO("playerbots.hardcore", "Bounty: {} Centurion Guard(s) stood down - {} is in a sanctuary.",
+                dismissed, victim->GetName());
+        }
+        else if (dismissed)
             TC_LOG_INFO("playerbots.hardcore", "Bounty: {} Centurion Guard(s) dismissed after {} died.",
                 dismissed, victim->GetName());
+        return dismissed != 0;
     }
 
     // ClearBounty is declared in custom_bounty.h at namespace Bounty scope and
@@ -838,6 +855,21 @@ namespace
         static std::unordered_map<uint64, time_t> s_nextGuardAt;
         uint64 const key = player->GetGUID().GetRawValue();
         time_t const now = GameTime::GetGameTime();
+
+        // A sanctuary holds for a bounty too. None are sent into one, any already
+        // out stand down when the target steps inside, and the clock is reset so
+        // the next ones are sent the moment the target steps back out. (A flag
+        // read: cheap enough for every player's tick.)
+        if (player->IsInSanctuary())
+        {
+            if (g_anyGuards.load(std::memory_order_relaxed) && DismissGuards(player, true))
+            {
+                std::lock_guard<std::mutex> guard(g_lock);
+                s_nextGuardAt.erase(key);
+            }
+            return;
+        }
+
         {
             std::lock_guard<std::mutex> guard(g_lock);
             auto const itr = s_nextGuardAt.find(key);
@@ -893,6 +925,7 @@ namespace
             {
                 std::lock_guard<std::mutex> lock(g_lock);
                 g_guards[key].push_back(guard->GetGUID());
+                g_anyGuards.store(true, std::memory_order_relaxed);
             }
 
             if (guard->IsAIEnabled())
@@ -1250,6 +1283,7 @@ public:
         // The guards themselves are left to their timed despawn: the player is
         // gone, so there is nothing to resolve them against here.
         g_guards.erase(player->GetGUID().GetRawValue());
+        g_anyGuards.store(!g_guards.empty(), std::memory_order_relaxed);
     }
 
     // A bounty survives a logout in the aura table, so the registry has to be

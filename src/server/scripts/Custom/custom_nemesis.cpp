@@ -2177,6 +2177,15 @@ namespace Nemesis
         return itr != g_records.end() && HuntingLocked(itr->second);
     }
 
+    bool IsWarchief(ObjectGuid bot)
+    {
+        if (!On() || !s_cfg.Warchiefs || !g_anyActive.load(std::memory_order_relaxed))
+            return false;
+        std::shared_lock<std::shared_mutex> guard(g_lock);
+        auto const itr = g_records.find(bot.GetRawValue());
+        return itr != g_records.end() && Active(itr->second) && itr->second.Warchief;
+    }
+
     bool Enabled()
     {
         return On();
