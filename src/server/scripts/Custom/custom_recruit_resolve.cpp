@@ -17,19 +17,24 @@
 
 /*
  * Recruit's Resolve: a new player's edge over the playerbot fleet, worn as a
- * visible buff that weakens with each level and is gone at 15.
+ * visible buff that loses a stack with each level and is gone at 15.
  *
- *   level 1-10  92330  +50% damage dealt to playerbots, -50% damage taken from them
- *   level 11    92331  +40% / -40%
- *   level 12    92332  +30% / -30%
- *   level 13    92333  +20% / -20%
- *   level 14    92334  +10% / -10%
+ *   level 1-10  5 stacks  +50% damage dealt to playerbots, -50% damage taken from them
+ *   level 11    4 stacks  +40% / -40%
+ *   level 12    3 stacks  +30% / -30%
+ *   level 13    2 stacks  +20% / -20%
+ *   level 14    1 stack   +10% / -10%
  *   level 15+   nothing
  *
- * One spell row per level rather than one row scaled with
- * EffectRealPointsPerLevel: the buff's tooltip is drawn from the CLIENT's copy
- * of the row, and a fixed number in each row is the only way to be certain the
- * percentage a player reads is the one the server applies.
+ * One spell, 94303: stack limit 5, 10% per stack. The client draws the stack
+ * count on the buff icon, and the core multiplies each effect's amount by the
+ * stack count, so the worn aura already holds the total. The tooltip reads
+ * "10% per stack" because a 3.3.5 client never learns aura amounts, only the
+ * row's own numbers.
+ *
+ * It replaced 92330..92334, one fixed row per level. Anyone still wearing one
+ * of those has it swapped for the stacking buff on the next login, level or
+ * map change.
  *
  * THE NUMBERS LIVE ON THE AURA. EFFECT_0 is the bonus to damage dealt and
  * EFFECT_1 the cut to damage taken, both DUMMY, and the hooks below read the
@@ -51,6 +56,7 @@
 #include "ScriptMgr.h"
 #include "Player.h"
 #include "SpellAuraEffects.h"
+#include "SpellAuras.h"
 #include "Unit.h"
 #include "WorldSession.h"
 
@@ -59,22 +65,20 @@
 
 namespace
 {
-    // Full strength at or below RECRUIT_FULL_LEVEL, then one row per level, weaker each time.
-    constexpr std::array<uint32, 5> RecruitResolveSpells = { 92330, 92331, 92332, 92333, 92334 };
-    constexpr uint8 RECRUIT_FULL_LEVEL = 10;
-    constexpr uint8 RECRUIT_END_LEVEL = uint8(RECRUIT_FULL_LEVEL + RecruitResolveSpells.size());
+    constexpr uint32 SPELL_RECRUIT_RESOLVE = 94303;
+    constexpr uint8 RECRUIT_MAX_STACKS = 5;
+    constexpr uint8 RECRUIT_END_LEVEL = 15;     // the first level with no stacks left
 
-    uint32 RecruitResolveSpellFor(uint8 level)
+    // The one-row-per-level version this replaced, taken off wherever it is still worn.
+    constexpr std::array<uint32, 5> LegacyRecruitResolveSpells = { 92330, 92331, 92332, 92333, 92334 };
+
+    // 5 through level 10, then one fewer each level: 4 at 11 ... 1 at 14, none from 15.
+    uint8 RecruitResolveStacksFor(uint8 level)
     {
         if (level >= RECRUIT_END_LEVEL)
             return 0;
 
-        return RecruitResolveSpells[level <= RECRUIT_FULL_LEVEL ? 0 : level - RECRUIT_FULL_LEVEL];
-    }
-
-    bool IsRecruitResolveSpell(uint32 spellId)
-    {
-        return spellId >= RecruitResolveSpells.front() && spellId <= RecruitResolveSpells.back();
+        return uint8(std::min<uint32>(RECRUIT_MAX_STACKS, RECRUIT_END_LEVEL - level));
     }
 
     bool IsPlayerbot(Player const* player)
@@ -83,11 +87,12 @@ namespace
         return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
     }
 
-    // The worn aura's amount on one effect, or 0 when the person is not wearing it.
+    // The worn aura's amount on one effect (already times its stacks), or 0
+    // when the person is not wearing it.
     int32 RecruitResolveAmount(Player const* person, SpellEffIndex effIndex)
     {
         for (AuraEffect const* aurEff : person->GetAuraEffectsByType(SPELL_AURA_DUMMY))
-            if (aurEff->GetEffIndex() == effIndex && IsRecruitResolveSpell(aurEff->GetId()))
+            if (aurEff->GetEffIndex() == effIndex && aurEff->GetId() == SPELL_RECRUIT_RESOLVE)
                 return aurEff->GetAmount();
 
         return 0;
@@ -122,22 +127,33 @@ namespace
         return 100 + uint32(std::max(RecruitResolveAmount(attackerPlayer, EFFECT_0), 0));
     }
 
-    // Puts on the row for the player's level and takes off any other. Bots never wear it.
+    // Sets the buff to the stack count for the player's level, or takes it off.
+    // Bots never wear it.
     void UpdateRecruitResolve(Player* player)
     {
-        uint32 const wanted = IsPlayerbot(player) ? 0 : RecruitResolveSpellFor(player->GetLevel());
+        for (uint32 spellId : LegacyRecruitResolveSpells)
+            player->RemoveAurasDueToSpell(spellId);
 
-        for (uint32 spellId : RecruitResolveSpells)
-            if (spellId != wanted)
-                player->RemoveAurasDueToSpell(spellId);
+        uint8 const stacks = IsPlayerbot(player) ? 0 : RecruitResolveStacksFor(player->GetLevel());
+        if (!stacks)
+        {
+            player->RemoveAurasDueToSpell(SPELL_RECRUIT_RESOLVE);
+            return;
+        }
 
-        if (wanted && !player->HasAura(wanted))
-            player->AddAura(wanted, player);
+        Aura* aura = player->GetAura(SPELL_RECRUIT_RESOLVE);
+        if (!aura)
+            aura = player->AddAura(SPELL_RECRUIT_RESOLVE, player);
+
+        // SetStackAmount recalculates both effect amounts and sends the new
+        // count to the client.
+        if (aura && aura->GetStackAmount() != stacks)
+            aura->SetStackAmount(stacks);
     }
 }
 
-// The rows are permanent, death-persistent, kept on arena entry and cannot be
-// clicked off, so login and a level change are what normally move them. A map
+// The buff is permanent, death-persistent, kept on arena entry and cannot be
+// clicked off, so login and a level change are what normally move it. A map
 // change re-checks too, which puts it back after anything that strips auras
 // wholesale on the way into a battleground or a custom game.
 class custom_recruit_resolve_player : public PlayerScript
