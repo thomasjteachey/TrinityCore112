@@ -70,6 +70,8 @@
 #include "Formulas.h"
 #include "QuestDef.h"
 #include "RBAC.h"
+#include "DisableMgr.h"
+#include "Miscellaneous/RaceChange.h"
 #include "Spell.h"
 #include "Random.h"
 #include "SharedDefines.h"
@@ -10406,6 +10408,14 @@ namespace
                 quest->IsMonthly() || quest->IsSeasonal() || quest->IsDFQuest())
                 continue;
 
+            // A disabled quest is not offered to anyone, so it must not teach
+            // anything either. The deprecated priest racial duplicates (5634,
+            // 5654, 5660, ...) are disabled but still carry loose race masks
+            // and teaching wrappers, and bots were learning other races'
+            // racials from them by level.
+            if (DisableMgr::IsDisabledFor(DISABLE_TYPE_QUEST, questPair.first, nullptr))
+                continue;
+
             auto& list = g_ClassQuestsByClass[questClass];
             entryIndexByQuest[questPair.first] = { questClass, list.size() };
             ClassQuestEntry entry;
@@ -10521,6 +10531,23 @@ namespace
     void EnsureEligibleClassQuestSkills(Player* bot)
     {
         BuildClassQuestCacheOnce();
+
+        // Priest racials come from the realm's settled race table, the same one
+        // the starter booster and race change use: rank 1 at the quest's level
+        // and every later rank at its own level. The quest rows only teach rank
+        // 1, and no trainer sells the later ranks.
+        uint32 racialsLearned = 0;
+        if (bot->GetClass() == CLASS_PRIEST)
+            for (uint32 spellId : RaceChange::RacialAbilitiesAtLevel(bot->GetRace(), CLASS_PRIEST, bot->GetLevel()))
+                if (!bot->HasSpell(spellId) && sSpellMgr->GetSpellInfo(spellId))
+                {
+                    bot->LearnSpell(spellId, false);
+                    ++racialsLearned;
+                }
+
+        if (racialsLearned)
+            TC_LOG_INFO("playerbots.pve", "Bot {} learned {} priest racial rank(s) for level {}.",
+                bot->GetName(), racialsLearned, bot->GetLevel());
 
         std::vector<ClassQuestEntry> const* list = nullptr;
         {
