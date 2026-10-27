@@ -123,7 +123,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Resilience,   SPELL_BOON_RESILIENCE,   3,  30, MASK_ALL,      7, "Boon of Resilience",   "less chance to be critically hit",        "%" },
     { Boon::Divinity,     SPELL_BOON_DIVINITY,     5,  25, MASK_ALL,      5, "Boon of Divinity",     "of your damage and healing builds a shield (up to 25% of your health)", "%" },
     { Boon::Clearcasting, SPELL_BOON_CLEARCASTING, 2,  20, MASK_ALL,      5, "Boon of Clearcasting", "chance on damage or healing that your next spell or ability costs nothing", "%" },
-    { Boon::Viper,        SPELL_BOON_VIPER,        5,  25, MASK_MANA,     6, "Boon of the Viper",    "of damage dealt drained from the target's mana into yours", "%" },
+    { Boon::Viper,        SPELL_BOON_VIPER,        5,  25, MASK_MANA,     6, "Boon of the Viper",    "of damage dealt returned to you as mana", "%" },
     { Boon::Protector,    SPELL_BOON_PROTECTOR,   10, 100, MASK_ALL,      8, "Boon of the Protector", "armor",                                  "%" },
     { Boon::Weaponmaster, SPELL_BOON_WEAPONMASTER, 10, 90, MASK_MELEE,    4, "Boon of the Weaponmaster", "shorter disarms on you",              "%" },
     { Boon::Aggression,   SPELL_BOON_AGGRESSION,   5,  50, MASK_ALL,      6, "Boon of Aggression",   "less healing received by whatever you hit (10 sec)", "%" },

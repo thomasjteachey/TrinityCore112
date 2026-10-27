@@ -199,9 +199,10 @@ namespace VioletHoldBoons
         // Third batch. 90401-90418 is one block, so IsBoonSpell is a range
         // check: the per-class Clearcasting buffs first (id = base + ChrClasses
         // id, the Alacrity layout - 90406/90410 unused), then the boon auras.
-        // The healthstone's record aura sits just below it. 90395/90396/90419
-        // are what the procs FIRE (a mana drain, the healing debuff, the
-        // shield) - not boon auras and deliberately not in IsBoonSpell.
+        // The healthstone's record aura sits just below it. 90395/94304/90419
+        // belong to the procs (the name on the Viper mana gain, the healing
+        // debuff, the shield) - not boon auras and deliberately not in
+        // IsBoonSpell.
         SPELL_BOON_HEALTHSTONE          = 90397,   // record only; the item is the boon
         SPELL_BOON_CLEARCAST_CLASS_BASE = 90400,
         SPELL_BOON_CLEARCAST_CLASS_FIRST = 90401,
@@ -215,8 +216,11 @@ namespace VioletHoldBoons
         SPELL_BOON_AGGRESSION   = 90418,
         SPELL_BOON_BATCH3_FIRST = 90401,
         SPELL_BOON_BATCH3_LAST  = 90418,
-        SPELL_VIPER_DRAIN       = 90395,
-        SPELL_AGGRESSION_WOUND  = 90396,
+        SPELL_VIPER_DRAIN       = 90395,   // only names the mana gain in the log
+        // Mortal Wound, 1% healing received per stack, up to 50 stacks. It
+        // replaced 90396, a fixed-amount row whose tooltip could not show the
+        // real cut ("0 to 1%"); 90396 stays in the DBC, unused.
+        SPELL_AGGRESSION_WOUND  = 94304,
         SPELL_DIVINITY_SHIELD   = 90419,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.

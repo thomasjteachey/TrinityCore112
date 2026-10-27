@@ -723,10 +723,12 @@ class spell_vhr_boon_clearcasting : public AuraScript
     }
 };
 
-// 90415 Boon of the Viper: stacks% of the damage dealt is drained from the
-// target's mana into the holder's (90395, a power drain with a 1.0 gain
-// multiplier). The drain effect only takes from units whose power IS mana,
-// so a warrior, a rogue or a druid in cat or bear form is skipped here.
+// 90415 Boon of the Viper: stacks% of the damage dealt comes back to the
+// holder as mana, from any target. It is an energize logged under Viper
+// Drain (90395), so the exact gain shows in the combat log and as "+N Mana"
+// combat text. It used to drain the target's mana instead, which gave
+// nothing against targets without mana and was cut by resilience and the
+// target's damage-taken modifiers - far less than the boon promised.
 class spell_vhr_boon_viper : public AuraScript
 {
     PrepareAuraScript(spell_vhr_boon_viper);
@@ -735,26 +737,21 @@ class spell_vhr_boon_viper : public AuraScript
     {
         if (IsBoonTriggeredSpell(eventInfo.GetSpellInfo()))
             return false;
-        Unit* victim = eventInfo.GetProcTarget();
-        if (!GetTarget()->IsAlive() || !victim || victim == GetTarget() || !victim->IsAlive())
-            return false;
-        if (victim->GetPowerType() != POWER_MANA || !victim->GetPower(POWER_MANA))
-            return false;
-        return ProcDamage(eventInfo) > 0;
+        Unit* holder = GetTarget();
+        return holder->IsAlive() && holder->GetMaxPower(POWER_MANA) > 0 && ProcDamage(eventInfo) > 0;
     }
 
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
 
-        Unit* victim = eventInfo.GetProcTarget();
-        uint32 const drain = CalculatePct(ProcDamage(eventInfo), uint32(GetStackAmount()));
-        if (!victim || !drain)
+        uint32 const gain = CalculatePct(ProcDamage(eventInfo), uint32(GetStackAmount()));
+        SpellInfo const* logAs = sSpellMgr->GetSpellInfo(SPELL_VIPER_DRAIN);
+        if (!gain || !logAs)
             return;
 
-        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-        args.AddSpellBP0(int32(drain));
-        GetTarget()->CastSpell(victim, SPELL_VIPER_DRAIN, args);
+        Unit* holder = GetTarget();
+        holder->EnergizeBySpell(holder, logAs, int32(gain), POWER_MANA);
     }
 
     void Register() override
@@ -764,9 +761,11 @@ class spell_vhr_boon_viper : public AuraScript
     }
 };
 
-// 90418 Boon of Aggression: every damaging hit leaves Mortal Wound (90396,
-// healing received -stacks%, 10 sec) on the target. One wound per holder; a
-// hit that finds it already at the holder's strength only keeps it open.
+// 90418 Boon of Aggression: every damaging hit leaves Mortal Wound (94304,
+// 10 sec) on the target, stacked to the holder's own Aggression stacks at 1%
+// healing received each. The stack count is what lets the client tooltip and
+// icon show the real cut (a 3.3.5 client never gets aura amounts). One wound
+// per holder; a hit only refreshes it and moves its stacks to the holder's.
 class spell_vhr_boon_aggression : public AuraScript
 {
     PrepareAuraScript(spell_vhr_boon_aggression);
@@ -785,25 +784,28 @@ class spell_vhr_boon_aggression : public AuraScript
 
         Unit* holder = GetTarget();
         Unit* victim = eventInfo.GetProcTarget();
-        int32 const cut = -int32(GetStackAmount());
-        if (!victim || !cut)
+        uint8 const stacks = GetStackAmount();
+        if (!victim || !stacks)
             return;
 
-        if (Aura* wound = victim->GetAura(SPELL_AGGRESSION_WOUND, holder->GetGUID()))
+        Aura* wound = victim->GetAura(SPELL_AGGRESSION_WOUND, holder->GetGUID());
+        if (wound)
+            wound->RefreshDuration();
+        else
         {
-            AuraEffect const* eff = wound->GetEffect(EFFECT_0);
-            if (eff && eff->GetAmount() == cut)
-            {
-                wound->RefreshDuration();
+            // Instant and triggered, so the wound is on the victim (one stack)
+            // when this returns - unless the victim was immune.
+            holder->CastSpell(victim, SPELL_AGGRESSION_WOUND, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+            wound = victim->GetAura(SPELL_AGGRESSION_WOUND, holder->GetGUID());
+            if (!wound)
                 return;
-            }
         }
 
-        // A recast from the same caster overwrites the wound's base amount,
-        // so a holder who took more stacks deepens it on the next hit.
-        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-        args.AddSpellBP0(cut);
-        holder->CastSpell(victim, SPELL_AGGRESSION_WOUND, args);
+        // SetStackAmount recomputes the amount (per-stack value x stacks) and
+        // sends the new count. It does not clamp; Aggression's own cap (50)
+        // matches the wound's StackAmount.
+        if (wound->GetStackAmount() != stacks)
+            wound->SetStackAmount(stacks);
     }
 
     void Register() override
