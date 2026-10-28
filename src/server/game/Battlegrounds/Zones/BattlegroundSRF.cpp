@@ -381,11 +381,17 @@ int32 CreatureSide(Creature const* creature)
 // The base: the fountain and the shop beside it.
 float constexpr SRF_BASE_RANGE          = Yards(1000.0f);
 // The shops: League's orderShop01 / chaosShop01 stand outside the walkable area
-// (under the boundary embankment), so each is drawn in toward its fountain to the
-// nearest spot 4 yards clear of the navigation grid's walls. Facing the middle.
-SrfPoint constexpr SRF_SHOP_AT[PVP_TEAMS_COUNT] = { { 322.9f, 171.0f, 682.7f }, { 14151.8f, 179.0f, 14454.3f } };
+// (under the boundary embankment), so each is drawn in toward its fountain. The
+// shopkeeper and the armsmaster (the kit's weapons) stand shoulder to shoulder,
+// 3 yards apart on the 1.125 map, facing the middle, at least 3.4 yards clear of
+// the navigation grid's walls and 4.8 from the fountain's spawn point. The two
+// bases mirror each other, so Order's pair has the armsmaster on the shopkeeper's
+// right and Chaos's on its left: one "to the shopkeeper's left" for both put
+// Order's inside the rim wall and Chaos's on the fountain (owner, 2026-10-27: "the
+// weapon master loadouts are inside the wall and not aligned with eachother?").
+SrfPoint constexpr SRF_SHOP_AT[PVP_TEAMS_COUNT] = { { 456.0f, 171.0f, 722.2f }, { 14113.1f, 179.0f, 14320.9f } };
+SrfPoint constexpr SRF_ARMS_AT[PVP_TEAMS_COUNT] = { { 544.7f, 171.0f, 622.6f }, { 14213.2f, 179.0f, 14232.8f } };
 float constexpr SRF_SHOP_FACING[PVP_TEAMS_COUNT] = { 5.44f, 2.42f };
-float constexpr SRF_ARMSMASTER_OFFSET = 4.0f;   // yards to the shopkeeper's left
 float constexpr SRF_FOUNTAIN_BURN_RANGE = Yards(700.0f);
 // Turret shots are League's (Season 3): the turret's attack damage for its tier
 // and the game time (world rift_league_unit), through 30% of the target's armour.
@@ -720,9 +726,8 @@ bool BattlegroundSRF::SetupBattleground()
             TC_LOG_ERROR("bg.battleground", "BattlegroundSRF: failed to spawn the {} shopkeeper.", TeamName(team));
 
         // The armsmaster (the kit's weapons) beside the shopkeeper, facing the same way.
-        float const side = pos.GetOrientation() + float(M_PI) / 2.0f;
-        Position arms(pos.GetPositionX() + SRF_ARMSMASTER_OFFSET * std::cos(side), pos.GetPositionY() + SRF_ARMSMASTER_OFFSET * std::sin(side),
-            pos.GetPositionZ(), pos.GetOrientation());
+        SrfPoint const& armsAt = SRF_ARMS_AT[team];
+        Position arms = ToWorld(armsAt.x, armsAt.y, armsAt.z, SRF_SHOP_FACING[team]);
         if (map)
         {
             float const ground = map->GetHeight(arms.GetPositionX(), arms.GetPositionY(), arms.GetPositionZ() + 10.0f, true);
@@ -962,7 +967,14 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
         else
             st.UnchangedMs = std::min(st.UnchangedMs + elapsed, SRF_BRUSH_PROJECT_MS);
         uint8 const patch = player->IsAlive() ? BrushPatchAt(ProjectedPosition(player, st.UnchangedMs)) : 0;
-        if (patch && AttackOf(player))
+        // Seen while it attacks from the brush: a blow or a spell on an enemy in the
+        // last moment (NoteBrushAttack), or swinging at one in reach - a slow weapon
+        // would go dark between its blows. Being in a fight with an enemy selected
+        // is not attacking: it used to keep a champion seen through every bush it
+        // ran into mid-fight, so the brush hid nobody who needed it (players,
+        // 2026-10-27: "bushes dont work").
+        Unit const* swingAt = player->HasUnitState(UNIT_STATE_MELEE_ATTACKING) ? player->GetVictim() : nullptr;
+        if (patch && swingAt && player->IsWithinMeleeRange(swingAt))
             st.RevealMs = SRF_BRUSH_REVEAL;
         else
             st.RevealMs = st.RevealMs > elapsed ? st.RevealMs - elapsed : 0;
@@ -1008,6 +1020,18 @@ void BattlegroundSRF::UpdateBrush(uint32 elapsed)
             player->RemoveVisFlag(UNIT_VIS_FLAGS_CREEP);
         }
     }
+}
+
+// An attack from the brush shows the champion (UpdateBrush puts it in sight again
+// on the next update). One made outside it does not follow it in: League's juke,
+// a hit and a step into the bush, still hides it.
+void BattlegroundSRF::NoteBrushAttack(Player* champion)
+{
+    if (!champion || GetStatus() != STATUS_IN_PROGRESS)
+        return;
+    auto const itr = _brush.find(champion->GetGUID());
+    if (itr != _brush.end() && itr->second.Patch)
+        itr->second.RevealMs = SRF_BRUSH_REVEAL;
 }
 
 bool BattlegroundSRF::HidesFrom(Player const* target, WorldObject const* seer) const
@@ -1382,8 +1406,9 @@ void BattlegroundSRF::ReleaseIdleCombat()
 // League's bots: one to each lane, the bottom lane taking a second (carry and
 // support) and a fourth or later bot jungling; a bot holds just behind its
 // frontmost allied minion, last-hits the enemy wave, fights an enemy champion
-// that comes into its lane, and keeps out of a standing enemy turret's reach
-// unless allied minions are under it taking the shots. Low on health (30%) it
+// that comes into its lane (never one under its turret), and keeps out of a
+// standing enemy turret's reach unless allied minions are under it taking the
+// shots - out of all of them once one shoots at it. Low on health (30%) it
 // goes home and stays until healed (90%); rich enough for its next item it goes
 // home to shop (RiftProgression::Maintain spends for it there).
 
@@ -1412,6 +1437,9 @@ float constexpr SRF_BOT_GANK_HURT_PCT = 60.0f;
 float constexpr SRF_BOT_FIGHT_RANGE   = 30.0f;
 // The support walks this far behind its carry, along the lane.
 float constexpr SRF_BOT_SUPPORT_BEHIND = 4.0f;
+// After an enemy turret's last shot at it, a bot keeps out of every enemy turret's
+// reach this long (a turret fires every 1.2 s), so it does not step straight back in.
+uint32 constexpr SRF_BOT_TURRET_FLEE_MS = 4000;
 
 namespace
 {
@@ -1566,7 +1594,9 @@ void BattlegroundSRF::RefreshFreeTurrets()
     for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
     {
         std::vector<Position>& out = _freeTurrets[team];
+        std::vector<Position>& standing = _enemyTurrets[team];
         out.clear();
+        standing.clear();
         if (!map)
             continue;
         TeamId const enemy = OtherTeam(team);
@@ -1578,6 +1608,7 @@ void BattlegroundSRF::RefreshFreeTurrets()
             Creature* turret = map->GetCreature(BgCreatures[slot]);
             if (!turret || !turret->IsAlive())
                 continue;
+            standing.push_back(turret->GetPosition());
             bool tanked = false;
             for (Minion const& m : _minions)
                 if (m.Team == team && turret->GetExactDist2d(&m.Pos) <= SRF_TURRET_RANGE)
@@ -1599,6 +1630,26 @@ bool BattlegroundSRF::UnderFreeEnemyTurret(TeamId team, Position const& pos, flo
     return false;
 }
 
+bool BattlegroundSRF::UnderEnemyTurret(TeamId team, Position const& pos, float margin) const
+{
+    for (Position const& turret : _enemyTurrets[team])
+        if (turret.GetExactDist2d(&pos) <= SRF_TURRET_RANGE + margin)
+            return true;
+    return false;
+}
+
+bool BattlegroundSRF::TurretShooting(Player const* bot) const
+{
+    TeamId const enemy = OtherTeam(GetTeamIndexByTeamId(GetPlayerTeam(bot->GetGUID())));
+    for (uint8 i = 0; i < BG_SRF_STRUCTURES_PER_TEAM; ++i)
+    {
+        uint8 const slot = SlotOf(enemy, i);
+        if (!_structures[slot].Destroyed && StructureAt(slot).kind == BG_SRF_KIND_TURRET && _turrets[slot].Target == bot->GetGUID())
+            return true;
+    }
+    return false;
+}
+
 uint32 BattlegroundSRF::LaneIndexNear(TeamId team, uint8 lane, Position const& pos)
 {
     std::vector<Position> const& path = LanePath(team, lane);
@@ -1616,13 +1667,20 @@ uint32 BattlegroundSRF::LaneIndexNear(TeamId team, uint8 lane, Position const& p
     return best;
 }
 
-bool BattlegroundSRF::BotMayAttack(Player* bot, Unit* target) const
+bool BattlegroundSRF::BotMayAttack(Player* bot, Unit* target, bool fleeing) const
 {
     if (!bot || !target)
         return false;
     TeamId const team = GetTeamIndexByTeamId(GetPlayerTeam(bot->GetGUID()));
-    // a turret itself may be hit while minions tank it - that is UnderFreeEnemyTurret's own test
-    return !UnderFreeEnemyTurret(team, target->GetPosition(), bot->GetCombatReach());
+    float const margin = bot->GetCombatReach();
+    // An enemy champion under its turret is never hit, minions or none: League's call
+    // for help turns the turret on whoever hits one (TurretCallForHelp), and the bot
+    // stood there trading blows until the turret killed it (players, 2026-10-27:
+    // "the bots like to run into the towers").
+    if (fleeing || target->GetTypeId() == TYPEID_PLAYER)
+        return !UnderEnemyTurret(team, target->GetPosition(), margin);
+    // a minion, or the turret itself, may be hit while allied minions tank the turret
+    return !UnderFreeEnemyTurret(team, target->GetPosition(), margin);
 }
 
 // Asked twice a bot tick (the decision and the action); worked out at most
@@ -1655,6 +1713,15 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
     // `out` is the bot's own last orders (GetBotOrders): what it was fighting goes first
     ObjectGuid const current = out.Target;
     out = BattlegroundBotOrders();
+
+    // An enemy turret shooting at it: out of every enemy turret's reach, hitting
+    // nothing under one, until a while after the last shot it drew.
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (TurretShooting(bot))
+        st.TurretFleeUntil = nowMs + SRF_BOT_TURRET_FLEE_MS;
+    else if (st.TurretFleeUntil && int32(st.TurretFleeUntil - nowMs) <= 0)
+        st.TurretFleeUntil = 0;
+    bool const fleeing = st.TurretFleeUntil != 0;
 
     // Home: to heal, or to spend. A trip home that buys nothing - the build is done,
     // or nothing fits - sends it back out until it has SRF_BOT_SHOP_MORE more:
@@ -1722,7 +1789,7 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
         for (Player* enemy : TeamPlayers(OtherTeam(team)))
         {
             if (!enemy->IsAlive() || enemy->GetExactDist2d(bot) > SRF_BOT_GANK_RANGE || !bot->IsValidAttackTarget(enemy)
-                || UnderFreeEnemyTurret(team, enemy->GetPosition(), 3.0f))
+                || UnderEnemyTurret(team, enemy->GetPosition(), 3.0f))
                 continue;
             bool fighting = enemy->GetHealthPct() < SRF_BOT_GANK_HURT_PCT;
             for (Player* ally : TeamPlayers(team))
@@ -1814,10 +1881,15 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
         }
     }
     front = std::min<int32>(front, int32(path.size()) - 1);
-    // back along the path until it is its distance behind it, and out of free turret reach
+    // back along the path until it is its distance behind it, and out of free turret
+    // reach - out of every enemy turret's while one is shooting at it
     bool const ranged = FightsAtRange(bot);
     float const behind = ranged ? SRF_BOT_BEHIND_WAVE_RANGED : SRF_BOT_BEHIND_WAVE;
     float const engage = SRF_BOT_ENGAGE_RANGE + (ranged ? SRF_BOT_BEHIND_WAVE_RANGED - SRF_BOT_BEHIND_WAVE : 0.0f);
+    auto const turretKeepsOff = [&](Position const& pos)
+    {
+        return fleeing ? UnderEnemyTurret(team, pos, 3.0f) : UnderFreeEnemyTurret(team, pos, 3.0f);
+    };
     int32 post = front;
     float walked = 0.0f;
     while (post > 0 && walked < behind)
@@ -1825,11 +1897,12 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
         walked += path[post].GetExactDist2d(&path[post - 1]);
         --post;
     }
-    while (post > 0 && UnderFreeEnemyTurret(team, path[post], 3.0f))
+    while (post > 0 && turretKeepsOff(path[post]))
         --post;
     out.Post = path[post];
 
-    // The support: a few yards behind its carry, wherever the carry is in the lane.
+    // The support: a few yards behind its carry, wherever the carry is in the lane -
+    // but not after it under a turret the support would be kept out of.
     bool const support = st.Role == SRF_ROLE_SUPPORT;
     if (support)
         if (Player* carry = TeamCarry(team); carry && carry != bot && carry->GetExactDist2d(&out.Post) < SRF_BOT_GANK_RANGE)
@@ -1841,6 +1914,8 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
                 back += path[at].GetExactDist2d(&path[at - 1]);
                 --at;
             }
+            while (at > 0 && turretKeepsOff(path[at]))
+                --at;
             out.Post = path[at];
         }
 
@@ -1855,7 +1930,7 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
             return;
         // in reach of the bot itself, or of the post once it is there
         if ((unit->GetExactDist2d(bot) > engage && (!atPost || unit->GetExactDist2d(&out.Post) > engage))
-            || !BotMayAttack(bot, unit))
+            || !BotMayAttack(bot, unit, fleeing))
             return;
         if (unit->GetGUID() == current)
             score += SRF_BOT_TARGET_KEEP;

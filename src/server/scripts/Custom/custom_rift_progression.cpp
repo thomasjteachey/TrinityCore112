@@ -250,10 +250,37 @@ public:
     void OnSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
     {
         Unit* target = spell ? spell->m_targets.GetUnitTarget() : nullptr;
-        if (!target || target == player || target->GetTypeId() != TYPEID_PLAYER || !player->IsHostileTo(target))
+        if (!target || target == player || !player->IsHostileTo(target))
+            return;
+        // A harmful spell at any enemy - a minion, a monster, a turret - shows a
+        // champion casting it from the brush.
+        if (BattlegroundSRF* bg = RiftOfVictim(player))
+            bg->NoteBrushAttack(player);
+        if (target->GetTypeId() != TYPEID_PLAYER)
             return;
         if (BattlegroundSRF* bg = RiftOfVictim(target))
             bg->RecordChampionContribution(player, target->ToPlayer());
+    }
+};
+
+// League's brush: a champion's own blow or spell landing on anything it fights
+// shows it for a moment (BattlegroundSRF::NoteBrushAttack). Not a damage-over-time
+// tick, and not its pet's work: League's brush shows the one who attacks.
+class custom_rift_brush_unit : public UnitScript
+{
+public:
+    custom_rift_brush_unit() : UnitScript("custom_rift_brush_unit") { }
+
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage, DamageEffectType damagetype, CleanDamage const* cleanDamage) override
+    {
+        if (!attacker || attacker == victim || attacker->GetTypeId() != TYPEID_PLAYER)
+            return;
+        if (damagetype != DIRECT_DAMAGE && damagetype != SPELL_DIRECT_DAMAGE)
+            return;
+        if (!damage && !(cleanDamage && cleanDamage->absorbed_damage))
+            return;
+        if (BattlegroundSRF* bg = RiftOfVictim(attacker))
+            bg->NoteBrushAttack(attacker->ToPlayer());
     }
 };
 
@@ -676,6 +703,7 @@ void AddSC_custom_rift_progression()
 {
     new custom_rift_contribution_unit();
     new custom_rift_contribution_player();
+    new custom_rift_brush_unit();
     new custom_rift_mount_unit();
     new custom_rift_mount_player();
     AddonRequestRoutes::Register("RIFTPICK", &RiftProgression::HandlePickRequest);

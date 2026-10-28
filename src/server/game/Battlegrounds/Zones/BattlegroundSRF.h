@@ -238,16 +238,23 @@ public:
     // League's bots, for the playerbot battleground strategy: where a bot should
     // be and what it should hit, by League's laning rules - its own lane (or the
     // jungle), just behind its own minion wave, never under a standing enemy
-    // turret unless allied minions are taking that turret's fire, back to the
-    // fountain to heal and shop when low or rich.
+    // turret unless allied minions are taking that turret's fire, out of every
+    // enemy turret's reach once one shoots it, back to the fountain to heal and
+    // shop when low or rich.
     bool GetBotOrders(Player* bot, BattlegroundBotOrders& out) override;
-    // False when attacking `target` would take `bot` under a standing enemy turret
-    // that is free to shoot it - League's "no tower diving".
-    bool BotMayAttack(Player* bot, Unit* target) const;
+    // False when attacking `target` is League's tower dive: an enemy champion under
+    // any standing enemy turret (hitting it turns the turret on the bot), anything
+    // under a turret no allied minion is tanking, and, while a turret has the bot
+    // in its sights (`fleeing`), anything under any enemy turret.
+    bool BotMayAttack(Player* bot, Unit* target, bool fleeing) const;
 
     // League's brush: a champion in a brush patch is unseen by every enemy - player,
     // minion, turret - outside that patch, until it attacks.
     bool HidesFrom(Player const* target, WorldObject const* seer) const override;
+    // A champion's attack - a blow or a spell's impact on an enemy, a harmful spell
+    // cast at one (custom_rift_progression.cpp's hooks): from the brush, it is seen
+    // for a moment (SRF_BRUSH_REVEAL).
+    void NoteBrushAttack(Player* champion);
     // League's kill credit and assists: an enemy champion's damage or ability on
     // `victim` (custom_rift_progression.cpp's hooks). Within 10 s of a death it
     // makes an assist, and the latest one takes the kill a turret, a minion or a
@@ -458,7 +465,7 @@ private:
     struct BrushState
     {
         uint8 Patch = 0;           // the brush patch it stands in, 0 = none
-        uint32 RevealMs = 0;       // attacked from the brush: seen until this runs out
+        uint32 RevealMs = 0;       // attacked from the brush (NoteBrushAttack): seen until this runs out
         bool Hidden = false;
         int8 AtBase = -1;          // in its fountain at the last tick (-1: not known yet)
         // Where the server last saw it, and for how long that has not changed: a client
@@ -528,15 +535,21 @@ private:
         uint32 ShopBar = 0;             // copper the next trip home to shop waits for (raised when a trip buys nothing)
         uint32 ShopSince = 0;           // GameTime ms it has stood at the fountain with the gold to shop
         uint32 ShopGold = 0;            // its money then
+        uint32 TurretFleeUntil = 0;     // GameTime ms: an enemy turret shot at it, it keeps out of every one's reach
     };
-    // Per team: the standing enemy turrets free to shoot one of its champions (no
-    // minion of the team inside their reach), refreshed with the brush tick.
+    // Per team: the standing enemy turrets, and of those the ones free to shoot one
+    // of its champions (no minion of the team inside their reach), refreshed with
+    // the brush tick.
+    std::array<std::vector<Position>, PVP_TEAMS_COUNT> _enemyTurrets;
     std::array<std::vector<Position>, PVP_TEAMS_COUNT> _freeTurrets;
     void RefreshFreeTurrets();
     bool ComputeBotOrders(Player* bot, BotState& st, BattlegroundBotOrders& out);
     std::unordered_map<ObjectGuid, BotState> _bots;
     BotState& BotOf(Player* bot);
     bool UnderFreeEnemyTurret(TeamId team, Position const& pos, float margin) const;
+    bool UnderEnemyTurret(TeamId team, Position const& pos, float margin) const;
+    // A standing enemy turret has `bot` as its target.
+    bool TurretShooting(Player const* bot) const;
     uint32 LaneIndexNear(TeamId team, uint8 lane, Position const& pos);
     uint32 _brushTimer = 0;
     void UpdateBrush(uint32 elapsed);
