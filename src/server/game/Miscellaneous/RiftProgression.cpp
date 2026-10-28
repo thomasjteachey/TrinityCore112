@@ -3219,10 +3219,11 @@ bool IsItemLocked(Player const* player, uint32 entry)
 }
 
 // What champions earn, as config (.reload config takes a change at once):
-// Centurion.Rift.PlayerXpRate / PlayerGoldRate, 1.5 each (owner, 2026-10-21).
+// Centurion.Rift.PlayerXpRate 3.0 (owner, 2026-10-27; was 1.5), PlayerGoldRate 1.5
+// (owner, 2026-10-21).
 void AddExperience(Player* player, float leagueXp)
 {
-    leagueXp *= sConfigMgr->GetFloatDefault("Centurion.Rift.PlayerXpRate", 1.5f);
+    leagueXp *= sConfigMgr->GetFloatDefault("Centurion.Rift.PlayerXpRate", 3.0f);
     if (!player || leagueXp <= 0.0f)
         return;
     std::lock_guard<std::recursive_mutex> lock(StateMutex);
