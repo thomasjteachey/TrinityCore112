@@ -1378,7 +1378,8 @@ void Battleground::CenturionRewardHonorToTeam(uint32 Honor, uint32 TeamID)
 // bracket's world-drop greens for every PERSON below the cap who was still there
 // when the match ended - always for the winners, LoserChancePercent for the rest.
 //
-// Picked by the character's own level, one chest per ten-level bracket starting
+// Picked by the character's own level (its real one in a Summoner's Rift match),
+// one chest per ten-level bracket starting
 // at FirstItem (10-19). The contents are ordinary item_loot_template rows, so the
 // loot is data and changes without a build.
 //
@@ -1401,7 +1402,13 @@ void Battleground::AwardSpoilsChest(Player* player, bool won)
     if (Tournament::IsTournamentCharacter(player))
         return;
 
-    uint32 const level = player->GetLevel();
+    // The character's own level. A Summoner's Rift champion plays at the
+    // match's (10 climbing to 60) until Leave gives the real one back, so the
+    // chest used to be the bracket it ended the match at - or none at 60
+    // (owner, 2026-10-28: "giving me the bracket i ended at, not my real level").
+    uint32 level = player->GetLevel();
+    if (uint8 const real = RiftProgression::RealLevel(player))
+        level = real;
     uint32 const cap = player->GetUInt32Value(PLAYER_FIELD_MAX_LEVEL);
     if (level < 10 || level >= cap)
         return;
