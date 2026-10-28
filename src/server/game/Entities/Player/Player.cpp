@@ -28333,6 +28333,7 @@ void Player::AtExitCombat()
     m_combatDiagnosticCheckTimer = 0;
     m_combatDiagnosticSent = false;
     UpdatePotionCooldown();
+    RiftProgression::OnLeaveCombat(this);
 
     if (GetClass() == CLASS_DEATH_KNIGHT)
         for (uint8 i = 0; i < MAX_RUNES; ++i)

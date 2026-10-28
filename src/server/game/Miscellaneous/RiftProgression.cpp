@@ -282,6 +282,7 @@ namespace
         uint8 OccultStacks = 0;
         uint8 SeekerStacks = 0;
         float GoldOwed = 0.0f;     // gold every 10 sec: the fractions a tick leaves
+        uint32 LeftCombatAt = 0;   // game time (ms) it last left combat (OnLeaveCombat)
     };
 
     // Recursive: GiveLevel, called with the lock held, comes straight back through
@@ -1076,6 +1077,7 @@ namespace
     float constexpr ALLY_AURA_RANGE = RiftLeague::Yards(1100.0f);
     float constexpr ENEMY_AURA_RANGE = RiftLeague::Yards(700.0f);
     float constexpr LEAGUE_BASE_MOVE = 325.0f;      // League's flat speeds as a share of a champion's base
+    uint32 constexpr BOOTS_OUT_OF_COMBAT_MS = 6000; // Boots of Mobility: out of combat this long first
     uint32 constexpr RIFT_MAP_ID = 1690;
     uint32 constexpr SPELL_DEATHCAP = 94140;      // Rabadon's: +30% ability power (League S3)
     uint32 constexpr SPELL_ETERNITY_STACK = 94129; // Rod of Ages: League's +20 health, +20 mana, +2 AP a stack
@@ -1544,9 +1546,13 @@ namespace
             + (crest && crest->GetEffect(EFFECT_0) ? float(std::max(0, crest->GetEffect(EFFECT_0)->GetAmount())) : 0.0f)
             + (own(Unique::TakedownAp) > 0.0f && state.MejaiStacks >= TAKEDOWN_MAX_STACKS ? MEJAI_FULL_CDR : 0.0f));
 
-        // Boots of Mobility: their speed rises out of combat.
+        // Boots of Mobility: their speed rises out of combat - once the champion has
+        // been out of it for 6 sec (owner, 2026-10-28: "shouldn't it count 6 seconds
+        // from the time i leave combat?"). WoW drops combat the moment a minion
+        // dies, so it came back between every two hits.
         float bootsSpeed = items.BootsSpeed;
-        if (own(Unique::OutOfCombatSpeed) > 0.0f && !player->IsInCombat())
+        if (own(Unique::OutOfCombatSpeed) > 0.0f && !player->IsInCombat()
+            && GameTime::GetGameTimeMS() - state.LeftCombatAt >= BOOTS_OUT_OF_COMBAT_MS)
             bootsSpeed += own(Unique::OutOfCombatSpeed) / LEAGUE_BASE_MOVE * 100.0f;
         state.GearResist = it.Resist;
 
@@ -3585,6 +3591,16 @@ void OnDeath(Player* player)
     state->OccultStacks = uint8(state->OccultStacks - state->OccultStacks / 3);
     ShowStacks(player, SPELL_MEJAI_STACK, state->MejaiStacks);
     ShowStacks(player, SPELL_OCCULT_STACK, state->OccultStacks);
+}
+
+void OnLeaveCombat(Player* player)
+{
+    // every player on the realm comes through here: the lock only for the Rift's
+    if (!player || player->GetMapId() != RIFT_MAP_ID)
+        return;
+    std::lock_guard<std::recursive_mutex> lock(StateMutex);
+    if (State* state = Find(player))
+        state->LeftCombatAt = GameTime::GetGameTimeMS();
 }
 
 void ItemGoldTick(Player* player, uint32 diff)

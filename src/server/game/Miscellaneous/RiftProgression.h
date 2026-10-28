@@ -225,6 +225,9 @@ namespace RiftProgression
     // Mejai's and the Sword of the Occult's losses.
     TC_GAME_API void OnUnitKill(Player* player);
     TC_GAME_API void OnDeath(Player* player);
+    // Player::AtExitCombat: the moment a champion left combat, which Boots of
+    // Mobility's out-of-combat speed counts from.
+    TC_GAME_API void OnLeaveCombat(Player* player);
     // BattlegroundSRF: a champion's kill (`kill`) or assist on an enemy champion -
     // Mejai's Soulstealer and Sword of the Occult (2 stacks, 1), Athene's mana.
     TC_GAME_API void OnChampionTakedown(Player* player, bool kill);
