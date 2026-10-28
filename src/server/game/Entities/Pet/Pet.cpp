@@ -497,7 +497,11 @@ void Pet::SavePetToDB(PetSaveMode mode)
     // reload in LoadPetFromDB and the bots' own pet state all read Health from
     // it. Skipping the save left it at the full health the mirror was built
     // with, so a clone whose pet corpse despawned whistled it back whole.
-    if (owner->GetSession() && owner->GetSession()->IsTransientPlayerSession())
+    // An All-Star persona's pet is in the same position: borrowed for the
+    // match under a number with no rows, kept only in the persona's stable
+    // (Miscellaneous/AllStar.h) - and the real pet's rows must not be touched
+    // either while the persona is on.
+    if ((owner->GetSession() && owner->GetSession()->IsTransientPlayerSession()) || owner->HasAllStarPersona())
     {
         if (mode >= PET_SAVE_AS_CURRENT)
             if (PetStable* petStable = owner->GetPetStable())

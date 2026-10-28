@@ -338,7 +338,9 @@ void Battleground::Update(uint32 diff)
             if (isArena())
             {
                 // A shuffle is several matches in a row: its limit is per round.
-                if (IsSoloShuffle())
+                // All-Star keeps its own clock (Centurion.AllStar.TimeLimit) and
+                // brings its dead back from there.
+                if (IsSoloShuffle() || IsAllStar())
                     UpdateRounds(diff);
                 else if (GetStartTime() >= 20 * MINUTE*IN_MILLISECONDS)
                 {
@@ -1940,6 +1942,12 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
             player->SpawnCorpseBones();
         }
 
+        // An All-Star persona comes off first: the class, spells and gear the
+        // character really has have to be back before its own gear (below)
+        // can be handed back (Miscellaneous/AllStar.h). A no-op for anybody
+        // else.
+        AllStar::RestorePersona(player);
+
         // A Summoner's Rift character gets its real level (and talents, money)
         // back first: its own gear needs that level to be worn again.
         RiftProgression::Leave(player);
@@ -2636,7 +2644,8 @@ void Battleground::EventPlayerLoggedOut(Player* player)
         // 1 player is logging out, if it is the last alive, then end arena!
         // A shuffle only loses the round that way: RemovePlayer above has
         // already asked it.
-        if (isArena() && !IsSoloShuffle() && player->IsAlive())
+        // All-Star counts who is standing itself (Arena::CheckAllStarWinConditions).
+        if (isArena() && !IsSoloShuffle() && !IsAllStar() && player->IsAlive())
             if (GetAlivePlayersCountByTeam(player->GetBGTeam()) <= 1 && GetPlayersCountByTeam(GetOtherTeam(player->GetBGTeam())))
                 EndBattleground(GetOtherTeam(player->GetBGTeam()));
     }

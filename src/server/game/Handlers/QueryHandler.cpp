@@ -23,6 +23,7 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "MapManager.h"
+#include "Miscellaneous/AllStar.h"
 #include "Miscellaneous/Surnames.h"
 #include "NPCHandler.h"
 #include "ObjectAccessor.h"
@@ -47,11 +48,26 @@ void WorldSession::SendNameQueryOpcode(ObjectGuid guid)
     }
 
     data << uint8(0);                               // name known
-    data << Surnames::Decorated(guid, nameData->Name); // played name, plus the family name if there is one
-    data << uint8(0);                               // realm name - only set for cross realm interaction (such as Battlegrounds)
-    data << uint8(nameData->Race);
-    data << uint8(nameData->Sex);
-    data << uint8(nameData->Class);
+
+    // An All-Star persona reads as the character it borrowed (AllStar.h).
+    std::string personaName;
+    uint8 personaRace = 0, personaGender = 0, personaClass = 0;
+    if (AllStar::GetPersonaNameData(guid, personaName, personaRace, personaGender, personaClass))
+    {
+        data << personaName;
+        data << uint8(0);
+        data << uint8(personaRace);
+        data << uint8(personaGender);
+        data << uint8(personaClass);
+    }
+    else
+    {
+        data << Surnames::Decorated(guid, nameData->Name); // played name, plus the family name if there is one
+        data << uint8(0);                               // realm name - only set for cross realm interaction (such as Battlegrounds)
+        data << uint8(nameData->Race);
+        data << uint8(nameData->Sex);
+        data << uint8(nameData->Class);
+    }
 
     if (DeclinedName const* names = (player ? player->GetDeclinedNames() : nullptr))
     {

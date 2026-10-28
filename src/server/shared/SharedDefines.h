@@ -3558,10 +3558,16 @@ enum BattlegroundTypeId : uint32
     // its own: like All Arenas it is rolled onto an arena when a match is made,
     // from the `battleground_random_pool` rows for 889 (All Arenas' when it has
     // none). Outside the custom arena block, so nothing treats it as a map.
-    BATTLEGROUND_SSH            = 889  // Buffle Shuffle
+    BATTLEGROUND_SSH            = 889, // Buffle Shuffle
+    // All-Star: nine lives a player, one per class - each death brings them
+    // straight back as the next character of their own character list, or a
+    // class's starter template for one they have none of (Miscellaneous/
+    // AllStar.h). Rolled onto an arena like All Arenas, from the
+    // `battleground_random_pool` rows for 890 (All Arenas' when it has none).
+    BATTLEGROUND_ASA            = 890  // All-Star
 };
 
-#define MAX_BATTLEGROUND_TYPE_ID 890
+#define MAX_BATTLEGROUND_TYPE_ID 891
 
 // First and last of the custom arena block above. Kept as named constants so
 // the range checks below and the registration loops in BattlegroundMgr do not
@@ -3811,6 +3817,11 @@ enum BattlegroundQueueTypeId
     BATTLEGROUND_QUEUE_SSH_3    = 25,
     BATTLEGROUND_QUEUE_SSH_2    = 26,
     BATTLEGROUND_QUEUE_SRF      = 27,
+    // All-Star's own skirmish queues (BATTLEGROUND_ASA): 1v1, 2v2, 3v3, 5v5.
+    BATTLEGROUND_QUEUE_ASA_1    = 28,
+    BATTLEGROUND_QUEUE_ASA_2    = 29,
+    BATTLEGROUND_QUEUE_ASA_3    = 30,
+    BATTLEGROUND_QUEUE_ASA_5    = 31,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 

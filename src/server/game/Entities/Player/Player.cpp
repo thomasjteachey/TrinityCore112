@@ -26,6 +26,7 @@
 #include "AccountBankMgr.h"
 #include "Miscellaneous/BattlegroundSpoils.h"
 #include "Miscellaneous/CharacterScreen.h"
+#include "Miscellaneous/AllStar.h"
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/Mokgora.h"
 #include "Miscellaneous/Surnames.h"
@@ -429,6 +430,13 @@ namespace
         // (Miscellaneous/TournamentLoadout.cpp).
         if (Tournament::IsLoadoutSwapInProgress(player))
             return true;
+
+        // An All-Star persona wears the gear it borrowed and nothing else: its
+        // bags are the real character's, and a piece put on from them would
+        // have to be found again at the restore. Only the swap itself dresses
+        // it (Miscellaneous/AllStar.cpp).
+        if (player->HasAllStarPersona())
+            return AllStar::IsSwapInProgress(player);
 
         // The armour lock is a tournament rule, not a battleground one: a match
         // fought under the tournament's rules is fought in the armour it was
@@ -4952,6 +4960,10 @@ uint32 Player::ResetTalentsCost() const
 
 bool Player::ResetTalents(bool no_cost)
 {
+    // Its commit would write the persona's talents over the real ones.
+    if (HasAllStarPersona())
+        return false;
+
     sScriptMgr->OnPlayerTalentsReset(this, no_cost);
 
     // not need after this call
@@ -22235,6 +22247,12 @@ void Player::SaveToDB(bool create /*=false*/)
     if (GetSession() && GetSession()->IsTransientPlayerSession())
         return;
 
+    // An All-Star persona is another character's class worn for one match:
+    // the rows keep the real character (AllStar.h), restored before any
+    // way out saves.
+    if (HasAllStarPersona())
+        return;
+
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
     SaveToDB(trans, create);
@@ -22245,6 +22263,9 @@ void Player::SaveToDB(bool create /*=false*/)
 void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false */)
 {
     if (GetSession() && GetSession()->IsTransientPlayerSession())
+        return;
+
+    if (HasAllStarPersona())
         return;
 
     // delay auto save at any saves (manual, in code, or autosave)
@@ -22573,12 +22594,20 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
 // fast save function for item/money cheating preventing - save only inventory and money state
 void Player::SaveInventoryAndGoldToDB(CharacterDatabaseTransaction trans)
 {
+    // The bags of an All-Star persona hold its borrowed gear; the real
+    // inventory is saved once the character is itself again (AllStar.h).
+    if (HasAllStarPersona())
+        return;
+
     _SaveInventory(trans);
     SaveGoldToDB(trans);
 }
 
 void Player::SaveGoldToDB(CharacterDatabaseTransaction trans) const
 {
+    if (HasAllStarPersona())
+        return;
+
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_MONEY);
     stmt->setUInt32(0, GetMoney());
     stmt->setUInt32(1, GetGUID().GetCounter());
@@ -23697,11 +23726,15 @@ void Player::RemovePet(Pet* pet, PetSaveMode mode, bool returnreagent)
         if (mode == PET_SAVE_NOT_IN_SLOT && m_petStable && m_petStable->CurrentPet)
         {
             // Handle removing pet while it is in "temporarily unsummoned" state, for example on mount
-            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_PET_SLOT_BY_ID);
-            stmt->setUInt8(0, PET_SAVE_NOT_IN_SLOT);
-            stmt->setUInt32(1, GetGUID().GetCounter());
-            stmt->setUInt32(2, m_petStable->CurrentPet->PetNumber);
-            CharacterDatabase.Execute(stmt);
+            // (a persona's pet has no row to move: AllStar.h)
+            if (!HasAllStarPersona())
+            {
+                CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_PET_SLOT_BY_ID);
+                stmt->setUInt8(0, PET_SAVE_NOT_IN_SLOT);
+                stmt->setUInt32(1, GetGUID().GetCounter());
+                stmt->setUInt32(2, m_petStable->CurrentPet->PetNumber);
+                CharacterDatabase.Execute(stmt);
+            }
 
             m_petStable->UnslottedPets.push_back(std::move(*m_petStable->CurrentPet));
             m_petStable->CurrentPet.reset();
@@ -27388,6 +27421,10 @@ void Player::AddItemDurations(Item* item)
 
 void Player::AutoUnequipMainhandIfNeed(bool force)
 {
+    // A persona's weapons are borrowed and never mailed anywhere (AllStar.h).
+    if (HasAllStarPersona())
+        return;
+
     Item* mainItem = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
     if (!mainItem)
         return;
@@ -27425,6 +27462,9 @@ void Player::AutoUnequipMainhandIfNeed(bool force)
 
 void Player::AutoUnequipOffhandIfNeed(bool force /*= false*/, bool equipping /*= false*/)
 {
+    if (HasAllStarPersona())
+        return;
+
     Item* offItem = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
     if (!offItem)
         return;
@@ -30979,6 +31019,11 @@ void Player::ActivateSpec(uint8 spec)
 
     // A Rift match levels one spec only; the other keeps the build it walked in with.
     if (RiftProgression::SuppressTalentReset(this))
+        return;
+
+    // An All-Star persona has the one spec it borrowed, and switching would
+    // save and reload the real bars.
+    if (HasAllStarPersona())
         return;
 
     if (spec > GetSpecsCount())

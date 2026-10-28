@@ -628,6 +628,16 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
         return;
     }
 
+    // An All-Star persona's gear is borrowed for the match and never saved:
+    // handed to anyone it would become theirs (Miscellaneous/AllStar.h).
+    if (GetPlayer()->HasAllStarPersona())
+    {
+        SendNotification("You cannot trade while playing an All-Star match.");
+        info.Status = TRADE_STATUS_CLOSE_WINDOW;
+        SendTradeStatus(info);
+        return;
+    }
+
     if (!GetPlayer()->IsAlive())
     {
         info.Status = TRADE_STATUS_YOU_DEAD;
@@ -676,6 +686,14 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
     if (pOther->IsInCustomGameLobby())
     {
         SendNotification("Trading is disabled inside custom-game lobbies.");
+        info.Status = TRADE_STATUS_CLOSE_WINDOW;
+        SendTradeStatus(info);
+        return;
+    }
+
+    if (pOther->HasAllStarPersona())
+    {
+        SendNotification("That player is in an All-Star match.");
         info.Status = TRADE_STATUS_CLOSE_WINDOW;
         SendTradeStatus(info);
         return;

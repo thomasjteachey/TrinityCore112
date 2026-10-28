@@ -35,6 +35,10 @@ void WorldSession::HandleLearnTalentOpcode(WorldPacket& recvData)
     if (Tournament::RefuseTalentSpendInMatch(_player))
         return;
 
+    // A borrowed class plays the build it came with (Miscellaneous/AllStar.h).
+    if (_player->HasAllStarPersona())
+        return;
+
     _player->LearnTalent(talent_id, requested_rank);
     _player->SendTalentsInfoData(false);
 }
@@ -46,7 +50,7 @@ void WorldSession::HandleLearnPreviewTalents(WorldPacket& recvPacket)
     uint32 talentsCount;
     recvPacket >> talentsCount;
 
-    if (Tournament::RefuseTalentSpendInMatch(_player))
+    if (Tournament::RefuseTalentSpendInMatch(_player) || _player->HasAllStarPersona())
     {
         recvPacket.rfinish();
         return;
@@ -76,6 +80,9 @@ void WorldSession::HandleTalentWipeConfirmOpcode(WorldPacket& recvData)
     recvData >> guid;
 
     if (Tournament::RefuseTalentChangeInMatch(_player, "unlearn your talents"))
+        return;
+
+    if (_player->HasAllStarPersona())
         return;
 
     Creature* unit = GetPlayer()->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_NONE);

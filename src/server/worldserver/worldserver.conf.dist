@@ -3098,6 +3098,51 @@ Centurion.Battleground.Spoils.MinPresencePercent = 50
 Centurion.SoloShuffle.BalanceHealers = 0
 
 #
+#    Centurion.AllStar.Enable
+#        Description: The All-Star arena (battleground 890): nine lives a player, one
+#                     per class. Each death puts the player straight back at their
+#                     team's start as the next level-60 character of their own
+#                     character list (top to bottom, one per class), then the starter
+#                     template of every class they have none of. The swap is made in
+#                     place - no loading screen - and nothing of it is ever saved.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Centurion.AllStar.Enable = 1
+
+#
+#    Centurion.AllStar.RespawnDelay
+#        Description: Milliseconds between a death and coming back as the next
+#                     character. 0 = at the match's next update.
+#        Default:     0
+
+Centurion.AllStar.RespawnDelay = 0
+
+#
+#    Centurion.AllStar.TimeLimit
+#        Description: Minutes from the gates opening. When it runs out the team with
+#                     the most lives left wins, then the one with the most health left.
+#        Default:     30
+
+Centurion.AllStar.TimeLimit = 30
+
+#
+#    Centurion.AllStar.SourceMinLevel
+#        Description: The level a character of the account must be to stand in for
+#                     its class. Below it the class's starter template is used.
+#        Default:     60
+
+Centurion.AllStar.SourceMinLevel = 60
+
+#
+#    Centurion.AllStar.TemplateCharacters
+#        Description: class:guid pairs - the character whose kit is the default
+#                     loadout of each class (the tournament starter templates).
+#        Default:     "1:13307 2:13308 3:13314 4:13309 5:13310 7:13311 8:13315 9:13312 11:13313"
+
+Centurion.AllStar.TemplateCharacters = "1:13307 2:13308 3:13314 4:13309 5:13310 7:13311 8:13315 9:13312 11:13313"
+
+#
 #    Centurion.GoodieBag.Enable
 #        Description: A goodie bag for every character in a dungeon or raid when its
 #                     last boss dies: a random piece of that instance's boss loot that

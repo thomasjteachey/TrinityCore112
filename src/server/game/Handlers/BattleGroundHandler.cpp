@@ -68,6 +68,8 @@ namespace
     //                             Four Corners)
     //   CCGAME ARENAQUEUE:SHUFFLE Buffle Shuffle: the 2v2 and 3v3 skirmish rows
     //                             only, queued alone
+    //   CCGAME ARENAQUEUE:ALLSTAR All-Star: the practice rows as 1v1, 2v2, 3v3
+    //                             and 5v5 skirmishes
     //
     // Sent before every arena window so a client never keeps the last mode.
     void SendArenaQueueMode(Player* player, std::string const& mode)
@@ -173,11 +175,14 @@ void WorldSession::SendBattleGroundList(ObjectGuid guid, BattlegroundTypeId bgTy
     // that for the All Arenas list - and the window is told which queue it is
     // for. Its joins name the battlemaster, which is how
     // HandleBattlemasterJoinArena tells the two apart.
-    if (bgTypeId == BATTLEGROUND_AA || bgTypeId == BATTLEGROUND_SSH || sBattlegroundMgr->IsSquadBattleground(bgTypeId))
+    if (bgTypeId == BATTLEGROUND_AA || bgTypeId == BATTLEGROUND_SSH || bgTypeId == BATTLEGROUND_ASA
+        || sBattlegroundMgr->IsSquadBattleground(bgTypeId))
     {
         Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
         if (bgTypeId == BATTLEGROUND_SSH)
             SendArenaQueueMode(_player, "SHUFFLE");
+        else if (bgTypeId == BATTLEGROUND_ASA)
+            SendArenaQueueMode(_player, "ALLSTAR");
         else
             SendArenaQueueMode(_player, std::to_string(bgTemplate && bgTemplate->IsSquadMatch() ? bgTemplate->GetSquadCount() : 0));
         bgTypeId = BATTLEGROUND_AA;
@@ -883,8 +888,24 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
     // is one squad.
     BattlegroundTypeId queueBgTypeId = BATTLEGROUND_AA;
     if (BattlegroundTypeId const masterBgTypeId = sBattlegroundMgr->GetBattleMasterBG(unit->GetEntry());
-        sBattlegroundMgr->IsSquadBattleground(masterBgTypeId) || masterBgTypeId == BATTLEGROUND_SSH)
+        sBattlegroundMgr->IsSquadBattleground(masterBgTypeId) || masterBgTypeId == BATTLEGROUND_SSH
+        || masterBgTypeId == BATTLEGROUND_ASA)
         queueBgTypeId = masterBgTypeId;
+
+    // All-Star's window labels the four practice rows 1v1, 2v2, 3v3 and 5v5
+    // (ArenaFrame.lua, ARENAQUEUE:ALLSTAR); the slot the client sends is the
+    // row. There is no rated All-Star.
+    bool const allStar = queueBgTypeId == BATTLEGROUND_ASA;
+    if (allStar)
+    {
+        if (isRated)
+        {
+            ChatHandler(this).SendSysMessage("All-Star is a skirmish: 1v1, 2v2, 3v3 or 5v5.");
+            return;
+        }
+        static uint8 const allStarTypes[] = { ARENA_TYPE_1v1, ARENA_TYPE_2v2, ARENA_TYPE_3v3, ARENA_TYPE_5v5 };
+        arenatype = allStarTypes[arenaslot];
+    }
 
     // Buffle Shuffle's battlemaster takes two queues: a 2v2 or a 3v3 skirmish,
     // alone or with a party of up to a whole match - four or six, who are
@@ -916,6 +937,14 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
     PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bg->GetMapId(), _player->GetLevel());
     if (!bracketEntry)
         return;
+
+    // Every life after the first borrows a level-60 character's class, so an
+    // All-Star is one too (battleground_template MinLvl).
+    if (allStar && _player->GetLevel() < bg->GetMinLevel())
+    {
+        ChatHandler(this).PSendSysMessage("All-Star is for level %u characters.", bg->GetMinLevel());
+        return;
+    }
 
     GroupJoinBattlegroundResult err = ERR_GROUP_JOIN_BATTLEGROUND_FAIL;
 

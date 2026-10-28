@@ -1,0 +1,171 @@
+/*
+ * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#ifndef TRINITYCORE_ALL_STAR_H
+#define TRINITYCORE_ALL_STAR_H
+
+#include "Define.h"
+#include "ObjectGuid.h"
+
+#include <array>
+#include <memory>
+#include <string>
+#include <vector>
+
+class Player;
+
+// All-Star arena (BATTLEGROUND_ASA, owner 2026-10-28): "when you die, you will
+// switch to a random other class on your account, until you die with all 9
+// classes. if you do not have a level 60 character with that class, it gives
+// you a default loadout", then "it should BE your other character", "the order
+// in which you switch characters should be the order they are in your
+// character list", and "as soon as you die, you need to immediately spawn in as
+// your new class ... maybe it shouldn't be a literal login".
+//
+// Every player has nine lives, one per class. The lineup is built from the
+// account's character list, top to bottom (CharacterScreen::GetListPosition,
+// the order the player arranges on the character screen): the character they
+// queued with first, then each level-60 character of a class not in the lineup
+// yet, then - for every class the account has no level-60 of - that class's
+// tournament starter template (Startwarrior and the rest,
+// Centurion.AllStar.TemplateCharacters), in class order.
+//
+// A death puts the player straight back at their team's start as the next
+// character of the lineup. The swap is made IN PLACE, on the live character -
+// same guid, same session, same seat - so there is no loading screen: what the
+// next character is made of - its name, race and looks, spells, talents,
+// glyphs, skills, action bars, gear, ammo and hunter pet - is read off its rows
+// into a Kit ahead of time, and the Kit is put on the player. Everyone in the
+// match is told the new name, race and class (the name query answer for the
+// player's guid), so it reads as that character; a template keeps the player's
+// own name. The player's own state is held aside in memory (PersonaStash) and
+// put back when the match lets go of them.
+//
+// Nothing of a persona is ever written down. While a persona is on, every route
+// that saves a character - Player::SaveToDB, SaveInventoryAndGoldToDB, the pet
+// saves, ResetTalents, ActivateSpec - leaves the character's rows alone, so the
+// database keeps what the character was the moment it first changed class (it
+// is saved once, just before). A crash or a restart mid-match therefore loses
+// nothing but what the match itself paid since then; the next login is the real
+// character, and the tournament loadout's own rows give its gear back as ever.
+// Every other way out - the match ending, the leave button, a logout, a
+// disconnect - restores the stash first (Battleground::RemovePlayerAtLeave,
+// WorldSession::LogoutPlayer) and only then lets the save happen. What the
+// match pays (honor, kills) belongs to the character that queued.
+//
+// Bots (the transient copies that fill a match) play by the same rules, every
+// class after their first from the starter templates: a copy has no character
+// list of its own, and it never saves anyway.
+namespace AllStar
+{
+    // ------------------------------------------------------------------ config
+    // Centurion.AllStar.*, read in World::LoadConfigSettings (.reload config).
+    void LoadConfig();
+    bool IsEnabled();
+    uint32 GetRespawnDelayMs();     // death -> back at the start as the next character
+    uint32 GetTimeLimitMs();        // from the gates opening; then the most lives left wins
+    // The tournament starter template that stands in for a class nobody has.
+    ObjectGuid::LowType GetTemplateCharacter(uint8 playerClass);
+
+    // The nine classes an All-Star plays through, in the order the templates
+    // fill the end of a lineup.
+    std::array<uint8, 9> constexpr CLASS_ORDER = { 1, 2, 3, 4, 5, 7, 8, 9, 11 };
+    uint8 constexpr LIVES = 9;
+    bool IsPlayableClass(uint8 playerClass);
+    char const* ClassName(uint8 playerClass);
+
+    // ------------------------------------------------------------------ kits
+    // Everything one character's class is made of, as read off its rows. Kits
+    // are loaded on the world thread (Update drains the callbacks) and read
+    // from any thread afterwards; a Kit never changes once it is published.
+    struct Kit;
+    using KitPtr = std::shared_ptr<Kit const>;
+
+    // Ask for a character's kit. Cheap to repeat: a kit already loaded or on
+    // its way is not asked for twice. Template kits are kept for the life of
+    // the server; a player's own are dropped with ForgetKit when the match ends.
+    void RequestKit(ObjectGuid::LowType source);
+    // nullptr while the kit is still loading or could not be read.
+    KitPtr FindKit(ObjectGuid::LowType source);
+    // True when the kit was asked for and could not be built (no such row,
+    // not one of the nine classes): the caller falls back to the template.
+    bool KitFailed(ObjectGuid::LowType source);
+    void ForgetKit(ObjectGuid::LowType source);
+    uint8 GetKitClass(Kit const& kit);
+    std::string const& GetKitName(Kit const& kit);
+    bool IsTemplateKit(Kit const& kit);
+
+    // ---------------------------------------------------------------- lineups
+    struct LineupEntry
+    {
+        uint8 Class = 0;
+        ObjectGuid::LowType Source = 0;     // 0 for the character that queued
+        bool Template = false;
+    };
+    using Lineup = std::vector<LineupEntry>;
+
+    // A player's nine lives, built from their account's character list. Asked
+    // once per seat; `playing` is the character that queued (life one).
+    void RequestLineup(uint32 accountId, ObjectGuid::LowType playing, uint8 playingClass);
+    // false while the answer is on its way.
+    bool FindLineup(uint32 accountId, ObjectGuid::LowType playing, Lineup& out);
+    void ForgetLineup(uint32 accountId, ObjectGuid::LowType playing);
+    // A bot's: its own class, then the templates in class order.
+    Lineup BuildBotLineup(uint8 playingClass);
+
+    // World::Update: hands finished loads to the waiting matches.
+    void Update();
+
+    // --------------------------------------------------------------- personas
+    struct PersonaStash;
+    struct PersonaStashDeleter { TC_GAME_API void operator()(PersonaStash* stash) const; };
+    class PersonaAccess;            // the friend of Player that does the swapping
+
+    // Put a kit on a live, alive character. The first one saves the character
+    // and puts its own class aside; later ones replace the persona before.
+    // Returns false (and changes nothing) when the kit cannot be worn.
+    bool ApplyPersona(Player* player, KitPtr const& kit);
+    // Put the character's own class back. Safe to call on anybody: a no-op
+    // without a persona. Battleground::RemovePlayerAtLeave and
+    // WorldSession::LogoutPlayer call it before anything is saved.
+    void RestorePersona(Player* player);
+    // The class the character really is (its own, persona or not).
+    uint8 GetRealClass(Player const* player);
+    // The name the persona goes by ("" without one, or for a template).
+    std::string GetPersonaName(Player const* player);
+    bool IsPersonaFromTemplate(Player const* player);
+
+    // WorldSession::SendNameQueryOpcode: what to answer for a guid wearing a
+    // persona - its source's name (with its family name), race, gender and
+    // class. false for everybody else, who are answered as ever. Safe from any
+    // thread.
+    bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& gender, uint8& playerClass);
+
+    // True while ApplyPersona/RestorePersona is moving gear: the battleground
+    // gear lock stands aside for it, the way it does for the tournament loadout.
+    bool IsSwapInProgress(Player const* player);
+    // MiscHandler: the client answers every bars packet with "this button is
+    // empty" for buttons it has not caught up with; for a few seconds after a
+    // swap those answers are not news and are ignored.
+    bool KeepsButton(Player* player, uint8 button);
+    // A persona's hunter pet arrives a moment after the persona (LoadPetFromDB
+    // answers asynchronously): its trained spells are taught then. Called from
+    // the match's update.
+    void MaintainPersona(Player* player);
+}
+
+#endif // TRINITYCORE_ALL_STAR_H

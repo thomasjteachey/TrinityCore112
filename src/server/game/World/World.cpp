@@ -24,6 +24,7 @@
 #include "Miscellaneous/BotPvePower.h"
 #include "Miscellaneous/RiftProgression.h"
 #include "Miscellaneous/BotUpdatePolicy.h"
+#include "Miscellaneous/AllStar.h"
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/DepletedMarks.h"
@@ -1709,6 +1710,7 @@ void World::LoadConfigSettings(bool reload)
     // Character select/create screen extras: reordering, the tournament badge,
     // challenge modes chosen at creation (Miscellaneous/CharacterScreen.h).
     CharacterScreen::LoadConfig();
+    AllStar::LoadConfig();
 
     // Family names, picked on the create screen (Miscellaneous/Surnames.h).
     Surnames::LoadConfig();
@@ -2832,6 +2834,8 @@ void World::Update(uint32 diff)
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Process query callbacks"));
         // execute callbacks from sql queries that were queued recently
         ProcessQueryCallbacks();
+        // All-Star kits and lineups (Miscellaneous/AllStar.h) load here.
+        AllStar::Update();
     }
 
     ///- Erase corpses once every 20 minutes

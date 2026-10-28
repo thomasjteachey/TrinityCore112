@@ -767,6 +767,11 @@ void AchievementMgr::UpdateAchievementCriteria(AchievementCriteriaTypes type, ui
     if (m_player->GetSession() && m_player->GetSession()->IsTransientPlayerSession())
         return;
 
+    // A borrowed class's spells, skills and kills are not the character's own
+    // record (Miscellaneous/AllStar.h).
+    if (m_player->HasAllStarPersona())
+        return;
+
     if (type >= ACHIEVEMENT_CRITERIA_TYPE_TOTAL)
     {
         TC_LOG_DEBUG("achievement", "UpdateAchievementCriteria: Wrong criteria type {}", type);
@@ -1815,7 +1820,8 @@ bool AchievementMgr::RequirementsSatisfied(AchievementCriteriaEntry const* achie
                 if (achievIdByArenaSlot[j] == achievement->ID)
                 {
                     Battleground* bg = GetPlayer()->GetBattleground();
-                    if (!bg || !bg->isArena() || ArenaTeam::GetSlotByType(bg->GetArenaType()) != j)
+                    // An All-Star 1v1 has no arena team slot to ask about.
+                    if (!bg || !bg->isArena() || bg->GetArenaType() < ARENA_TYPE_2v2 || ArenaTeam::GetSlotByType(bg->GetArenaType()) != j)
                         return false;
                     break;
                 }

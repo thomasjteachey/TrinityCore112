@@ -530,6 +530,10 @@ void WorldSession::LogoutPlayer(bool save)
         // session. Also drops any challenge this character had outstanding.
         Mokgora::OnLogout(_player);
 
+        // An All-Star persona comes off before anything below saves: the
+        // character is written down as itself (Miscellaneous/AllStar.h).
+        AllStar::RestorePersona(_player);
+
         if (ObjectGuid lguid = _player->GetLootGUID())
             DoLootRelease(lguid);
 

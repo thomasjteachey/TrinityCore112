@@ -995,6 +995,11 @@ void WorldSession::HandleSocketOpcode(WorldPacket& recvData)
     for (int i = 0; i < MAX_GEM_SOCKETS; ++i)
         recvData >> gem_guids[i];
 
+    // A real gem set into a borrowed piece would go with it at the restore
+    // (Miscellaneous/AllStar.h).
+    if (_player->HasAllStarPersona())
+        return;
+
     //cheat -> tried to socket same gem multiple times
     if ((gem_guids[0] && (gem_guids[0] == gem_guids[1] || gem_guids[0] == gem_guids[2])) ||
         (gem_guids[1] && (gem_guids[1] == gem_guids[2])))

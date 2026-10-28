@@ -1067,7 +1067,7 @@ void WorldSession::HandleSetActionButtonOpcode(WorldPacket& recvData)
 
     if (!packetData)
     {
-        if (!RiftProgression::KeepsButton(GetPlayer(), button))
+        if (!RiftProgression::KeepsButton(GetPlayer(), button) && !AllStar::KeepsButton(GetPlayer(), button))
             GetPlayer()->removeActionButton(button);
     }
     else

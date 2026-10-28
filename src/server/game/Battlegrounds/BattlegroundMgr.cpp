@@ -781,6 +781,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
         uint32 maxPlayersPerTeam = 0;
         switch (arenaType)
         {
+            case ARENA_TYPE_1v1:
+                maxPlayersPerTeam = 1;
+                break;
             case ARENA_TYPE_2v2:
                 maxPlayersPerTeam = 2;
                 break;
@@ -892,6 +895,7 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
                 break;
             case BATTLEGROUND_AA:
             case BATTLEGROUND_SSH:
+            case BATTLEGROUND_ASA:
                 bg = new Battleground();
                 break;
             case BATTLEGROUND_RB:
@@ -1012,7 +1016,8 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
             continue;
         }
 
-        if (bgTemplate.Id != BATTLEGROUND_AA && bgTemplate.Id != BATTLEGROUND_RB && bgTemplate.Id != BATTLEGROUND_SSH)
+        if (bgTemplate.Id != BATTLEGROUND_AA && bgTemplate.Id != BATTLEGROUND_RB && bgTemplate.Id != BATTLEGROUND_SSH
+            && bgTemplate.Id != BATTLEGROUND_ASA)
         {
             uint32 startId = fields[5].GetUInt32();
             if (WorldSafeLocsEntry const* start = sWorldSafeLocsStore.LookupEntry(startId))
@@ -1187,7 +1192,8 @@ bool BattlegroundMgr::IsBotFillSkirmishArena(uint8 arenaType) const
     if (!_botFillPolicy.enabled || !_botFillPolicy.skirmishArenasEnabled)
         return false;
 
-    return arenaType == ARENA_TYPE_2v2 || arenaType == ARENA_TYPE_3v3 ||
+    // 1v1 is only ever an All-Star skirmish.
+    return arenaType == ARENA_TYPE_1v1 || arenaType == ARENA_TYPE_2v2 || arenaType == ARENA_TYPE_3v3 ||
         arenaType == ARENA_TYPE_4v4 || arenaType == ARENA_TYPE_5v5;
 }
 
@@ -1506,6 +1512,7 @@ bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)
 {
     return bgTypeId == BATTLEGROUND_AA
         || bgTypeId == BATTLEGROUND_SSH
+        || bgTypeId == BATTLEGROUND_ASA
         || bgTypeId == BATTLEGROUND_BE
         || bgTypeId == BATTLEGROUND_NA
         || bgTypeId == BATTLEGROUND_DS
@@ -1577,6 +1584,21 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
                     return BATTLEGROUND_QUEUE_SSH_2;
                 case ARENA_TYPE_3v3:
                     return BATTLEGROUND_QUEUE_SSH_3;
+                default:
+                    return BATTLEGROUND_QUEUE_NONE;
+            }
+        case BATTLEGROUND_ASA:
+            // All-Star: its own skirmish queues, 1v1 to 5v5 (no 4v4).
+            switch (arenaType)
+            {
+                case ARENA_TYPE_1v1:
+                    return BATTLEGROUND_QUEUE_ASA_1;
+                case ARENA_TYPE_2v2:
+                    return BATTLEGROUND_QUEUE_ASA_2;
+                case ARENA_TYPE_3v3:
+                    return BATTLEGROUND_QUEUE_ASA_3;
+                case ARENA_TYPE_5v5:
+                    return BATTLEGROUND_QUEUE_ASA_5;
                 default:
                     return BATTLEGROUND_QUEUE_NONE;
             }
@@ -1655,6 +1677,11 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
         case BATTLEGROUND_QUEUE_SSH_2:
         case BATTLEGROUND_QUEUE_SSH_3:
             return BATTLEGROUND_SSH;
+        case BATTLEGROUND_QUEUE_ASA_1:
+        case BATTLEGROUND_QUEUE_ASA_2:
+        case BATTLEGROUND_QUEUE_ASA_3:
+        case BATTLEGROUND_QUEUE_ASA_5:
+            return BATTLEGROUND_ASA;
         default:
             return BattlegroundTypeId(0);                   // used for unknown template (it exists and does nothing)
     }
@@ -1664,19 +1691,24 @@ uint8 BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId bgQueueTypeId)
 {
     switch (bgQueueTypeId)
     {
+        case BATTLEGROUND_QUEUE_ASA_1:
+            return ARENA_TYPE_1v1;
         case BATTLEGROUND_QUEUE_2v2:
         case BATTLEGROUND_QUEUE_BHF_2:
         case BATTLEGROUND_QUEUE_SSH_2:
+        case BATTLEGROUND_QUEUE_ASA_2:
             return ARENA_TYPE_2v2;
         case BATTLEGROUND_QUEUE_3v3:
         case BATTLEGROUND_QUEUE_BHF_3:
         case BATTLEGROUND_QUEUE_SSH_3:
+        case BATTLEGROUND_QUEUE_ASA_3:
             return ARENA_TYPE_3v3;
         case BATTLEGROUND_QUEUE_4v4:
         case BATTLEGROUND_QUEUE_BHF_4:
             return ARENA_TYPE_4v4;
         case BATTLEGROUND_QUEUE_5v5:
         case BATTLEGROUND_QUEUE_BHF_5:
+        case BATTLEGROUND_QUEUE_ASA_5:
             return ARENA_TYPE_5v5;
         default:
             return 0;
@@ -1899,9 +1931,13 @@ BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId, boo
     // Buffle Shuffle rolls from rows of its own (pool 889): its later rounds shut
     // the gates again, which not every arena can do. With none it rolls All
     // Arenas'.
-    bool const arenaRoll = bgTypeId == BATTLEGROUND_AA || bgTypeId == BATTLEGROUND_SSH;
+    //
+    // All-Star (pool 890) leaves out the arenas a respawn at the start would
+    // strand someone in: start pads a team is moved off once (881, 886) and
+    // Ring of Valor's lifts.
+    bool const arenaRoll = bgTypeId == BATTLEGROUND_AA || bgTypeId == BATTLEGROUND_SSH || bgTypeId == BATTLEGROUND_ASA;
     auto poolItr = _randomPools.find(bgTypeId);
-    if (poolItr == _randomPools.end() && bgTypeId == BATTLEGROUND_SSH)
+    if (poolItr == _randomPools.end() && (bgTypeId == BATTLEGROUND_SSH || bgTypeId == BATTLEGROUND_ASA))
         poolItr = _randomPools.find(BATTLEGROUND_AA);
     if (poolItr != _randomPools.end())
     {

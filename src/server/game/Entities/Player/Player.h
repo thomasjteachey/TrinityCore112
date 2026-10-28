@@ -31,6 +31,7 @@
 #include "PetDefines.h"
 #include "PlayerTaxi.h"
 #include "QuestDef.h"
+#include "Miscellaneous/AllStar.h"
 #include <array>
 #include <memory>
 #include <queue>
@@ -953,7 +954,13 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
     friend class CinematicMgr;
     friend void AddItemToUpdateQueueOf(Item* item, Player* player);
     friend void RemoveItemFromUpdateQueueOf(Item* item, Player* player);
+    // All-Star personas swap a character's class in place (Miscellaneous/AllStar.cpp).
+    friend class AllStar::PersonaAccess;
     public:
+        // True while the character wears an All-Star persona: another character's
+        // class, borrowed for an arena match and never saved. Every save of the
+        // character's rows asks this first (AllStar.h).
+        bool HasAllStarPersona() const { return m_allStarPersona != nullptr; }
         uint8 GetEquippedItemSetCount(uint32 itemsetId) const;
         explicit Player(WorldSession* session);
         ~Player();
@@ -3027,6 +3034,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool m_bHasDelayedTeleport;
 
         std::unique_ptr<PetStable> m_petStable;
+
+        // The character's own class while an All-Star persona is worn (AllStar.h).
+        std::unique_ptr<AllStar::PersonaStash, AllStar::PersonaStashDeleter> m_allStarPersona;
 
         // Temporary removed pet cache
         uint32 m_temporaryUnsummonedPetNumber;

@@ -444,6 +444,7 @@ struct BattlegroundObjectInfo
 
 enum ArenaType
 {
+    ARENA_TYPE_1v1          = 1,    // All-Star skirmishes only: no arena team is ever this size
     ARENA_TYPE_2v2          = 2,
     ARENA_TYPE_3v3          = 3,
     ARENA_TYPE_4v4          = 4,
@@ -837,6 +838,9 @@ class TC_GAME_API Battleground
         // STATUS_IN_PROGRESS from the first gates to the end; between rounds
         // it shuts the gates and counts down again on its own.
         bool IsSoloShuffle() const { return m_TypeID == BATTLEGROUND_SSH; }
+        // All-Star (BATTLEGROUND_ASA): a death brings the player back as the
+        // next character of their lineup (Miscellaneous/AllStar.h, Arena.cpp).
+        bool IsAllStar() const { return m_TypeID == BATTLEGROUND_ASA; }
         // Between two rounds of a match fought in rounds: the last one is
         // decided and the next has not begun. The start-of-match checks (bounds,
         // start exits) wait for the gates as they do before the first round,

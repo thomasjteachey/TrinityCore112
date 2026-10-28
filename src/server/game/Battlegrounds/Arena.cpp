@@ -23,6 +23,7 @@
 #include "Chat.h"
 #include "Containers.h"
 #include "DBCStores.h"
+#include "GameTime.h"
 #include "Log.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
@@ -94,6 +95,9 @@ void Arena::AddPlayer(Player* player)
 
     if (!isInBattleground)
         PlayerScores[player->GetGUID().GetCounter()] = new ArenaScore(player->GetGUID(), player->GetBGTeam());
+
+    if (IsAllStar())
+        SeatAllStar(player);
 
     ApplyArenaFlag(player);
 
@@ -185,6 +189,13 @@ void Arena::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& pa
 
     if (IsSquadMatch())
         return;
+
+    if (IsAllStar())
+    {
+        packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetAllStarStandingCount(HORDE));
+        packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetAllStarStandingCount(ALLIANCE));
+        return;
+    }
 
     packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetArenaAlivePlayersCountByTeam(HORDE));
     packet.Worldstates.emplace_back(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetArenaAlivePlayersCountByTeam(ALLIANCE));
@@ -482,6 +493,14 @@ void Arena::UpdateArenaWorldState()
         return;
     }
 
+    // All-Star: "Players Remaining" is who still has a life left.
+    if (IsAllStar())
+    {
+        UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetAllStarStandingCount(HORDE));
+        UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetAllStarStandingCount(ALLIANCE));
+        return;
+    }
+
     UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN, GetArenaAlivePlayersCountByTeam(HORDE));
     UpdateWorldState(ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD, GetArenaAlivePlayersCountByTeam(ALLIANCE));
 }
@@ -493,6 +512,13 @@ void Arena::HandleKillPlayer(Player* player, Player* killer)
 
     if (IsCustomGame() && player)
         _customGameEliminatedPlayers.insert(player->GetGUID());
+
+    // All-Star: a death costs a life, not the match.
+    if (IsAllStar() && player)
+    {
+        HandleAllStarDeath(player, killer);
+        return;
+    }
 
     Battleground::HandleKillPlayer(player, killer);
 
@@ -538,6 +564,11 @@ void Arena::RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sendPacket
         }
     }
 
+    // Gone from an All-Star match for good: their lives go with them (the
+    // persona itself comes off in Battleground::RemovePlayerAtLeave).
+    if (IsAllStar())
+        ForgetAllStarSeat(guid);
+
     // remove player
     Battleground::RemovePlayerAtLeave(guid, transport, sendPacket);
 }
@@ -546,6 +577,11 @@ void Arena::CheckWinConditions()
 {
     if (IsReplay())
     {
+        return;
+    }
+    if (IsAllStar())
+    {
+        CheckAllStarWinConditions();
         return;
     }
     if (IsSoloShuffle())
@@ -718,6 +754,12 @@ void Arena::EndSquadMatch(uint8 winnerSquad, std::string const& announcement)
 
 void Arena::EndAtTimeLimit()
 {
+    if (IsAllStar())
+    {
+        EndAllStarAtTimeLimit();
+        return;
+    }
+
     if (!IsSquadMatch())
     {
         EndBattleground(0);
@@ -1459,6 +1501,12 @@ std::string Arena::GetShuffleStandings() const
 
 void Arena::UpdateRounds(uint32 diff)
 {
+    if (IsAllStar())
+    {
+        UpdateAllStar(diff);
+        return;
+    }
+
     switch (_shufflePhase)
     {
         case ShufflePhase::NotStarted:
@@ -1922,4 +1970,342 @@ void Arena::SyncShuffleRoster()
 
     if (joined)
         RedealRemainingShuffleRounds();
+}
+
+// ==================================================================== All-Star
+//
+// BATTLEGROUND_ASA (Miscellaneous/AllStar.h): nine lives a player. A death
+// brings the player straight back at their team's start as the next character
+// of their lineup - the next level-60 character of their own character list,
+// or a class's starter template - swapped onto them in place, so there is no
+// loading screen and no seat changes hands. A team is beaten when nobody on it
+// has a life left; at the time limit the most lives left wins.
+
+std::string Arena::GetAllStarName(Player const* player) const
+{
+    std::string const persona = AllStar::GetPersonaName(player);
+    return persona.empty() ? GetPlayerDisplayName(player) : persona;
+}
+
+void Arena::SeatAllStar(Player* player)
+{
+    // Back from a logout: the seat - and the life it was on - is still here,
+    // and UpdateAllStar puts that life back on once the character has loaded.
+    if (_allStarSeats.count(player->GetGUID()))
+        return;
+
+    AllStarSeat seat;
+    seat.Playing = player->GetGUID().GetCounter();
+    uint8 const playing = AllStar::GetRealClass(player);
+    WorldSession* session = player->GetSession();
+    if (!session || session->IsVirtualSession())
+    {
+        // A bot copy has no character list of its own: the starter templates.
+        seat.Lineup = AllStar::BuildBotLineup(playing);
+        seat.HasLineup = true;
+    }
+    else
+    {
+        seat.Account = session->GetAccountId();
+        AllStar::RequestLineup(seat.Account, seat.Playing, playing);
+        ChatHandler(session).SendSysMessage("All-Star: nine lives, one for each class. Every time you fall you are back at "
+            "your start as the next level 60 character in your character list - or, for a class you have none of, in its "
+            "starter loadout. Last team with lives left wins.");
+    }
+    _allStarSeats[player->GetGUID()] = std::move(seat);
+}
+
+void Arena::ForgetAllStarSeat(ObjectGuid guid)
+{
+    auto const itr = _allStarSeats.find(guid);
+    if (itr == _allStarSeats.end())
+        return;
+    if (itr->second.Account)
+        AllStar::ForgetLineup(itr->second.Account, itr->second.Playing);
+    _allStarSeats.erase(itr);
+}
+
+uint32 Arena::GetAllStarLives(AllStarSeat const& seat)
+{
+    return seat.HasLineup ? uint32(seat.Lineup.size()) : uint32(AllStar::LIVES);
+}
+
+AllStar::KitPtr Arena::GetAllStarKit(AllStarSeat const& seat) const
+{
+    if (!seat.HasLineup || seat.Deaths >= seat.Lineup.size())
+        return nullptr;
+
+    AllStar::LineupEntry const& entry = seat.Lineup[seat.Deaths];
+    AllStar::RequestKit(entry.Source);
+    if (AllStar::KitPtr kit = AllStar::FindKit(entry.Source))
+        return kit;
+
+    // A character of theirs that cannot be worn plays its class's template.
+    if (!entry.Template && AllStar::KitFailed(entry.Source))
+    {
+        ObjectGuid::LowType const fallback = AllStar::GetTemplateCharacter(entry.Class);
+        AllStar::RequestKit(fallback);
+        return AllStar::FindKit(fallback);
+    }
+    return nullptr;
+}
+
+uint32 Arena::GetAllStarStandingCount(uint32 team) const
+{
+    uint32 standing = 0;
+    for (auto const& [guid, participant] : m_Players)
+    {
+        if (participant.Team != team || participant.OfflineRemoveTime)
+            continue;
+        auto const seat = _allStarSeats.find(guid);
+        if (seat == _allStarSeats.end() || !seat->second.Out)
+            ++standing;
+    }
+    return standing;
+}
+
+uint32 Arena::GetAllStarLivesLeft(uint32 team) const
+{
+    uint32 lives = 0;
+    for (auto const& [guid, participant] : m_Players)
+    {
+        if (participant.Team != team || participant.OfflineRemoveTime)
+            continue;
+        auto const seat = _allStarSeats.find(guid);
+        if (seat == _allStarSeats.end())
+            continue;
+        uint32 const total = GetAllStarLives(seat->second);
+        if (!seat->second.Out && seat->second.Deaths < total)
+            lives += total - seat->second.Deaths;
+    }
+    return lives;
+}
+
+std::string Arena::GetAllStarScore() const
+{
+    return Trinity::StringFormat("Gold {} - Green {} lives.", GetAllStarLivesLeft(ALLIANCE), GetAllStarLivesLeft(HORDE));
+}
+
+void Arena::HandleAllStarDeath(Player* player, Player* killer)
+{
+    Battleground::HandleKillPlayer(player, killer);
+
+    auto const itr = _allStarSeats.find(player->GetGUID());
+    if (itr != _allStarSeats.end() && !itr->second.Out)
+    {
+        AllStarSeat& seat = itr->second;
+        std::string const name = GetAllStarName(player);
+        char const* const playedClass = AllStar::ClassName(player->GetClass());
+        ++seat.Deaths;
+        uint32 const lives = GetAllStarLives(seat);
+        if (seat.Deaths >= lives)
+        {
+            seat.Out = true;
+            seat.Waiting = false;
+            AnnounceToArena(this, Trinity::StringFormat("{} has fallen as a {} - out of lives. {}", name, playedClass, GetAllStarScore()));
+        }
+        else
+        {
+            seat.Waiting = true;
+            seat.RespawnAt = GameTime::GetGameTimeMS() + AllStar::GetRespawnDelayMs();
+            uint32 const left = lives - seat.Deaths;
+            AnnounceToArena(this, Trinity::StringFormat("{} has fallen as a {} - {} {} left. {}", name, playedClass,
+                left, left == 1 ? "life" : "lives", GetAllStarScore()));
+        }
+    }
+
+    UpdateArenaWorldState();
+    CheckWinConditions();
+}
+
+void Arena::ResetForAllStarLife(Player* player)
+{
+    // What a shuffle round does to its dead, short of the pet: the next life
+    // brings its own (AllStar::ApplyPersona), and the old one, called back
+    // here, would turn up beside it once its load answered.
+    if (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
+        player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+
+    RemovePlayerFromResurrectQueue(player->GetGUID());
+    if (!player->IsAlive())
+    {
+        player->ResurrectPlayer(1.0f);
+        player->SpawnCorpseBones(false);
+    }
+
+    player->CombatStopWithPets(true);
+    ClearCombatControl(player);
+}
+
+bool Arena::BringBackAllStar(Player* player, AllStarSeat& seat, bool respawn)
+{
+    AllStar::KitPtr const kit = GetAllStarKit(seat);
+    if (!kit)
+        return false;       // still loading: the next update asks again
+
+    std::string const before = GetAllStarName(player);
+    if (respawn)
+    {
+        ResetForAllStarLife(player);
+        SendToShuffleStart(player);
+    }
+
+    seat.Waiting = false;
+    if (!AllStar::ApplyPersona(player, kit))
+    {
+        TC_LOG_ERROR("bg.battleground", "All-Star: instance {}: could not put {} ({}) on {} ({}).",
+            GetInstanceID(), AllStar::GetKitName(*kit), uint32(AllStar::GetKitClass(*kit)), GetPlayerDisplayName(player),
+            player->GetGUID().GetCounter());
+        return false;
+    }
+
+    ApplyArenaFlag(player);
+    player->SetFullHealth();
+    player->ResetAllPowers();
+
+    uint32 const life = uint32(seat.Deaths) + 1;
+    uint32 const lives = GetAllStarLives(seat);
+    char const* const className = AllStar::ClassName(AllStar::GetKitClass(*kit));
+    std::string const after = GetAllStarName(player);
+    if (AllStar::IsTemplateKit(*kit))
+        AnnounceToArena(this, Trinity::StringFormat("{} is back as a {} (life {} of {}).", before, className, life, lives));
+    else
+        AnnounceToArena(this, Trinity::StringFormat("{} is back as {}, a {} (life {} of {}).", before, after, className, life, lives));
+
+    if (WorldSession* session = player->GetSession())
+        if (!session->IsVirtualSession())
+            ChatHandler(session).SendSysMessage(AllStar::IsTemplateKit(*kit)
+                ? Trinity::StringFormat("You are back in the {} starter loadout. Life {} of {}.", className, life, lives).c_str()
+                : Trinity::StringFormat("You are back as {}, your {}. Life {} of {}.", after, className, life, lives).c_str());
+    return true;
+}
+
+void Arena::UpdateAllStar(uint32 diff)
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    _allStarElapsed += diff;
+    if (_allStarElapsed >= AllStar::GetTimeLimitMs())
+    {
+        EndAllStarAtTimeLimit();
+        return;
+    }
+
+    uint32 const now = GameTime::GetGameTimeMS();
+    SquadFeedPlayers const players = GetSquadFeedPlayers();
+    std::vector<Player*> unseenDeaths;
+    for (auto& [guid, seat] : _allStarSeats)
+    {
+        if (!seat.HasLineup && AllStar::FindLineup(seat.Account, seat.Playing, seat.Lineup))
+            seat.HasLineup = true;
+        if (seat.Out)
+            continue;
+
+        auto const itr = players.find(guid);
+        Player* player = itr != players.end() ? itr->second : nullptr;
+        if (!player || player->GetBattleground() != this || !player->IsInWorld() ||
+            (player->GetSession() && player->GetSession()->PlayerLoading()))
+            continue;
+
+        AllStar::MaintainPersona(player);
+
+        // Every death should have come through HandleKillPlayer; one that did
+        // not would leave its player dead for good.
+        if (!seat.Waiting && !player->IsAlive())
+        {
+            unseenDeaths.push_back(player);
+            continue;
+        }
+
+        // Life one is the character itself.
+        if (!seat.HasLineup || !seat.Deaths || now < seat.NextTry)
+            continue;
+
+        if (seat.Waiting)
+        {
+            // Stood up some other way (a soulstone, Reincarnation): the next
+            // life goes on where they stand. Otherwise back at the start.
+            bool const standing = player->IsAlive() && player->GetShapeshiftForm() != FORM_SPIRITOFREDEMPTION;
+            if (!standing && now < seat.RespawnAt)
+                continue;
+            if (!BringBackAllStar(player, seat, !standing))
+                seat.NextTry = now + IN_MILLISECONDS;
+        }
+        else if (!player->HasAllStarPersona() && player->IsAlive())
+        {
+            // Logged back in as themselves: the life they were on goes back on.
+            if (!BringBackAllStar(player, seat, false))
+                seat.NextTry = now + IN_MILLISECONDS;
+        }
+    }
+
+    // After the walk: a death can end the match.
+    for (Player* player : unseenDeaths)
+    {
+        if (GetStatus() != STATUS_IN_PROGRESS)
+            break;
+        TC_LOG_DEBUG("bg.battleground", "All-Star: instance {}: {} ({}) was found dead without a death report.",
+            GetInstanceID(), GetPlayerDisplayName(player), player->GetGUID().GetCounter());
+        HandleAllStarDeath(player, nullptr);
+    }
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    _allStarStateTimer += diff;
+    if (_allStarStateTimer >= IN_MILLISECONDS)
+    {
+        _allStarStateTimer = 0;
+        UpdateArenaWorldState();
+    }
+}
+
+void Arena::CheckAllStarWinConditions()
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    uint32 const gold = GetAllStarStandingCount(ALLIANCE);
+    uint32 const green = GetAllStarStandingCount(HORDE);
+    if (gold && green)
+        return;
+
+    if (!gold && green)
+    {
+        AnnounceToArena(this, "The Gold team is out of lives. Green wins!");
+        EndBattleground(HORDE);
+    }
+    else if (gold && !green)
+    {
+        AnnounceToArena(this, "The Green team is out of lives. Gold wins!");
+        EndBattleground(ALLIANCE);
+    }
+    else
+        EndBattleground(0);
+}
+
+void Arena::EndAllStarAtTimeLimit()
+{
+    // The most lives left, then the most health left on the living.
+    uint32 const gold = GetAllStarLivesLeft(ALLIANCE);
+    uint32 const green = GetAllStarLivesLeft(HORDE);
+    uint32 winner = 0;
+    if (gold != green)
+        winner = gold > green ? ALLIANCE : HORDE;
+    else
+    {
+        uint64 health[PVP_TEAMS_COUNT] = { };
+        for (auto const& [guid, player] : GetSquadFeedPlayers())
+            if (IsPlayerInBattleground(guid) && player->IsAlive())
+                health[GetTeamIndexByTeamId(GetPlayerTeam(guid))] += player->GetHealth();
+        if (health[TEAM_ALLIANCE] != health[TEAM_HORDE])
+            winner = health[TEAM_ALLIANCE] > health[TEAM_HORDE] ? ALLIANCE : HORDE;
+    }
+
+    if (!winner)
+        AnnounceToArena(this, Trinity::StringFormat("Time is up and neither team is ahead. The match is a draw. {}", GetAllStarScore()));
+    else
+        AnnounceToArena(this, Trinity::StringFormat("Time is up. {} has the most lives left and wins! {}",
+            winner == ALLIANCE ? "Gold" : "Green", GetAllStarScore()));
+    EndBattleground(winner);
 }

@@ -19,6 +19,7 @@
 #define TRINITY_ARENA_H
 
 #include "Battleground.h"
+#include "Miscellaneous/AllStar.h"
 
 #include <map>
 #include <set>
@@ -211,6 +212,39 @@ class TC_GAME_API Arena : public Battleground
         // resolve them during a death transition. Arenas are elimination games,
         // so retain the eliminated GUIDs and count survivors from m_Players.
         std::set<ObjectGuid> _customGameEliminatedPlayers;
+
+        // All-Star (BATTLEGROUND_ASA, Miscellaneous/AllStar.h): nine lives a
+        // player, each death straight back at the start as the next character
+        // of their lineup. A seat is a participant's for the whole match.
+        struct AllStarSeat
+        {
+            uint32 Account = 0;                     // 0 for a bot copy
+            ObjectGuid::LowType Playing = 0;        // the character that queued
+            bool HasLineup = false;
+            AllStar::Lineup Lineup;
+            uint8 Deaths = 0;                       // = the lineup entry being played
+            bool Out = false;
+            bool Waiting = false;                   // dead, to come back as Lineup[Deaths]
+            uint32 RespawnAt = 0;
+            uint32 NextTry = 0;                     // a kit still loading is asked for again then
+        };
+        void SeatAllStar(Player* player);
+        void ForgetAllStarSeat(ObjectGuid guid);
+        static uint32 GetAllStarLives(AllStarSeat const& seat);
+        AllStar::KitPtr GetAllStarKit(AllStarSeat const& seat) const;
+        uint32 GetAllStarStandingCount(uint32 team) const;
+        uint32 GetAllStarLivesLeft(uint32 team) const;
+        std::string GetAllStarScore() const;
+        std::string GetAllStarName(Player const* player) const;
+        void HandleAllStarDeath(Player* player, Player* killer);
+        void ResetForAllStarLife(Player* player);
+        bool BringBackAllStar(Player* player, AllStarSeat& seat, bool respawn);
+        void UpdateAllStar(uint32 diff);
+        void CheckAllStarWinConditions();
+        void EndAllStarAtTimeLimit();
+        std::map<ObjectGuid, AllStarSeat> _allStarSeats;
+        uint32 _allStarElapsed = 0;                 // since the gates opened
+        uint32 _allStarStateTimer = 0;
 };
 
 #endif // TRINITY_ARENA_H
