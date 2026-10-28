@@ -6809,6 +6809,17 @@ Centurion.Rift.FlatHonorMultiplier = 2.0
 Centurion.Rift.ExperienceMultiplier = 1.0
 
 #
+#    Centurion.Rift.MaxExperienceLevels
+#        Description: The most experience one Summoner's Rift award can pay, in
+#                     bars of the character's own level. The end of a match is
+#                     the award this limits (about two bars uncapped); the honor
+#                     from a structure is far below it. 0 = no cap. .reload config
+#                     applies a change at once.
+#        Default:     1.0 - (one level per match; owner 2026-10-27)
+
+Centurion.Rift.MaxExperienceLevels = 1.0
+
+#
 #    Centurion.Rift.UnitLevelRate
 #        Description: Summoner's Rift: how fast minions, jungle monsters and
 #                     structures level with the champions - the share of the way

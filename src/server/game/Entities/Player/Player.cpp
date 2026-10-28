@@ -8457,12 +8457,21 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
                     double(sWorld->getFloatConfig(CONFIG_CENTURION_VHR_EXPERIENCE_MULTIPLIER)));
             // Summoner's Rift has its own as well, 1.0. It was raised to 16 on
             // 2026-10-27 while the Rift's experience was still being wiped on the
-            // way out (above), and set back with that fix: a match's payout is
-            // already the hourly rate times its length. Read here like the Rift's
-            // other keys, so .reload config applies at once.
+            // way out (above), and set back with that fix. At 1.0 the end of a
+            // match paid about two levels, so one award is capped at
+            // Centurion.Rift.MaxExperienceLevels bars of the character's level
+            // (owner 2026-10-27: "cap summoner's rift end exp to 1 level"). Both
+            // are read here like the Rift's other keys, so .reload config
+            // applies at once.
             else if (bg && bg->GetTypeID() == BATTLEGROUND_SRF)
+            {
                 xp = uint64(double(xp) *
                     double(std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.ExperienceMultiplier", 1.0f))));
+
+                float const maxLevels = sConfigMgr->GetFloatDefault("Centurion.Rift.MaxExperienceLevels", 1.0f);
+                if (maxLevels > 0.0f)
+                    xp = std::min<uint64>(xp, uint64(double(sObjectMgr->GetXPForLevel(uint8(referenceLevel))) * double(maxLevels)));
+            }
 
             // Never past the cap. GiveXP stops leveling at max level and parks the
             // rest where nothing reads it, so the share of an award that would
