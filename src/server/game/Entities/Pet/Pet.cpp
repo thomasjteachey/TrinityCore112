@@ -940,6 +940,24 @@ bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map, uint32 phas
     return true;
 }
 
+namespace
+{
+// Feral Spirit and Shadowfiend swing for a flat multiple of their level (3x
+// to 5x), a curve written for the level cap. A player's own damage falls off
+// much faster than that below the cap, so a level-10 owner's Violet Hold boon
+// pets out-hit the owner several times over. Below the cap the level part is
+// scaled by level / cap, the same rule as the level-scaled Violet Hold boon
+// spells (SpellInfo::LevelScaleDesignLevel). At the cap nothing changes.
+float LevelLinearDamageScale(uint8 petlevel)
+{
+    uint32 const capLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+    if (!capLevel || petlevel >= capLevel)
+        return 1.0f;
+
+    return float(petlevel) / float(capLevel);
+}
+}
+
 /// @todo Move stat mods code to pet passive auras
 bool Guardian::InitStatsForLevel(uint8 petlevel)
 {
@@ -1127,9 +1145,10 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
                         SetCreateMana(28 + 10*petlevel);
                         SetCreateHealth(28 + 30*petlevel);
                     }
+                    float const levelScale = LevelLinearDamageScale(petlevel);
                     int32 bonus_dmg = int32(GetOwner()->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW)* 0.3f);
-                    SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float((petlevel * 4 - petlevel) + bonus_dmg));
-                    SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float((petlevel * 4 + petlevel) + bonus_dmg));
+                    SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel * 4 - petlevel) * levelScale + bonus_dmg);
+                    SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel * 4 + petlevel) * levelScale + bonus_dmg);
 
                     break;
                 }
@@ -1153,8 +1172,9 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
                     // wolf attack speed is 1.5s
                     SetAttackTime(BASE_ATTACK, cinfo->BaseAttackTime);
 
-                    SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float((petlevel * 4 - petlevel)));
-                    SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float((petlevel * 4 + petlevel)));
+                    float const levelScale = LevelLinearDamageScale(petlevel);
+                    SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel * 4 - petlevel) * levelScale);
+                    SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel * 4 + petlevel) * levelScale);
 
                     SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(GetOwner()->GetArmor()) * 0.35f);  // Bonus Armor (35% of player armor)
                     SetStatFlatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(GetOwner()->GetStat(STAT_STAMINA)) * 0.3f);  // Bonus Stamina (30% of player stamina)

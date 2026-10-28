@@ -736,7 +736,8 @@ class spell_pri_lightwell_renew : public AuraScript
     uint32 _remainingAmount = 0;
 };
 
-// 28305 - Mana Leech (Passive) (Priest Pet Aura)
+// 94305 - Mana Leech (Passive) (Priest Pet Aura). Stock id 28305 is a classic
+// heal ("Copy of Great Heal") in this Spell.dbc, so the passive has its own row.
 class spell_pri_mana_leech : public AuraScript
 {
     PrepareAuraScript(spell_pri_mana_leech);
