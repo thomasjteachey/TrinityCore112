@@ -1255,6 +1255,11 @@ void PersonaAccess::Restore(Player* player)
         player->m_oldpetspell = stash.OldPetSpell;
 
         player->InitStatsForLevel(true);
+        // InitStatsForLevel fills health whatever the death state: a character
+        // restored dead (a logout mid-match, before the leave revives it) stays
+        // a corpse with none.
+        if (!player->IsAlive())
+            player->SetHealth(0);
         for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
         {
             if (Item* item = stash.Equipment[slot])
