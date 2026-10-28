@@ -2763,7 +2763,114 @@ bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
         return 0;
     }
 
+    // A bot that keeps getting on and off its mount in one place. Nothing that
+    // mounts a bot knows why it last got off, and there are many reasons: the
+    // indoor dismount after 1.5 s inside a WMO group the mount test read as open
+    // sky (a keep tunnel), a self-cast the mount refuses, a pet the mount
+    // parked, an enemy at the edge of the 100 yd awareness range. Each pair of
+    // rules is right on its own and together they loop: mount, stop to cast it,
+    // ride a few yards, get taken off, mount again - forever, back and forth
+    // in the tunnel. So the remount itself is the thing to watch.
+    //
+    // Counted per mount ATTEMPT, not per call: a decision returned again within
+    // a few seconds of the last one is the same attempt still trying (a cast
+    // that has not landed yet), and no calls arrive while the bot is mounted,
+    // so the gap between attempts is the time the mount lasted. That keeps
+    // this independent of how often the class pass runs.
+    bool IsRemountHeldBack(Player const* player)
+    {
+        constexpr uint32 kSameAttemptMs = 4000;      // re-returns this close are one attempt
+        constexpr uint32 kWastedRideMs = 20000;      // mounted this briefly...
+        constexpr float kWastedRideYards = 25.0f;    // ...and back on this close to the last spot
+        constexpr uint32 kBurstWindowMs = 45000;     // or three attempts inside this window
+        constexpr uint32 kHoldMs = 30000;            // then walk for this long
+        constexpr float kHoldReleaseYards = 40.0f;   // or until this far from the spot
+
+        struct RemountState
+        {
+            uint32 mapId = 0;
+            uint32 lastAttemptMs = 0;
+            float lastX = 0.0f, lastY = 0.0f, lastZ = 0.0f;
+            std::array<uint32, 2> earlierAttemptMs{}; // the two attempts before the last
+            uint32 holdUntilMs = 0;
+            float holdX = 0.0f, holdY = 0.0f;
+        };
+        static std::unordered_map<uint64, RemountState> stateByGuid;
+
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32 const mapId = player->GetMapId();
+        float const x = player->GetPositionX();
+        float const y = player->GetPositionY();
+        float const z = player->GetPositionZ();
+        auto dist2d = [](float ax, float ay, float bx, float by) { return std::hypot(ax - bx, ay - by); };
+
+        std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
+
+        // Bots and battleground clones come and go; drop the long-idle entries
+        // once the table has grown past every bot the realm runs at once.
+        if (stateByGuid.size() > 4096)
+            for (auto itr = stateByGuid.begin(); itr != stateByGuid.end();)
+                itr = nowMs - itr->second.lastAttemptMs > 10 * MINUTE * IN_MILLISECONDS ? stateByGuid.erase(itr) : std::next(itr);
+
+        RemountState& state = stateByGuid[player->GetGUID().GetRawValue()];
+        bool const sameMap = state.lastAttemptMs && state.mapId == mapId;
+
+        if (sameMap && state.holdUntilMs && int32(state.holdUntilMs - nowMs) > 0 &&
+            dist2d(x, y, state.holdX, state.holdY) < kHoldReleaseYards)
+            return true;
+        state.holdUntilMs = 0;
+
+        if (sameMap && nowMs - state.lastAttemptMs < kSameAttemptMs)
+        {
+            state.lastAttemptMs = nowMs;
+            return false;
+        }
+
+        bool const wastedRide = sameMap && nowMs - state.lastAttemptMs < kWastedRideMs &&
+            std::hypot(dist2d(x, y, state.lastX, state.lastY), z - state.lastZ) < kWastedRideYards;
+        bool const burst = sameMap && state.earlierAttemptMs[1] && nowMs - state.earlierAttemptMs[1] < kBurstWindowMs;
+
+        if (wastedRide || burst)
+        {
+            state.holdUntilMs = nowMs + kHoldMs;
+            state.holdX = x;
+            state.holdY = y;
+            // Start clean from here: the first mount after the hold is a new
+            // first attempt, and it is at least 40 yd or 30 s from this one.
+            state.earlierAttemptMs = {};
+            state.mapId = mapId;
+            state.lastAttemptMs = nowMs;
+            state.lastX = x;
+            state.lastY = y;
+            state.lastZ = z;
+            TC_LOG_INFO("playerbots.pvp.lifecycle",
+                "Remount hold: {} on map {} at ({:.1f}, {:.1f}, {:.1f}) keeps getting back on its mount ({}); walking for {} s or {:.0f} yd.",
+                player->GetName(), mapId, x, y, z, wastedRide ? "the last ride went nowhere" : "three mounts in 45 s",
+                kHoldMs / IN_MILLISECONDS, kHoldReleaseYards);
+            return true;
+        }
+
+        state.earlierAttemptMs[1] = state.earlierAttemptMs[0];
+        state.earlierAttemptMs[0] = sameMap ? state.lastAttemptMs : 0;
+        state.mapId = mapId;
+        state.lastAttemptMs = nowMs;
+        state.lastX = x;
+        state.lastY = y;
+        state.lastZ = z;
+        return false;
+    }
+
+    SpellDecision SelectMountSpellIgnoringRemountHold(Player const* player, char const* reason);
+
     SpellDecision SelectMountSpell(Player const* player, char const* reason)
+    {
+        SpellDecision decision = SelectMountSpellIgnoringRemountHold(player, reason);
+        if (decision.spellId && IsRemountHeldBack(player))
+            return {};
+        return decision;
+    }
+
+    SpellDecision SelectMountSpellIgnoringRemountHold(Player const* player, char const* reason)
     {
         SpellDecision decision;
         if (!player || !player->IsAlive() || player->IsInCombat() || player->IsMounted())
