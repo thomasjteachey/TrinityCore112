@@ -1919,6 +1919,49 @@ namespace
         QuestStatus const status = target->GetQuestStatus(contractQuestId);
         return status == QUEST_STATUS_INCOMPLETE || status == QUEST_STATUS_COMPLETE;
     }
+
+    // Summoner's Rift reads stealth as two level 60s meeting. Champions there
+    // play on a match level that climbs through the game, so the stock rules
+    // (5 detection per level of the seer, 5 stealth per level of the caster)
+    // let whoever was ahead in levels see a rogue from across a lane, or never.
+    int32 constexpr RIFT_STEALTH_LEVEL = 60;
+
+    // How much more `owner`'s level-scaling auras of one type would give at
+    // level 60 than they gave at the level they were cast at. A rank's own
+    // level cap is ignored on purpose: Stealth and Prowl add 5 per level from
+    // rank 1, so every rank reaches the same 300 at 60, and the rank a champion
+    // holds is itself only a matter of match level.
+    int32 RiftStealthLevelShift(Unit const* owner, AuraType auraType, uint32 stealthType)
+    {
+        if (!owner)
+            return 0;
+
+        int32 shift = 0;
+        for (AuraEffect const* effect : owner->GetAuraEffectsByType(auraType))
+        {
+            if (uint32(effect->GetMiscValue()) != stealthType)
+                continue;
+
+            float const perLevel = effect->GetSpellEffectInfo().RealPointsPerLevel;
+            if (perLevel == 0.0f)
+                continue;
+
+            // The same clamp SpellEffectInfo::CalcValue applied when the amount
+            // was worked out, at the level the aura remembers its caster at.
+            SpellInfo const* spell = effect->GetSpellInfo();
+            int32 const floorLevel = int32(std::max(spell->BaseLevel, spell->SpellLevel));
+            int32 castLevel = int32(effect->GetBase()->GetCasterLevel());
+            if (castLevel > int32(spell->MaxLevel) && spell->MaxLevel > 0)
+                castLevel = int32(spell->MaxLevel);
+            else if (castLevel < int32(spell->BaseLevel))
+                castLevel = int32(spell->BaseLevel);
+
+            int32 const sixtyLevel = std::max(RIFT_STEALTH_LEVEL, int32(spell->BaseLevel));
+            shift += int32((sixtyLevel - floorLevel) * perLevel) - int32((castLevel - floorLevel) * perLevel);
+        }
+
+        return shift;
+    }
 }
 
 bool WorldObject::CanDetectStealthOf(WorldObject const* obj, bool checkAlert) const
@@ -1957,6 +2000,10 @@ bool WorldObject::CanDetectStealthOf(WorldObject const* obj, bool checkAlert) co
         if (go->GetGoType() == GAMEOBJECT_TYPE_TRAP)
             return true;
 
+    // Summoner's Rift: every level in here counts as 60 (RIFT_STEALTH_LEVEL).
+    bool const riftLevels = GetLeagueCombatBattleground(this) != nullptr;
+    int32 const seerLevel = riftLevels ? RIFT_STEALTH_LEVEL : int32(GetLevelForTarget(obj));
+
     GameObject const* go = obj->ToGameObject();
     for (uint32 i = 0; i < TOTAL_STEALTH_TYPES; ++i)
     {
@@ -1972,15 +2019,21 @@ bool WorldObject::CanDetectStealthOf(WorldObject const* obj, bool checkAlert) co
         // Level difference: 5 point / level, starting from level 1.
         // There may be spells for this and the starting points too, but
         // not in the DBCs of the client.
-        detectionValue += int32(GetLevelForTarget(obj) - 1) * 5;
+        detectionValue += (seerLevel - 1) * 5;
 
         // Apply modifiers
         detectionValue += m_stealthDetect.GetValue(StealthType(i));
         if (go)
             if (Unit* owner = go->GetOwner())
-                detectionValue -= int32(owner->GetLevelForTarget(this) - 1) * 5;
+                detectionValue -= ((riftLevels ? RIFT_STEALTH_LEVEL : int32(owner->GetLevelForTarget(this))) - 1) * 5;
 
         detectionValue -= obj->m_stealth.GetValue(StealthType(i));
+
+        if (riftLevels)
+        {
+            detectionValue += RiftStealthLevelShift(unit, SPELL_AURA_MOD_STEALTH_DETECT, i);
+            detectionValue -= RiftStealthLevelShift(obj->ToUnit(), SPELL_AURA_MOD_STEALTH, i);
+        }
 
         // Calculate max distance
         float visibilityRange = float(detectionValue) * 0.3f + combatReach;
