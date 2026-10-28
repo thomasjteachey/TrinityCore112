@@ -528,7 +528,14 @@ private:
         uint8 Role = SRF_ROLE_MID;
         bool Assigned = false;
         bool Retreating = false;
-        uint8 Camp = 0;            // the jungler's next camp
+        uint8 Camp = 0xFF;         // the jungler's camp (0xFF: none yet)
+        bool CampOrdered = false;  // the last orders sent it to Camp, or onto it
+        std::array<uint32, BG_SRF_JUNGLE_CAMPS> CampShunUntil = {};   // GameTime ms: a turret shot it on its way to that camp, or at it
+        std::array<uint32, BG_SRF_JUNGLE_CAMPS> WalkCheckedAt = {};   // GameTime ms of the last route check to each camp
+        std::array<bool, BG_SRF_JUNGLE_CAMPS> WalkSafe = {};          // ... and what it found (WalkKeepsOffTurrets)
+        ObjectGuid GankWalkTo;          // the champion the last gank route check was to
+        uint32 GankWalkAt = 0;          // GameTime ms of that check
+        bool GankWalkSafe = false;
         BattlegroundBotOrders Orders;   // the last orders, reused for SRF_BOT_ORDERS_MS
         bool HasOrders = false;
         uint32 OrdersAt = 0;            // GameTime ms they were worked out
@@ -548,6 +555,9 @@ private:
     BotState& BotOf(Player* bot);
     bool UnderFreeEnemyTurret(TeamId team, Position const& pos, float margin) const;
     bool UnderEnemyTurret(TeamId team, Position const& pos, float margin) const;
+    // The route `bot` would walk to `dest` keeps out of every standing enemy
+    // turret's reach (plus `margin`); from inside one's reach, it only leaves it.
+    bool WalkKeepsOffTurrets(Player* bot, TeamId team, Position const& dest, float margin) const;
     // A standing enemy turret has `bot` as its target.
     bool TurretShooting(Player const* bot) const;
     uint32 LaneIndexNear(TeamId team, uint8 lane, Position const& pos);

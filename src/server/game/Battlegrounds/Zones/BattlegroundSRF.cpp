@@ -12,6 +12,7 @@
 #include "MotionMaster.h"
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
+#include "PathGenerator.h"
 #include "Pet.h"
 #include "Player.h"
 #include "RiftLeague.h"
@@ -28,6 +29,7 @@
 #include <cmath>
 #include <iterator>
 #include <limits>
+#include <tuple>
 
 namespace
 {
@@ -1440,6 +1442,21 @@ float constexpr SRF_BOT_SUPPORT_BEHIND = 4.0f;
 // After an enemy turret's last shot at it, a bot keeps out of every enemy turret's
 // reach this long (a turret fires every 1.2 s), so it does not step straight back in.
 uint32 constexpr SRF_BOT_TURRET_FLEE_MS = 4000;
+// The jungler leaves a camp alone while one of its monsters stands this close
+// to an enemy turret's reach (a fight moves round; both raptor camps have
+// monsters inside their own mid turret's), and for SRF_BOT_CAMP_SHUN_MS after a
+// turret shot it on the way there: Silvanor Shadowgear walked past Order's mid
+// turret to Order's wolves and died three times in two minutes (owner, 2026-10-28).
+float constexpr SRF_BOT_CAMP_TURRET_MARGIN = 6.0f;
+float constexpr SRF_BOT_WALK_TURRET_MARGIN = 3.0f;
+uint32 constexpr SRF_BOT_CAMP_SHUN_MS = 60 * IN_MILLISECONDS;
+// A route check is pathfinding: each camp's is kept this long, a gank's (the
+// champion moves) this long.
+uint32 constexpr SRF_BOT_WALK_CHECK_MS = 1500;
+uint32 constexpr SRF_BOT_GANK_CHECK_MS = 750;
+// Each side's six camps, then the river's (SRF_CAMPS order).
+uint8 constexpr SRF_SIDE_CAMPS = 6;
+uint8 constexpr SRF_RIVER_FIRST = 2 * SRF_SIDE_CAMPS;
 
 namespace
 {
@@ -1638,6 +1655,52 @@ bool BattlegroundSRF::UnderEnemyTurret(TeamId team, Position const& pos, float m
     return false;
 }
 
+namespace
+{
+    float SegmentDist2d(G3D::Vector3 const& a, G3D::Vector3 const& b, Position const& p)
+    {
+        float const dx = b.x - a.x, dy = b.y - a.y;
+        float const len2 = dx * dx + dy * dy;
+        float const t = len2 > 0.0f
+            ? std::clamp(((p.GetPositionX() - a.x) * dx + (p.GetPositionY() - a.y) * dy) / len2, 0.0f, 1.0f) : 0.0f;
+        return std::hypot(a.x + t * dx - p.GetPositionX(), a.y + t * dy - p.GetPositionY());
+    }
+}
+
+// The bot walks its post along the navmesh (MovePoint), so this is that route.
+bool BattlegroundSRF::WalkKeepsOffTurrets(Player* bot, TeamId team, Position const& dest, float margin) const
+{
+    std::vector<Position> const& turrets = _enemyTurrets[team];
+    if (turrets.empty())
+        return true;
+    PathGenerator path(bot);
+    path.CalculatePath(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ());
+    G3D::Vector3 const from(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
+    G3D::Vector3 const to(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ());
+    Movement::PointsArray points = path.GetPath();
+    if (points.size() < 2 || (path.GetPathType() & (PATHFIND_NOPATH | PATHFIND_NOT_USING_PATH)))
+        points = { from, to };          // no route: it goes straight
+    else if (path.GetPathType() & PATHFIND_SHORT)
+        points.push_back(to);           // cut at the length limit: the rest straight on
+    float const reach = SRF_TURRET_RANGE + margin;
+    for (Position const& turret : turrets)
+    {
+        float const start = bot->GetExactDist2d(&turret);
+        // Inside the reach already, the route may not go closer than it is
+        // until it has left; out of it, the route may not come back in.
+        bool out = start > reach;
+        for (size_t i = 1; i < points.size(); ++i)
+        {
+            float const d = SegmentDist2d(points[i - 1], points[i], turret);
+            if (out ? d <= reach : d < start - 1.0f)
+                return false;
+            if (!out && std::hypot(points[i].x - turret.GetPositionX(), points[i].y - turret.GetPositionY()) > reach)
+                out = true;
+        }
+    }
+    return true;
+}
+
 bool BattlegroundSRF::TurretShooting(Player const* bot) const
 {
     TeamId const enemy = OtherTeam(GetTeamIndexByTeamId(GetPlayerTeam(bot->GetGUID())));
@@ -1718,10 +1781,19 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
     // nothing under one, until a while after the last shot it drew.
     uint32 const nowMs = GameTime::GetGameTimeMS();
     if (TurretShooting(bot))
+    {
         st.TurretFleeUntil = nowMs + SRF_BOT_TURRET_FLEE_MS;
+        // a jungler shot on its way to a camp, or at it: that camp waits
+        if (st.CampOrdered && st.Camp < BG_SRF_JUNGLE_CAMPS)
+            st.CampShunUntil[st.Camp] = nowMs + SRF_BOT_CAMP_SHUN_MS;
+        // routes were checked from out of the reach it is now in
+        st.WalkCheckedAt.fill(0);
+        st.GankWalkAt = 0;
+    }
     else if (st.TurretFleeUntil && int32(st.TurretFleeUntil - nowMs) <= 0)
         st.TurretFleeUntil = 0;
     bool const fleeing = st.TurretFleeUntil != 0;
+    st.CampOrdered = false;
 
     // Home: to heal, or to spend. A trip home that buys nothing - the build is done,
     // or nothing fits - sends it back out until it has SRF_BOT_SHOP_MORE more:
@@ -1780,44 +1852,127 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
     }
 
     // The jungler: a gank first - an enemy champion near, hurt or in a fight with
-    // the team, and off its turrets - then the next camp that is up, its own side
-    // first, and with none up the lane where a fight is (the middle with none).
+    // the team, off its turrets and reached without walking under one - then a
+    // camp, and with none to take the lane where a fight is (the middle with none).
+    // Neither while a turret has just shot at it: then only a camp the walk to
+    // which leads out of the reach.
     uint8 lane = st.Lane;
     if (st.Lane == BG_SRF_LANE_NONE)
     {
         Player* prey = nullptr;
-        for (Player* enemy : TeamPlayers(OtherTeam(team)))
+        if (!fleeing)
+            for (Player* enemy : TeamPlayers(OtherTeam(team)))
+            {
+                if (!enemy->IsAlive() || enemy->GetExactDist2d(bot) > SRF_BOT_GANK_RANGE || !bot->IsValidAttackTarget(enemy)
+                    || UnderEnemyTurret(team, enemy->GetPosition(), 3.0f))
+                    continue;
+                bool fighting = enemy->GetHealthPct() < SRF_BOT_GANK_HURT_PCT;
+                for (Player* ally : TeamPlayers(team))
+                    if (!fighting && ally != bot && ally->IsAlive() && ally->GetExactDist2d(enemy) < SRF_BOT_FIGHT_RANGE)
+                        fighting = true;
+                if (fighting && (!prey || enemy->GetHealthPct() < prey->GetHealthPct()))
+                    prey = enemy;
+            }
+        if (prey && (st.GankWalkTo != prey->GetGUID() || !st.GankWalkAt || nowMs - st.GankWalkAt >= SRF_BOT_GANK_CHECK_MS))
         {
-            if (!enemy->IsAlive() || enemy->GetExactDist2d(bot) > SRF_BOT_GANK_RANGE || !bot->IsValidAttackTarget(enemy)
-                || UnderEnemyTurret(team, enemy->GetPosition(), 3.0f))
-                continue;
-            bool fighting = enemy->GetHealthPct() < SRF_BOT_GANK_HURT_PCT;
-            for (Player* ally : TeamPlayers(team))
-                if (!fighting && ally != bot && ally->IsAlive() && ally->GetExactDist2d(enemy) < SRF_BOT_FIGHT_RANGE)
-                    fighting = true;
-            if (fighting && (!prey || enemy->GetHealthPct() < prey->GetHealthPct()))
-                prey = enemy;
+            st.GankWalkTo = prey->GetGUID();
+            st.GankWalkAt = nowMs ? nowMs : 1;
+            st.GankWalkSafe = WalkKeepsOffTurrets(bot, team, prey->GetPosition(), SRF_BOT_WALK_TURRET_MARGIN);
         }
-        if (prey)
+        if (prey && st.GankWalkSafe)
         {
             out.Post = prey->GetPosition();
             out.Target = prey->GetGUID();
             return true;
         }
-        for (uint8 tries = 0; tries < BG_SRF_JUNGLE_CAMPS; ++tries)
+
+        // The camps: its own side's first, the river's next, the enemy's last
+        // (League's counter-jungling) - in each the nearest, the camp it is at
+        // first. One is passed over while a monster of it stands near an enemy
+        // turret's reach, while the walk to it crosses one's, and for a while
+        // after a turret shot the bot on its way there.
+        auto const nearestMonster = [&](uint8 camp, bool& covered, bool& engaged) -> Creature*
         {
-            uint8 const camp = (st.Camp + tries) % BG_SRF_JUNGLE_CAMPS;
-            if (!_camps[camp].Up || SRF_CAMPS[camp].kind == SRF_CAMP_BARON)
-                continue;
-            Creature* best = nullptr;
+            covered = engaged = false;
+            Creature* nearest = nullptr;
             for (uint8 i = 0; i < BG_SRF_JUNGLE_MONSTERS; ++i)
                 if (SRF_MONSTERS[i].camp == camp)
                     if (Creature* monster = map->GetCreature(BgCreatures[BG_SRF_CREATURE_JUNGLE_FIRST + i]))
-                        if (monster->IsAlive() && (!best || monster->GetExactDist2d(bot) < best->GetExactDist2d(bot)))
-                            best = monster;
-            if (!best)
-                continue;
-            st.Camp = camp;
+                        if (monster->IsAlive())
+                        {
+                            if (UnderEnemyTurret(team, monster->GetPosition(), SRF_BOT_CAMP_TURRET_MARGIN))
+                                covered = true;
+                            if (monster->GetVictim() == bot)
+                                engaged = true;
+                            if (!nearest || monster->GetExactDist2d(bot) < nearest->GetExactDist2d(bot))
+                                nearest = monster;
+                        }
+            return nearest;
+        };
+        auto const walkSafe = [&](uint8 camp, Creature* monster)
+        {
+            if (!st.WalkCheckedAt[camp] || nowMs - st.WalkCheckedAt[camp] >= SRF_BOT_WALK_CHECK_MS)
+            {
+                st.WalkCheckedAt[camp] = nowMs ? nowMs : 1;
+                st.WalkSafe[camp] = WalkKeepsOffTurrets(bot, team, monster->GetPosition(), SRF_BOT_WALK_TURRET_MARGIN);
+            }
+            return st.WalkSafe[camp];
+        };
+        uint8 const ownFirst = team == TEAM_ALLIANCE ? 0 : SRF_SIDE_CAMPS;
+        uint8 const enemyFirst = team == TEAM_ALLIANCE ? SRF_SIDE_CAMPS : 0;
+        std::array<std::pair<uint8, uint8>, 3> const tiers = { {
+            { ownFirst, uint8(ownFirst + SRF_SIDE_CAMPS) },
+            { SRF_RIVER_FIRST, uint8(BG_SRF_JUNGLE_CAMPS) },
+            { enemyFirst, uint8(enemyFirst + SRF_SIDE_CAMPS) } } };
+        auto const campOpen = [&](uint8 camp)
+        {
+            return _camps[camp].Up && SRF_CAMPS[camp].kind != SRF_CAMP_BARON && int32(st.CampShunUntil[camp] - nowMs) <= 0;
+        };
+        Creature* best = nullptr;
+        uint8 bestCamp = 0;
+        // a camp it is fighting is finished before one nearer home
+        if (st.Camp < BG_SRF_JUNGLE_CAMPS && campOpen(st.Camp))
+        {
+            bool covered = false, engaged = false;
+            Creature* monster = nearestMonster(st.Camp, covered, engaged);
+            if (monster && engaged && !covered)
+            {
+                best = monster;
+                bestCamp = st.Camp;
+            }
+        }
+        for (auto const& [first, end] : tiers)
+        {
+            if (best)
+                break;
+            std::vector<std::tuple<float, uint8, Creature*>> candidates;
+            for (uint8 camp = first; camp < end; ++camp)
+            {
+                if (!campOpen(camp))
+                    continue;
+                bool covered = false, engaged = false;
+                Creature* monster = nearestMonster(camp, covered, engaged);
+                if (!monster || covered)
+                    continue;
+                // the camp it is at, or on its way to, before any other of the tier
+                float const key = camp == st.Camp ? -1.0f : monster->GetExactDist2d(bot);
+                candidates.emplace_back(key, camp, monster);
+            }
+            std::sort(candidates.begin(), candidates.end(),
+                [](auto const& a, auto const& b) { return std::get<0>(a) < std::get<0>(b); });
+            for (auto const& [key, camp, monster] : candidates)
+                // a monster on it already: no walk to speak of
+                if (monster->GetVictim() == bot || walkSafe(camp, monster))
+                {
+                    best = monster;
+                    bestCamp = camp;
+                    break;
+                }
+        }
+        if (best)
+        {
+            st.Camp = bestCamp;
+            st.CampOrdered = true;
             out.Post = best->GetPosition();
             if (best->GetExactDist2d(bot) <= SRF_BOT_POST_NEAR || best->GetVictim() == bot)
                 out.Target = best->GetGUID();
@@ -3269,9 +3424,14 @@ void BattlegroundSRF::Report(uint32 diff)
         Unit* ordered = !st.Orders.Target.IsEmpty() ? ObjectAccessor::GetUnit(*bot, st.Orders.Target) : nullptr;
         Unit* victim = bot->GetVictim();
         static char const* const ROLE_NAMES[SRF_ROLE_COUNT] = { "top", "jungle", "mid", "carry", "support" };
-        TC_LOG_INFO("bg.battleground", "Summoner's Rift {} bot {} (class {}): {}, lane {}, {}{}, at {:.0f} {:.0f}, {:.0f} yd from post, ordered {}, victim {}, hp {:.0f}%, casting {}.",
-            GetInstanceID(), bot->GetName(), uint32(bot->GetClass()), st.Assigned ? ROLE_NAMES[st.Role % SRF_ROLE_COUNT] : "unassigned", uint32(st.Lane),
-            st.HasOrders ? "orders" : "NO ORDERS", st.Orders.Retreat ? " (retreating)" : "", bot->GetPositionX(), bot->GetPositionY(),
+        // the name players see and report ("<name> <surname>"), and the jungler's camp
+        std::string const where = st.Role == SRF_ROLE_JUNGLE && st.CampOrdered && st.Camp < BG_SRF_JUNGLE_CAMPS
+            ? Trinity::StringFormat(", camp {}", uint32(st.Camp)) : std::string();
+        TC_LOG_INFO("bg.battleground", "Summoner's Rift {} bot {} = {} (class {}): {}, lane {}{}, {}{}{}, at {:.0f} {:.0f}, {:.0f} yd from post, ordered {}, victim {}, hp {:.0f}%, casting {}.",
+            GetInstanceID(), bot->GetName(), GetPlayerDisplayName(bot), uint32(bot->GetClass()),
+            st.Assigned ? ROLE_NAMES[st.Role % SRF_ROLE_COUNT] : "unassigned", uint32(st.Lane), where,
+            st.HasOrders ? "orders" : "NO ORDERS", st.Orders.Retreat ? " (retreating)" : "", st.TurretFleeUntil ? " (off turrets)" : "",
+            bot->GetPositionX(), bot->GetPositionY(),
             bot->GetExactDist2d(&st.Orders.Post), ordered ? ordered->GetName() : std::string("nothing"),
             victim ? victim->GetName() : std::string("nothing"), bot->GetHealthPct(),
             bot->HasUnitState(UNIT_STATE_CASTING) ? "yes" : "no");
