@@ -13,10 +13,10 @@
 
 local PREFIX = "CCGAME";
 local ZONE = "Summoner's Rift";
-local RANGE = 45;              -- yards: BattlegroundSRF's SRF_TURRET_RANGE
+local RANGE = 33.75;           -- yards: BattlegroundSRF's SRF_TURRET_RANGE
 local SHOW_WITHIN = 25;        -- yards outside the ring it starts to show
 local POINTS = 36;             -- heights a ring is sent with
-local DOTS = 90;               -- dots drawn round it (every 3.5 yards)
+local DOTS = 90;               -- dots drawn round it (every 2.4 yards)
 
 local WHITE = "Interface\\Buttons\\WHITE8X8";
 

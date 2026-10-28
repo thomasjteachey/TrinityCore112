@@ -21,7 +21,7 @@
  * Minion waves leave both bases every 30 seconds down all three lanes, walking
  * League's own lane waypoints as one smooth path, and fight whatever enemy they
  * meet. Positions and ranges are League's, scaled by RiftLeague::MAP_SCALE (the
- * size the map was converted at); the turrets' 45 yards are not. The fountains
+ * size the map was converted at); the turrets' 33.75 yards are not. The fountains
  * heal their own team and burn the other.
  *
  * The jungle is League's: its camps at League's own spots, neutral to both teams,

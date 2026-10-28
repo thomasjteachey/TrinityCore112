@@ -287,14 +287,14 @@ SrfPoint constexpr SRF_BARRACKS[PVP_TEAMS_COUNT][BG_SRF_LANE_COUNT] =
 SrfPoint constexpr SRF_FOUNTAIN_AT[PVP_TEAMS_COUNT] = { { 394.0f, 171.0f, 461.0f }, { 14340.0f, 179.0f, 14391.0f } };
 float constexpr SRF_FOUNTAIN_FACING[PVP_TEAMS_COUNT] = { 5.4978f, 2.3562f };
 
-// A turret reaches 45 yards - past every class's own range (League's 750 units
-// would be 16.9 here, inside a caster's 30 or a hunter's 35, so a ranged champion
-// could siege it untouched; owner, 2026-10-20: "at least 50 yards"). Yards, not
-// League units: it does not follow the map's scale (owner, 2026-10-25, shrinking the
-// map: "ensure the tower range still stays at 45 yards"). Both shot spells carry
-// it: Ice Lance 43427 is unlimited, Fireball 22088 100 yards. Measured centre to
-// centre (GetExactDist2d), so the turret's own size does not change it.
-float constexpr SRF_TURRET_RANGE        = 45.0f;   // owner, 2026-10-22 (50 before)
+// A turret reaches 33.75 yards (League's 750 units would be 16.9 here; owner,
+// 2026-10-20: "at least 50 yards", 45 from 2026-10-22, then 2026-10-27: "reduce
+// tower range by 25%"). A hunter's 35 now just outranges it. Yards, not League
+// units: it does not follow the map's scale (owner, 2026-10-25). Both shot spells
+// carry it: Ice Lance 43427 is unlimited, Fireball 22088 100 yards. Measured
+// centre to centre (GetExactDist2d), so the turret's own size does not change it.
+// CENTURION_Rift's RiftTurret.lua draws the ring at the same RANGE.
+float constexpr SRF_TURRET_RANGE        = 33.75f;  // owner, 2026-10-27 (45 before, 50 before that)
 float constexpr SRF_MINION_AGGRO_RANGE  = Yards(400.0f);
 // With no enemy unit near, a minion takes on an enemy structure in a turret's
 // range of it: a wave walking down a lane stops at the first turret standing.
