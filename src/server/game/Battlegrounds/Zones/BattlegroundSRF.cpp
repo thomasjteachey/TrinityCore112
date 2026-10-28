@@ -17,6 +17,7 @@
 #include "Player.h"
 #include "RiftLeague.h"
 #include "RiftProgression.h"
+#include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellDefines.h"
 #include "SpellInfo.h"
@@ -1866,7 +1867,10 @@ bool BattlegroundSRF::ComputeBotOrders(Player* bot, BotState& st, BattlegroundBo
                 if (!enemy->IsAlive() || enemy->GetExactDist2d(bot) > SRF_BOT_GANK_RANGE || !bot->IsValidAttackTarget(enemy)
                     || UnderEnemyTurret(team, enemy->GetPosition(), 3.0f))
                     continue;
-                bool fighting = enemy->GetHealthPct() < SRF_BOT_GANK_HURT_PCT;
+                // ... or fighting the jungler itself: the class layer no longer
+                // picks a target of its own (BuildClassSpellContext), so the
+                // orders name whoever jumps it on the way to a camp
+                bool fighting = enemy->GetHealthPct() < SRF_BOT_GANK_HURT_PCT || AttackOf(enemy) == bot;
                 for (Player* ally : TeamPlayers(team))
                     if (!fighting && ally != bot && ally->IsAlive() && ally->GetExactDist2d(enemy) < SRF_BOT_FIGHT_RANGE)
                         fighting = true;
@@ -3427,14 +3431,25 @@ void BattlegroundSRF::Report(uint32 diff)
         // the name players see and report ("<name> <surname>"), and the jungler's camp
         std::string const where = st.Role == SRF_ROLE_JUNGLE && st.CampOrdered && st.Camp < BG_SRF_JUNGLE_CAMPS
             ? Trinity::StringFormat(", camp {}", uint32(st.Camp)) : std::string();
-        TC_LOG_INFO("bg.battleground", "Summoner's Rift {} bot {} = {} (class {}): {}, lane {}{}, {}{}{}, at {:.0f} {:.0f}, {:.0f} yd from post, ordered {}, victim {}, hp {:.0f}%, casting {}.",
+        // Why it is going home (still hurt, or only to shop), its League gold and
+        // what it next shops at, and the spell it is casting - a recall that keeps
+        // starting shows as 94120 at the edge of the base (Aerendil, 2026-10-28).
+        char const* const retreat = !st.Orders.Retreat ? ""
+            : bot->GetHealthPct() < SRF_BOT_RETURN_PCT ? " (retreating: hurt)" : " (retreating: to shop)";
+        Spell const* cast = bot->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+        if (!cast)
+            cast = bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+        std::string const casting = cast ? Trinity::StringFormat("yes ({})", cast->GetSpellInfo()->Id)
+            : std::string(bot->HasUnitState(UNIT_STATE_CASTING) ? "yes" : "no");
+        TC_LOG_INFO("bg.battleground", "Summoner's Rift {} bot {} = {} (class {}): {}, lane {}{}, {}{}{}, at {:.0f} {:.0f}, {:.0f} yd from post, {:.0f} from the fountain, ordered {}, victim {}, hp {:.0f}%, gold {} (shops at {}), casting {}.",
             GetInstanceID(), bot->GetName(), GetPlayerDisplayName(bot), uint32(bot->GetClass()),
             st.Assigned ? ROLE_NAMES[st.Role % SRF_ROLE_COUNT] : "unassigned", uint32(st.Lane), where,
-            st.HasOrders ? "orders" : "NO ORDERS", st.Orders.Retreat ? " (retreating)" : "", st.TurretFleeUntil ? " (off turrets)" : "",
+            st.HasOrders ? "orders" : "NO ORDERS", retreat, st.TurretFleeUntil ? " (off turrets)" : "",
             bot->GetPositionX(), bot->GetPositionY(),
-            bot->GetExactDist2d(&st.Orders.Post), ordered ? ordered->GetName() : std::string("nothing"),
+            bot->GetExactDist2d(&st.Orders.Post), bot->GetExactDist2d(FountainPos(GetTeamIndexByTeamId(GetPlayerTeam(guid)))),
+            ordered ? ordered->GetName() : std::string("nothing"),
             victim ? victim->GetName() : std::string("nothing"), bot->GetHealthPct(),
-            bot->HasUnitState(UNIT_STATE_CASTING) ? "yes" : "no");
+            bot->GetMoney() / GOLD, std::max(SRF_BOT_SHOP_GOLD * GOLD, st.ShopBar) / GOLD, casting);
     }
     _boltsCast = 0;
     _boltsRefused = 0;

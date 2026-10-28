@@ -9553,6 +9553,28 @@ PvpValues PvpCore::CollectValues(Player const* player)
         return context;
     }
 
+    // A battleground that plays its bots itself (Battleground::GetBotOrders)
+    // names what they fight, and its orders take the selection off anything
+    // else. This pass still went round them: with nothing selected it picked
+    // the closest enemy on the map - at any distance, for a ranged or healing
+    // bot - and walked into spell range of it. A bot the orders had sent home
+    // to shop walked out of its fountain that way, and every step broke the
+    // recall the orders had just begun: Aerendil Trapfang recalled three times
+    // in a row at the edge of his base (owner, 2026-10-28). Going home, this
+    // pass does nothing; otherwise it fights only what the orders name.
+    bool battlegroundOrdersTarget = false;
+    if (inActiveBattleground)
+        if (Battleground* battleground = player->GetBattleground())
+        {
+            BattlegroundBotOrders orders;
+            if (battleground->GetBotOrders(const_cast<Player*>(player), orders))
+            {
+                if (orders.Retreat)
+                    return context;
+                battlegroundOrdersTarget = true;
+            }
+        }
+
     // A flag run does not stop to buff the team: a druid would leave Travel
     // Form for every Mark of the Wild and shift straight back.
     bool const onFlagRun = values.playerHasFlag ||
@@ -9585,7 +9607,8 @@ PvpValues PvpCore::CollectValues(Player const* player)
     // In PvE engagement the manager owns target acquisition through the bot's
     // selected target; the fallback below scans the map player list and would
     // make an open-world bot acquire hostile-faction players on its own.
-    if (activeTargetGuid.IsEmpty() && !inPveEngagement)
+    // Battleground orders own acquisition the same way (above).
+    if (activeTargetGuid.IsEmpty() && !inPveEngagement && !battlegroundOrdersTarget)
     {
         bool const allowLongAcquire =
             UsesRangedSpacingProfile(player, profileSelection) ||
