@@ -2095,6 +2095,39 @@ namespace
         }
     }
 
+    // The rank a character really trained, back in use. A rank the match taught
+    // above it (MatchRanks) superseded it - inactive, as any higher rank leaves
+    // the one under it - and nothing turned it back on once the match's rank was
+    // gone: ForgetPoisons removes without learn_low_rank, and a login after a
+    // crash loads it as it was saved, inactive. It sat in the spellbook unusable
+    // and a trainer greyed it out as known (Suc, 2026-10-27). Run once the
+    // match's ranks are gone and before the real bars go out, or the client
+    // clears every button holding it. `shown` is the client spellbook record:
+    // a rank told back here is not told again by ResetClientSpellbook.
+    void ReactivateRealRanks(Player* player, State& shown)
+    {
+        std::vector<uint32> superseded;
+        for (auto const& [spell, known] : player->GetSpellMap())
+        {
+            if (known.active || known.dependent || known.disabled ||
+                known.state == PLAYERSPELL_REMOVED || known.state == PLAYERSPELL_TEMPORARY)
+                continue;
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
+            if (!info || !info->IsRanked() || info->IsStackableWithRanks())
+                continue;
+            bool higherKnown = false;
+            for (uint32 next = sSpellMgr->GetNextSpellInChain(spell); next && !higherKnown; next = sSpellMgr->GetNextSpellInChain(next))
+                higherKnown = player->HasSpell(next);
+            if (!higherKnown)
+                superseded.push_back(spell);
+        }
+        for (uint32 spell : superseded)
+        {
+            player->LearnSpell(spell, false);
+            shown.ClientHidden.erase(spell);
+        }
+    }
+
     // An addon whisper from the character to itself, as Mok'gora's are: the
     // client hands CENTURION_Rift its own name as the sender.
     void SendLine(Player* player, std::string const& line)
@@ -2492,6 +2525,7 @@ void Leave(Player* player)
     TakeShopItems(player);
     TakeRecallButtons(player);
     ForgetPoisons(player, state);
+    ReactivateRealRanks(player, state);
     TakeNoAmmo(player);
     SetMatchSkills(player, false);
     player->GiveLevel(state.RealLevel, true);
@@ -2593,6 +2627,7 @@ namespace
     player->SetMoney(fields[2].GetUInt32());
     RestoreTalents(player, TalentsFromString(fields[3].GetString()));
     RestoreButtons(player, ButtonsFromString(fields[4].GetString()));
+    ReactivateRealRanks(player, shown);
     ResetClientSpellbook(player, shown, true);
     player->SendActionButtons(1);
     ResetClientSpellbook(player, shown, false);

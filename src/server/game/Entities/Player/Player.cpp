@@ -4318,10 +4318,22 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
         else if (uint32 prev_spell = sSpellMgr->GetPrevSpellInChain(spellId);
             prev_spell && (!GetTalentSpellPos(prev_spell) || HasTalent(prev_spell, GetActiveSpec())))
         {
-            if (!IsInWorld() || disabled)                    // at spells loading, no output, but allow save
-                AddSpell(prev_spell, active, true, true, disabled, false, fromSkill);
-            else                                            // at normal learning
-                LearnSpell(prev_spell, true, fromSkill);
+            // A rank learned without being saved (dependent) leaves a saved rank
+            // under it saved. Stock turned that one dependent too, and then
+            // nothing saved derived it any more: the Rift teaches a character
+            // below the cap the ranks above its own for the match alone, and the
+            // next save deleted the rank it had really trained (Suc, 2026-10-27:
+            // Heroic Strike 5, Rend 4, Cleave 2, Execute 2 and Slam gone).
+            PlayerSpellMap::const_iterator const prevItr = m_spells.find(prev_spell);
+            bool const prevSaved = prevItr != m_spells.end() && !prevItr->second.dependent && !prevItr->second.disabled &&
+                prevItr->second.state != PLAYERSPELL_REMOVED && prevItr->second.state != PLAYERSPELL_TEMPORARY;
+            if (!dependent || !prevSaved)
+            {
+                if (!IsInWorld() || disabled)                // at spells loading, no output, but allow save
+                    AddSpell(prev_spell, active, true, true, disabled, false, fromSkill);
+                else                                        // at normal learning
+                    LearnSpell(prev_spell, true, fromSkill);
+            }
         }
 
         std::pair<PlayerSpellMap::iterator, bool> inserted = m_spells.emplace(std::piecewise_construct, std::forward_as_tuple(spellId), std::forward_as_tuple());
@@ -4796,7 +4808,10 @@ void Player::RemoveSpell(uint32 spell_id, bool disabled, bool learn_low_rank)
             PlayerSpellMap::iterator prev_itr = m_spells.find(prev_id);
             if (prev_itr != m_spells.end())
             {
-                if (prev_itr->second.dependent != cur_dependent)
+                // Only a saved rank going hands its saving down. A dependent rank
+                // going leaves a saved one under it saved (AddSpell's low-rank
+                // walk): stock made it dependent, and the next save deleted it.
+                if (prev_itr->second.dependent && !cur_dependent)
                 {
                     prev_itr->second.dependent = cur_dependent;
                     if (prev_itr->second.state != PLAYERSPELL_NEW)
