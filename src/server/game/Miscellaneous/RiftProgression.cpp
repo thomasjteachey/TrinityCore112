@@ -41,7 +41,9 @@
 #include "SpellMgr.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
+#include "Trainer.h"
 #include "Util.h"
+#include "World.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -189,6 +191,9 @@ namespace
     struct State
     {
         uint8 RealLevel = 1;
+        // Where the match's climb ends: the realm's level cap for everyone, whatever
+        // level the character walked in at (see MatchTopLevel).
+        uint8 TopLevel = 1;
         uint32 RealXp = 0;
         uint32 RealMoney = 0;
         uint32 BankedXp = 0;         // what the match paid the real character (BankExperience)
@@ -379,6 +384,24 @@ namespace
         return false;
     }
 
+    // A trainer rank that only some races of the class learn (its skill line
+    // ability's race mask) is offered to those races alone.
+    bool SoldToRace(Player const* player, uint32 spellId)
+    {
+        SkillLineAbilityMapBounds const bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
+        bool any = false;
+        for (auto itr = bounds.first; itr != bounds.second; ++itr)
+        {
+            SkillLineAbilityEntry const* ability = itr->second;
+            if (ability->ClassMask && !(ability->ClassMask & player->GetClassMask()))
+                continue;
+            any = true;
+            if (!ability->RaceMask || (ability->RaceMask & player->GetRaceMask()))
+                return true;
+        }
+        return !any;
+    }
+
     void BuildState(Player const* player, State& state)
     {
         uint8 const spec = player->GetActiveSpec();
@@ -418,6 +441,51 @@ namespace
                 continue;
             uint32 const first = sSpellMgr->GetFirstSpellInChain(spellId);
             state.Chains[first ? first : spellId].Ranks.push_back(spellId);
+        }
+        // ---- and every rank the class's trainers sell up to the match's top level.
+        // The climb is 10 -> TopLevel for everyone (owner, 2026-10-27: "it shouldn't
+        // matter what level you enter at, 10-60 should take the same amount of time"),
+        // so a level-20 character is offered the level-40 ranks a level-60 one
+        // trained. One it never trained is taught for the match alone when picked
+        // (HandlePickRequest, MatchRanks) or, in a free chain, on the way in (Enter).
+        // The ranks after a talent are left to the loop below, which gates them on
+        // the talent.
+        auto const needsTalent = [](uint32 spell)
+        {
+            uint32 const first = sSpellMgr->GetFirstSpellInChain(spell);
+            return GetTalentSpellPos(spell) || GetTalentSpellPos(first ? first : spell);
+        };
+        for (Trainer::Trainer const* trainer : sObjectMgr->GetClassTrainers(player->GetClass()))
+        {
+            if (!trainer->IsTrainerValidForPlayer(player))
+                continue;
+            for (Trainer::Spell const& sold : trainer->GetSpells())
+            {
+                if (sold.ReqLevel > state.TopLevel ||
+                    std::any_of(sold.ReqAbility.begin(), sold.ReqAbility.end(), [&](uint32 req) { return req && needsTalent(req); }))
+                    continue;
+                SpellInfo const* soldInfo = sSpellMgr->GetSpellInfo(sold.SpellId);
+                if (!soldInfo)
+                    continue;
+                // A trainer entry that is a "learn" spell teaches what its effects name.
+                std::vector<uint32> taught;
+                for (SpellEffectInfo const& effect : soldInfo->GetEffects())
+                    if (effect.Effect == SPELL_EFFECT_LEARN_SPELL && effect.TriggerSpell)
+                        taught.push_back(effect.TriggerSpell);
+                if (taught.empty())
+                    taught.push_back(sold.SpellId);
+                for (uint32 spellId : taught)
+                {
+                    SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
+                    if (taughtByTalents.count(spellId) || needsTalent(spellId) || !IsGovernedClassSpell(player, info) ||
+                        info->SpellLevel > state.TopLevel || !SoldToRace(player, spellId))
+                        continue;
+                    uint32 const first = sSpellMgr->GetFirstSpellInChain(spellId);
+                    std::vector<uint32>& ranks = state.Chains[first ? first : spellId].Ranks;
+                    if (std::find(ranks.begin(), ranks.end(), spellId) == ranks.end())
+                        ranks.push_back(spellId);
+                }
+            }
         }
         // ---- the trained ranks after a talent (Mortal Strike 2-4, Hemorrhage 2-5): every
         // one is a pick, whatever the real character trained. Only the ranks it had
@@ -2012,14 +2080,13 @@ namespace
         state.MatchRanks.clear();
     }
 
-    // A relog into the match: a dependent spell is not loaded back, so the talent
-    // ranks it picked that the character never trained are taught again.
+    // A relog into the match: a dependent spell is not loaded back, so the ranks
+    // the match taught that the character never trained - a talent's, a trainer's
+    // above its real level - are taught again.
     void RelearnMatchRanks(Player* player, State& state)
     {
         for (auto const& [first, chain] : state.Chains)
         {
-            if (!chain.Talent)
-                continue;
             auto const itr = state.Unlocked.find(first);
             uint8 const have = itr != state.Unlocked.end() ? itr->second : 0;
             for (uint32 k = 0; k < have && k < chain.Ranks.size(); ++k)
@@ -2042,7 +2109,8 @@ namespace
 
     void SendState(Player* player, State const& state)
     {
-        SendLine(player, Trinity::StringFormat("RIFT:{}:{}:{}:{}", state.MatchLevel, state.RealLevel, state.LeagueLevel, state.PendingPicks));
+        // The second field is where the climb ends (the pick panel's "Level X of Y").
+        SendLine(player, Trinity::StringFormat("RIFT:{}:{}:{}:{}", state.MatchLevel, state.TopLevel, state.LeagueLevel, state.PendingPicks));
         std::string offers;
         if (state.PendingPicks)
         {
@@ -2053,6 +2121,14 @@ namespace
         SendLine(player, "RIFTPICKS:" + offers);
     }
 
+    // Where every champion's climb ends: the realm's level cap (Centurion's 60),
+    // never under the character's own level.
+    uint8 MatchTopLevel(uint8 realLevel)
+    {
+        uint32 const cap = std::min<uint32>(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL), STRONG_MAX_LEVEL);
+        return uint8(std::max<uint32>(cap, realLevel));
+    }
+
     // League progress 0..1: level 1 is 0, level 18 is 1.
     float LeagueProgress(State const& state)
     {
@@ -2060,11 +2136,13 @@ namespace
             + (state.LeagueLevel < LEAGUE_MAX_LEVEL ? state.LeagueXp / XpToNext(state.LeagueLevel) : 0.0f)) / float(LEAGUE_MAX_LEVEL - 1);
     }
 
-    // The match level League progress has reached: the start at League 1, the
-    // real level at League 18.
+    // The match level League progress has reached: the start at League 1, the top
+    // level at League 18 - the same climb for every champion, so a level-20
+    // character and a level-60 one gain their levels at one pace (owner,
+    // 2026-10-27: a level-60 bot gained 10 levels while a level-20 player gained 2).
     float MatchLevelFor(State const& state)
     {
-        return float(state.StartLevel) + LeagueProgress(state) * float(state.RealLevel - state.StartLevel);
+        return float(state.StartLevel) + LeagueProgress(state) * float(state.TopLevel - state.StartLevel);
     }
 
     // The XP bar shows the way to the next match level.
@@ -2075,12 +2153,12 @@ namespace
     }
 
     // The field kit is issued for the 5-level bracket the match has reached
-    // (10, 15, 20 ...), never above the real level, and swapped as it climbs.
+    // (10, 15, 20 ...), never above the top level, and swapped as it climbs.
     uint8 constexpr KIT_BRACKET = 5;
     uint8 KitLevelFor(State const& state)
     {
         uint8 const bracket = uint8(state.MatchLevel - state.MatchLevel % KIT_BRACKET);
-        return std::min<uint8>(std::max<uint8>(bracket, state.StartLevel), state.RealLevel);
+        return std::min<uint8>(std::max<uint8>(bracket, state.StartLevel), state.TopLevel);
     }
 
     void SetMatchLevel(Player* player, State& state, uint8 level)
@@ -2296,6 +2374,7 @@ void Enter(Player* player)
 
     State& state = States[player->GetGUID().GetCounter()];
     state.RealLevel = player->GetLevel();
+    state.TopLevel = MatchTopLevel(state.RealLevel);
     state.RealXp = player->GetUInt32Value(PLAYER_XP);
     state.RealMoney = player->GetMoney();
     state.Persistent = !IsTransient(player);
@@ -2347,6 +2426,22 @@ void Enter(Player* player)
     state.KitApplied = KitLevelFor(state);   // ApplyRiftLoadout dressed it for the start
     for (uint32 first : state.FreeChains)
         state.Unlocked[first] = uint8(state.Chains.at(first).Ranks.size());
+    // A free chain comes whole, so its ranks the character never trained (the
+    // trainers' up to the top level, BuildState) are taught now, for the match
+    // alone, as a pick's would be (HandlePickRequest). A bot learns its unlocked
+    // ranks in BotSyncSpellbook.
+    if (state.Persistent)
+        for (uint32 first : state.FreeChains)
+            for (uint32 spell : state.Chains.at(first).Ranks)
+            {
+                if (state.Removed.count(spell))
+                    continue;
+                auto const known = player->GetSpellMap().find(spell);
+                if (known != player->GetSpellMap().end() && known->second.state != PLAYERSPELL_REMOVED)
+                    continue;
+                player->LearnSpell(spell, true);
+                state.MatchRanks.insert(spell);
+            }
     state.PendingPicks = PICKS_PER_LEVEL;
     player->GiveLevel(state.StartLevel, true);
     SyncPetRanks(player, state);
@@ -3240,7 +3335,7 @@ void AddExperience(Player* player, float leagueXp)
     if (state->LeagueLevel >= LEAGUE_MAX_LEVEL)
         state->LeagueXp = 0.0f;
 
-    uint8 const target = std::min<uint8>(state->RealLevel, uint8(std::floor(MatchLevelFor(*state) + 1e-4f)));
+    uint8 const target = std::min<uint8>(state->TopLevel, uint8(std::floor(MatchLevelFor(*state) + 1e-4f)));
     if (target > state->MatchLevel)
         SetMatchLevel(player, *state, target);
     else
@@ -3560,7 +3655,7 @@ void OnLevelChanged(Player* player)
     if (!state)
         return;
     // SetMatchLevel's own GiveLevel comes back here with the level already matched.
-    uint8 const level = std::min<uint8>(player->GetLevel(), state->RealLevel);
+    uint8 const level = std::min<uint8>(player->GetLevel(), state->TopLevel);
     if (level <= state->MatchLevel)
         return;
     while (state->MatchLevel < level)

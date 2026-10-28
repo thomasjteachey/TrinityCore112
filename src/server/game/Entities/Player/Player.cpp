@@ -3362,6 +3362,14 @@ void Player::GiveXP(uint32 xp, Unit* victim, float group_rate)
     if (HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN))
         return;
 
+    // A Summoner's Rift champion levels by League's experience alone
+    // (RiftProgression::AddExperience), at one pace for every champion. A kill's
+    // own experience landed on the borrowed match level, could tip it over a
+    // level the League curve had not reached, and was wiped on the way out. The
+    // match's honor is banked for the real character instead (RewardHonor).
+    if (RiftProgression::IsInMatch(this))
+        return;
+
     if (victim && victim->GetTypeId() == TYPEID_UNIT && !victim->ToCreature()->hasLootRecipient())
         return;
 
