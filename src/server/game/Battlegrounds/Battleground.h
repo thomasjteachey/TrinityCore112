@@ -708,6 +708,11 @@ class TC_GAME_API Battleground
         void SendSpectatorBattlefieldStatusTo(Player* player);
         bool HasCustomWeatherOverride() const { return m_IsCustomGame && m_CustomRules.Weather != BattlegroundCustomWeather::Normal; }
         bool ShouldShowFlagOnMapTo(Player const* viewer, TeamId flagTeam) const;
+        // Everyone whose map shows this match's flags: the players, and in a
+        // custom game the spectators watching it (they live outside m_Players).
+        std::vector<Player*> GetFlagMapViewers() const;
+        bool IsCustomGameSpectator(Player const* player) const;
+        void SendFlagCarrierPositionsTo(Player* player);
         void SendFlagCarrierPositionsToPlayers();
         uint32 GetFlagCaptureLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.FlagCaptureLimit ? m_CustomRules.FlagCaptureLimit : defaultValue; }
         uint32 GetResourceLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.ResourceLimit ? m_CustomRules.ResourceLimit : defaultValue; }

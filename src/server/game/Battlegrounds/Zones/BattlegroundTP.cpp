@@ -224,12 +224,9 @@ void BattlegroundTP::SendCTFFlagAddonMessage(std::string const& payload)
     }
 
     TeamId const flagTeam = payload[0] == 'A' ? TEAM_ALLIANCE : TEAM_HORDE;
-    for (auto const& entry : GetPlayers())
-    {
-        Player* player = ObjectAccessor::FindPlayer(entry.first);
-        if (player && ShouldShowFlagOnMapTo(player, flagTeam))
-            player->SendDirectMessage(&data);
-    }
+    for (Player* viewer : GetFlagMapViewers())
+        if (ShouldShowFlagOnMapTo(viewer, flagTeam))
+            viewer->SendDirectMessage(&data);
 }
 
 void BattlegroundTP::BroadcastCTFFlagFullState()
@@ -238,9 +235,8 @@ void BattlegroundTP::BroadcastCTFFlagFullState()
 
     if (IsCustomGame())
     {
-        for (auto const& entry : GetPlayers())
-            if (Player* player = ObjectAccessor::FindPlayer(entry.first))
-                SendCTFFlagFullStateTo(player);
+        for (Player* viewer : GetFlagMapViewers())
+            SendCTFFlagFullStateTo(viewer);
         return;
     }
 
@@ -361,7 +357,12 @@ void BattlegroundTP::AddPlayer(Player* player)
         PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
     }
     if (GetStatus() == STATUS_IN_PROGRESS)
+    {
+        // Someone joining (or starting to watch) mid-match gets the flags as
+        // they stand, carriers included, without waiting for the next flag event.
         SendCTFFlagFullStateTo(player);
+        SendFlagCarrierPositionsTo(player);
+    }
 }
 
 

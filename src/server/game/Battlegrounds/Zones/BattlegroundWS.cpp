@@ -242,12 +242,9 @@ void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload)
     }
 
     TeamId const flagTeam = payload[0] == 'A' ? TEAM_ALLIANCE : TEAM_HORDE;
-    for (auto const& entry : GetPlayers())
-    {
-        Player* player = ObjectAccessor::FindPlayer(entry.first);
-        if (player && ShouldShowFlagOnMapTo(player, flagTeam))
-            player->SendDirectMessage(&data);
-    }
+    for (Player* viewer : GetFlagMapViewers())
+        if (ShouldShowFlagOnMapTo(viewer, flagTeam))
+            viewer->SendDirectMessage(&data);
 }
 
 void BattlegroundWS::BroadcastWSGFlagFullState()
@@ -256,9 +253,8 @@ void BattlegroundWS::BroadcastWSGFlagFullState()
 
     if (IsCustomGame())
     {
-        for (auto const& entry : GetPlayers())
-            if (Player* player = ObjectAccessor::FindPlayer(entry.first))
-                SendWSGFlagFullStateTo(player);
+        for (Player* viewer : GetFlagMapViewers())
+            SendWSGFlagFullStateTo(viewer);
         return;
     }
 
@@ -465,7 +461,12 @@ void BattlegroundWS::AddPlayer(Player* player)
     }
 
     if (GetStatus() == STATUS_IN_PROGRESS)
+    {
+        // Someone joining (or starting to watch) mid-match gets the flags as
+        // they stand, carriers included, without waiting for the next flag event.
         SendWSGFlagFullStateTo(player);
+        SendFlagCarrierPositionsTo(player);
+    }
 }
 
 void BattlegroundWS::RespawnFlag(uint32 Team, bool captured)
