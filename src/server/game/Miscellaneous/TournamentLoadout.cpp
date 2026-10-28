@@ -727,6 +727,36 @@ namespace
         player->_ApplyItemMods(item, item->GetSlot(), true);
     }
 
+    // A coat on a kit weapon - a rogue's poison, a shaman's imbue - read off it
+    // with the time it has left (RemoveEnchantmentDurations writes that back to
+    // the item first), to go onto the weapon that takes its place.
+    struct WeaponCoat
+    {
+        uint32 Id = 0;
+        uint32 Left = 0;
+        uint32 Charges = 0;
+    };
+
+    WeaponCoat TakeCoat(Player* player, Item* weapon)
+    {
+        WeaponCoat coat;
+        if (!weapon || !weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+            return coat;
+        player->RemoveEnchantmentDurations(weapon);
+        coat.Id = weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+        coat.Left = weapon->GetEnchantmentDuration(TEMP_ENCHANTMENT_SLOT);
+        coat.Charges = weapon->GetEnchantmentCharges(TEMP_ENCHANTMENT_SLOT);
+        return coat;
+    }
+
+    void PutCoat(Player* player, Item* weapon, WeaponCoat const& coat)
+    {
+        if (!weapon || !coat.Id || !coat.Left || weapon->GetTemplate()->Class != ITEM_CLASS_WEAPON)
+            return;
+        weapon->SetEnchantment(TEMP_ENCHANTMENT_SLOT, coat.Id, coat.Left, coat.Charges);
+        player->ApplyEnchantment(weapon, TEMP_ENCHANTMENT_SLOT, true);
+    }
+
     // The character keeps the item; the item simply stops being in its bags for
     // the length of the match. The same moves as an account bank deposit: out of
     // the inventory, out of `character_inventory`, and its own row written back,
@@ -1546,16 +1576,8 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
         if (!kit && !(worn && worn->GetTemplate()->InventoryType == INVTYPE_HOLDABLE))
             continue;   // nothing for this slot: what is on stays on (a held piece from before the pool lost them comes off)
         // A coat on the old weapon - a rogue's poison - goes onto the new one with
-        // the time it had left (RemoveEnchantmentDurations writes that time back
-        // to the item first). Every five match levels took it off before.
-        uint32 coat = 0, coatLeft = 0, coatCharges = 0;
-        if (worn && worn->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
-        {
-            player->RemoveEnchantmentDurations(worn);
-            coat = worn->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
-            coatLeft = worn->GetEnchantmentDuration(TEMP_ENCHANTMENT_SLOT);
-            coatCharges = worn->GetEnchantmentCharges(TEMP_ENCHANTMENT_SLOT);
-        }
+        // the time it had left. Every five match levels took it off before.
+        WeaponCoat const coat = TakeCoat(player, worn);
         if (worn)
         {
             if (!transient)
@@ -1581,11 +1603,7 @@ void UpgradeRiftKit(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
         if (!item)
             continue;
         ApplyStatsIfDead(player, item);
-        if (coat && coatLeft && item->GetTemplate()->Class == ITEM_CLASS_WEAPON)
-        {
-            item->SetEnchantment(TEMP_ENCHANTMENT_SLOT, coat, coatLeft, coatCharges);
-            player->ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, true);
-        }
+        PutCoat(player, item, coat);
         if (!transient)
             InsertRow(trans, guid, LOADOUT_ROW_SUBSTITUTE, item->GetGUID().GetCounter(), PackPosition(item->GetBagSlot(), item->GetSlot()));
         if (kit != oldEntry)
@@ -1722,12 +1740,17 @@ void SwapRiftWeapons(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
     ObjectGuid::LowType const guid = player->GetGUID().GetCounter();
 
     // The kit's own pieces come off, the off-hand first; anything else in a hand
-    // stays where it is.
+    // stays where it is. Their coats go onto the new weapons, hand for hand
+    // (owner, 2026-10-27: "the enchantment should carry over, like windfury or
+    // poisons"); an off-hand coat with no off-hand weapon to take it goes onto
+    // a main hand that had none.
+    WeaponCoat coats[2];   // main hand, off-hand
     for (uint8 slot : { uint8(EQUIPMENT_SLOT_OFFHAND), uint8(EQUIPMENT_SLOT_MAINHAND) })
     {
         Item* worn = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
         if (!worn || !IsFieldKitDuplicateEntry(worn->GetEntry()))
             continue;
+        coats[slot == EQUIPMENT_SLOT_OFFHAND] = TakeCoat(player, worn);
         if (!transient)
             trans->Append(Trinity::StringFormat("DELETE FROM character_tournament_loadout WHERE guid = {} AND kind = {} AND id = {}",
                 guid, uint32(LOADOUT_ROW_SUBSTITUTE), worn->GetGUID().GetCounter()).c_str());
@@ -1751,6 +1774,20 @@ void SwapRiftWeapons(Player* player, uint8 kitLevel, RiftWeapons const& weapons)
             InsertRow(trans, guid, LOADOUT_ROW_SUBSTITUTE, item->GetGUID().GetCounter(), PackPosition(item->GetBagSlot(), item->GetSlot()));
         ++issued;
     }
+
+    Item* mainHand = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+    Item* offHand = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+    auto const takesCoat = [](Item const* weapon)
+    {
+        return weapon && IsFieldKitDuplicateEntry(weapon->GetEntry()) && weapon->GetTemplate()->Class == ITEM_CLASS_WEAPON
+            && !weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+    };
+    if (!coats[0].Id && !takesCoat(offHand))
+        std::swap(coats[0], coats[1]);
+    if (takesCoat(mainHand))
+        PutCoat(player, mainHand, coats[0]);
+    if (takesCoat(offHand))
+        PutCoat(player, offHand, coats[1]);
 
     if (!transient)
     {

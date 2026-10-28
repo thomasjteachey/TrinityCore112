@@ -1700,6 +1700,33 @@ namespace
         return changed;
     }
 
+    // A picked rank takes over the buttons holding the rank just below it, as
+    // the client does by itself when a trainer teaches one (SMSG_LEARNED_SPELL).
+    // RetargetButtons leaves a lower rank whose ranks stack where it is, so the
+    // bars PublishBars sends right after the new rank put the old one back over
+    // the client's own move (owner, 2026-10-27: Healing Wave 3 picked, "the
+    // button stayed rank2"). A talent's chain starts from the talent's own rank,
+    // which no chain holds. A rank further down stays: downranking.
+    void MoveButtonsUpRank(Player* player, State const& state, uint32 first)
+    {
+        auto const unlocked = state.Unlocked.find(first);
+        auto const chain = state.Chains.find(first);
+        if (unlocked == state.Unlocked.end() || chain == state.Chains.end())
+            return;
+        std::vector<uint32> const& ranks = chain->second.Ranks;
+        size_t const have = unlocked->second;
+        if (!have || have > ranks.size())
+            return;
+        uint32 const previous = have >= 2 ? ranks[have - 2] : (chain->second.Talent ? first : 0);
+        uint32 const current = ranks[have - 1];
+        if (!previous || !player->HasSpell(current))
+            return;
+        for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+            if (ActionButton const* ab = player->GetActionButton(button))
+                if (ab->GetType() == ACTION_BUTTON_SPELL && ab->GetAction() == previous)
+                    player->addActionButton(button, current, ACTION_BUTTON_SPELL);
+    }
+
     // The recall comes off the bars here (the caller sends them) and out of the
     // spellbook in ForgetRecall, after the bars: the client clears a button
     // whose spell it is told it lost, and tells the server to.
@@ -4096,6 +4123,7 @@ void HandlePickRequest(Player* player, std::string_view argument)
             }
             if (firstUnlock)
                 PlaceUnlockedSpell(player, *state, first, *spellId);
+            MoveButtonsUpRank(player, *state, first);
             PublishBars(player, *state);
             --state->PendingPicks;
         }
