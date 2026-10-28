@@ -3669,6 +3669,12 @@ CharDelete.KeepDays = 30
 #        Description: Announce to the realm who fell, or who fled.
 #        Default:     1
 #
+#    Centurion.Mokgora.AnnounceBots
+#        Description: Also announce a Mok'gora that has a bot in it. Bots accept
+#                     on the spot, so players farm them, and every fight would
+#                     reach the whole realm. The two fighters are told either way.
+#        Default:     0
+#
 #    Centurion.Mokgora.FlagGameObjectId
 #        Description: The marker planted between the two. 21680 is the flag the
 #                     Duel spell (7266) itself plants on this realm - it names it
@@ -3688,6 +3694,7 @@ Centurion.Mokgora.CowardDays = 3
 Centurion.Mokgora.RequireDuelArea = 1
 Centurion.Mokgora.AnnounceStart = 1
 Centurion.Mokgora.AnnounceEnd = 1
+Centurion.Mokgora.AnnounceBots = 0
 Centurion.Mokgora.FlagGameObjectId = 21680
 
 ###################################################################################################

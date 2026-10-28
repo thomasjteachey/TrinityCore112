@@ -95,6 +95,12 @@ namespace
         bool AnnounceStart = true;
         bool AnnounceEnd = true;
 
+        // Whether a Mok'gora with a bot in it is announced too. Off by
+        // default: a bot accepts on the spot, so players farm them, and every
+        // one of those put two lines in front of the whole realm (152 in a
+        // day on 2026-10-28). The two fighters are still told everything.
+        bool AnnounceBots = false;
+
         // The duel flag. 21680 is the one the Duel spell (7266) itself plants
         // on this realm - read off its own EffectMiscValue rather than assumed.
         // 194 is stock TrinityCore's id and is NOT in this world's
@@ -227,6 +233,13 @@ namespace
     void Announce(std::string const& line)
     {
         sWorld->SendGlobalText(line.c_str(), nullptr);
+    }
+
+    // A duel between two people is the realm's news; one with a bot in it is
+    // not, unless AnnounceBots says so.
+    bool IsRealmNews(Player const* first, Player const* second)
+    {
+        return Config.AnnounceBots || (!IsBot(first) && !IsBot(second));
     }
 
     // The realm's Mok'gora voice. Kept in one place so the colour of it is the
@@ -578,6 +591,7 @@ void LoadConfig()
         sConfigMgr->GetIntDefault("Centurion.Mokgora.CowardDays", 3), 0, 30));
     Config.AnnounceStart = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceStart", true);
     Config.AnnounceEnd = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceEnd", true);
+    Config.AnnounceBots = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceBots", false);
     Config.FlagGameObjectId = uint32(std::max(1,
         sConfigMgr->GetIntDefault("Centurion.Mokgora.FlagGameObjectId", 21680)));
 
@@ -925,7 +939,7 @@ void OnDuelStart(Player* first, Player* second)
             other->GetName())));
     }
 
-    if (Config.AnnounceStart)
+    if (Config.AnnounceStart && IsRealmNews(first, second))
     {
         std::string zone = "the world";
         if (AreaTableEntry const* area = sAreaTableStore.LookupEntry(first->GetZoneId()))
@@ -978,7 +992,7 @@ void OnDuelEnd(Player* winner, Player* loser, DuelCompleteType type)
         Say(loser, Banner(Trinity::StringFormat("{} has killed you in Mok'gora.", winner->GetName())));
     }
 
-    if (Config.AnnounceEnd)
+    if (Config.AnnounceEnd && IsRealmNews(winner, loser))
     {
         // Two calls rather than one with a chosen format: StringFormat checks
         // its format string against the arguments at compile time, which a
