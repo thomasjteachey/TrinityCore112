@@ -6779,10 +6779,10 @@ VanillaRaids.Naxx40.Nerf.Gluth = 0
 #                     passive gold). Read every time, so .reload config applies a
 #                     change at once.
 #        Default:     PlayerGoldRate 1.5 - (League's numbers and half again)
-#                     PlayerXpRate   3.0 - (League's numbers twice over)
+#                     PlayerXpRate   6.0 - (League's numbers six times over)
 
 Centurion.Rift.PlayerGoldRate = 1.5
-Centurion.Rift.PlayerXpRate = 3.0
+Centurion.Rift.PlayerXpRate = 6.0
 
 #
 #    Centurion.Rift.FlatHonorMultiplier
