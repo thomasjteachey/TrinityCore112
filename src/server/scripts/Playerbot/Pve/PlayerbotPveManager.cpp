@@ -5089,6 +5089,41 @@ namespace
         return offProto && offProto->Class != ITEM_CLASS_WEAPON;
     }
 
+    // IsEquipUpgrade, asked of the hand a one-hander would actually replace.
+    //
+    // CanEquipItem offers a one-hander to the MAIN hand whenever both hands are
+    // full, and ShouldRedirectToOffHand above only steps in for an empty or dead
+    // off hand. So once a dual wielder's off hand held a weapon, nothing ever
+    // challenged it: a weapon that lost to the main hand was turned away, sold,
+    // or never bought. That is how every world rogue measured on 2026-10-28
+    // still carried the dagger its off hand was first given. Here a one-hander
+    // that loses the main hand is asked again against the off hand, and `dest`
+    // moves there when it wins.
+    bool IsEquipUpgradeForEitherHand(Player const* bot, ItemTemplate const* candidate, uint16& dest)
+    {
+        Item const* worn = bot->GetItemByPos(dest);
+        if (IsEquipUpgrade(bot, candidate, worn ? worn->GetTemplate() : nullptr, uint8(dest & 255)))
+            return true;
+
+        if (!worn || candidate->InventoryType != INVTYPE_WEAPON ||
+            uint8(dest & 255) != EQUIPMENT_SLOT_MAINHAND || !bot->CanDualWield())
+            return false;
+
+        // An empty or held-item off hand is ShouldRedirectToOffHand's case and
+        // has already been decided; a two-hander leaves no off hand at all.
+        uint16 const offHandPos = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
+        Item const* offHand = bot->GetItemByPos(offHandPos);
+        ItemTemplate const* offProto = offHand ? offHand->GetTemplate() : nullptr;
+        if (!offProto || offProto->Class != ITEM_CLASS_WEAPON)
+            return false;
+
+        if (!IsEquipUpgrade(bot, candidate, offProto, EQUIPMENT_SLOT_OFFHAND))
+            return false;
+
+        dest = offHandPos;
+        return true;
+    }
+
     // Which bag slot should a container upgrade actually target?
     //
     // NOT the one CanEquipItem picks. Player::FindEquipSlot searches for a free
@@ -5553,10 +5588,7 @@ namespace
                         if (ShouldRedirectToOffHand(bot, proto, dest))
                             dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
 
-                        ItemTemplate const* equipped = nullptr;
-                        if (Item const* worn = bot->GetItemByPos(dest))
-                            equipped = worn->GetTemplate();
-                        wantsToWear = IsEquipUpgrade(bot, proto, equipped, uint8(dest & 255));
+                        wantsToWear = IsEquipUpgradeForEitherHand(bot, proto, dest);
                     }
                     else if (!EquipRefusalIsPermanent(probe))
                         wantsToWear = true;
@@ -6471,12 +6503,12 @@ namespace
                     else if (ShouldRedirectToOffHand(bot, proto, dest))
                         dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
 
-                    ItemTemplate const* incumbent = nullptr;
-                    if (Item const* equipped = bot->GetItemByPos(dest))
-                        incumbent = equipped->GetTemplate();
-
-                    if (IsEquipUpgrade(bot, proto, incumbent, uint8(dest & 255)))
+                    if (IsEquipUpgradeForEitherHand(bot, proto, dest))
                     {
+                        ItemTemplate const* incumbent = nullptr;
+                        if (Item const* equipped = bot->GetItemByPos(dest))
+                            incumbent = equipped->GetTemplate();
+
                         // Upgrades always outrank sellable rewards; between two
                         // upgrades the margin over the incumbent decides.
                         float const gain = ScoreItemForSpec(bot, proto) -
@@ -7237,29 +7269,112 @@ namespace
         return BotSpreadIndex(bot, 3);
     }
 
-    // Only Assassination is built around daggers (Mutilate/Backstab); Combat
-    // and Subtlety take anything and want it SLOW.
-    bool PrefersDaggerMainhand(Player const* bot)
+    // The rogue tree a bot actually fights from: the one holding most of its
+    // talent points, numbered 0/1/2 in the client's tab order (Assassination,
+    // Combat, Subtlety) - the numbering EquipProfileIndex and the talent
+    // recipes use.
+    //
+    // NOT EquipProfileIndex itself. That is only the roll the talent spender
+    // reads today, and a bot that levelled before BotSpreadIndex replaced the
+    // raw guid modulo spent its points under the old roll and kept them - so for
+    // much of the older fleet the roll and the build disagree, and the weapon
+    // rules used to read the roll. Measured live 2026-10-28: the 46 world rogues
+    // split 21 Assassination / 8 Combat / 2 Subtlety by their talents, and every
+    // one of them held a dagger in each hand. The roll still answers for a bot
+    // with nothing spent, and breaks a tie: it is where the next points go.
+    uint32 RogueTreeIndex(Player const* bot)
     {
-        return bot->GetClass() == CLASS_ROGUE && EquipProfileIndex(bot) == 0;
+        // Every rogue talent's ranks, highest first, with the tree they sit in.
+        // Built once: the talent store is loaded before the first bot exists.
+        struct TalentRank
+        {
+            uint32 spellId;
+            uint8 tree;
+            uint8 points;
+        };
+        static std::vector<std::vector<TalentRank>> const rogueTalents = []
+        {
+            std::vector<std::vector<TalentRank>> talents;
+            for (TalentEntry const* talent : sTalentStore)
+            {
+                if (!talent)
+                    continue;
+                TalentTabEntry const* tab = sTalentTabStore.LookupEntry(talent->TabID);
+                if (!tab || !(tab->ClassMask & (1u << (CLASS_ROGUE - 1))) || tab->PetTalentMask || tab->OrderIndex > 2)
+                    continue;
+
+                std::vector<TalentRank> ranks;
+                for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
+                    if (talent->SpellRank[rank])
+                        ranks.push_back({ talent->SpellRank[rank], uint8(tab->OrderIndex), uint8(rank + 1) });
+                if (!ranks.empty())
+                    talents.push_back(std::move(ranks));
+            }
+            return talents;
+        }();
+
+        std::array<uint32, 3> points = { };
+        uint8 const spec = bot->GetActiveSpec();
+        for (std::vector<TalentRank> const& ranks : rogueTalents)
+            for (TalentRank const& rank : ranks)
+                if (bot->HasTalent(rank.spellId, spec))
+                {
+                    points[rank.tree] += rank.points;
+                    break;
+                }
+
+        uint32 tree = EquipProfileIndex(bot);
+        for (uint32 i = 0; i < points.size(); ++i)
+            if (points[i] > points[tree])
+                tree = i;
+        return tree;
     }
 
-    // Every rogue build outside Assassination swings sword, mace or fist - those
-    // are its weapon specialisation talents, and the mainhand rule further down
-    // already wants the slow, hard-hitting weapon that goes with them. Without an
-    // explicit type preference a high-stat dagger keeps winning the slot and the
-    // bot fights off-spec with it.
-    bool PrefersNonDaggerMainhand(Player const* bot)
+    // How well a weapon type suits a rogue tree, in either hand: 2 is the
+    // tree's own, 1 will do, 0 is wrong.
+    //   Assassination - daggers: Mutilate, Backstab and Ambush all need one.
+    //   Combat        - swords, maces and fist weapons, its three weapon
+    //                   specialisations. A dagger will do.
+    //   Subtlety      - swords and maces. Its builder is Hemorrhage, a weapon-
+    //                   damage strike that wants a heavy one-hander. Owner,
+    //                   2026-10-28: "sub is not a dagger spec in classic. its
+    //                   hemo. (swords/maces)". The PvP rogue AI also walks for
+    //                   Backstab whenever it holds a dagger (SelectRogueSpell),
+    //                   so a dagger turned a Subtlety bot into a Backstab one.
+    uint32 RogueWeaponFit(uint32 tree, uint32 subClass)
     {
-        return bot->GetClass() == CLASS_ROGUE && EquipProfileIndex(bot) != 0;
+        bool const dagger = subClass == ITEM_SUBCLASS_WEAPON_DAGGER;
+        bool const swordOrMace = subClass == ITEM_SUBCLASS_WEAPON_SWORD || subClass == ITEM_SUBCLASS_WEAPON_MACE;
+        bool const fist = subClass == ITEM_SUBCLASS_WEAPON_FIST;
+        switch (tree)
+        {
+            case 0:  return dagger ? 2 : 1;
+            case 1:  return swordOrMace || fist ? 2 : 1;
+            default: return swordOrMace ? 2 : (fist ? 1 : 0);
+        }
     }
 
-    bool IsSpecialisedRogueMainhand(ItemTemplate const* proto)
+    // The weapon types a rogue's tree fights with (RogueWeaponFit's 2), for
+    // the field kit. Derived from the fit rather than listed again, so the kit
+    // and the gear pass cannot drift apart.
+    std::vector<uint32> RogueTreeWeaponSubclasses(Player const* bot)
     {
-        return proto->SubClass == ITEM_SUBCLASS_WEAPON_SWORD ||
-            proto->SubClass == ITEM_SUBCLASS_WEAPON_MACE ||
-            proto->SubClass == ITEM_SUBCLASS_WEAPON_FIST;
+        uint32 const tree = RogueTreeIndex(bot);
+        std::vector<uint32> subClasses;
+        for (uint32 subClass : { uint32(ITEM_SUBCLASS_WEAPON_DAGGER), uint32(ITEM_SUBCLASS_WEAPON_SWORD),
+                                 uint32(ITEM_SUBCLASS_WEAPON_MACE), uint32(ITEM_SUBCLASS_WEAPON_FIST) })
+            if (RogueWeaponFit(tree, subClass) == 2)
+                subClasses.push_back(subClass);
+        return subClasses;
     }
+
+    // How far below the other weapon, in effective item levels, a weapon of the
+    // tree's own type may sit and still win on type alone. Past that the type
+    // rule stands aside and the ordinary comparison decides: a sword left in
+    // the bags at level 20 must not take a level 50 rogue's main hand, because
+    // the field kit never replaces gear the bot earned - it would be stuck
+    // with it until another sword came along.
+    constexpr float kRogueWeaponTypeSlack = 10.0f;
 
     // Beast Mastery hunters want two one-handers, not a two-hander. A hunter's
     // melee weapons are stat sticks it rarely swings, so the slot count is what
@@ -7756,24 +7871,27 @@ namespace
 
         if (candidate->Class == ITEM_CLASS_WEAPON && incumbent->Class == ITEM_CLASS_WEAPON)
         {
-            // On-spec weapon type dominates every other comparison for an
-            // assassination rogue's mainhand.
-            if (slot == EQUIPMENT_SLOT_MAINHAND && PrefersDaggerMainhand(bot))
+            // A rogue's weapon type is its talent tree's, in EITHER hand, and it
+            // beats every score: a high-stat dagger otherwise keeps winning and
+            // the bot fights off-spec with it. This used to cover the main hand
+            // only, so the off hand kept whatever it was first given - a dagger
+            // for all 46 world rogues measured on 2026-10-28.
+            //
+            // Unless the weapon of the right type is far behind the other
+            // (kRogueWeaponTypeSlack): then the ordinary comparison below has it.
+            if (bot->GetClass() == CLASS_ROGUE &&
+                (slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND))
             {
-                bool const candidateDagger = candidate->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER;
-                bool const incumbentDagger = incumbent->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER;
-                if (candidateDagger != incumbentDagger)
-                    return candidateDagger;
-            }
-
-            // The mirror of that rule for every other rogue build: prefer the
-            // specialised type over a dagger, whatever the dagger stats say.
-            if (slot == EQUIPMENT_SLOT_MAINHAND && PrefersNonDaggerMainhand(bot))
-            {
-                bool const candidateOnType = IsSpecialisedRogueMainhand(candidate);
-                bool const incumbentOnType = IsSpecialisedRogueMainhand(incumbent);
-                if (candidateOnType != incumbentOnType)
-                    return candidateOnType;
+                uint32 const tree = RogueTreeIndex(bot);
+                uint32 const candidateFit = RogueWeaponFit(tree, candidate->SubClass);
+                uint32 const incumbentFit = RogueWeaponFit(tree, incumbent->SubClass);
+                if (candidateFit != incumbentFit)
+                {
+                    ItemTemplate const* better = candidateFit > incumbentFit ? candidate : incumbent;
+                    ItemTemplate const* worse = better == candidate ? incumbent : candidate;
+                    if (EffectiveItemLevel(better) + kRogueWeaponTypeSlack >= EffectiveItemLevel(worse))
+                        return candidateFit > incumbentFit;
+                }
             }
 
             // Taking a two-hander forfeits a whole weapon slot, so for a dual
@@ -7816,7 +7934,7 @@ namespace
 
             // Combat and Subtlety mainhands: slow and hard-hitting beats fast,
             // because instant attacks ride the average swing.
-            if (bot->GetClass() == CLASS_ROGUE && slot == EQUIPMENT_SLOT_MAINHAND && EquipProfileIndex(bot) != 0)
+            if (bot->GetClass() == CLASS_ROGUE && slot == EQUIPMENT_SLOT_MAINHAND && RogueTreeIndex(bot) != 0)
                 return WeaponAverageHit(candidate) > WeaponAverageHit(incumbent) + 0.1f;
 
             return WeaponDps(candidate) > WeaponDps(incumbent) + 0.1f;
@@ -8003,8 +8121,9 @@ namespace
 
             if (Item* equipped = bot->GetItemByPos(dest))
             {
-                if (!IsEquipUpgrade(bot, proto, equipped->GetTemplate(), uint8(dest & 255)))
+                if (!IsEquipUpgradeForEitherHand(bot, proto, dest))
                     continue;
+                equipped = bot->GetItemByPos(dest);   // the off hand, when that is the hand it won
 
                 // A bag cannot be unequipped while it holds anything, so the
                 // better bag would otherwise sit in the pack forever, retried on
@@ -12206,10 +12325,7 @@ namespace
                     if (ShouldRedirectToOffHand(bot, proto, dest))
                         dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
 
-                    ItemTemplate const* equipped = nullptr;
-                    if (Item const* worn = bot->GetItemByPos(dest))
-                        equipped = worn->GetTemplate();
-                    if (IsEquipUpgrade(bot, proto, equipped, uint8(dest & 255)))
+                    if (IsEquipUpgradeForEitherHand(bot, proto, dest))
                         return false;
                 }
             }
@@ -13055,10 +13171,6 @@ namespace
                 if (ShouldRedirectToOffHand(bot, proto, dest))
                     dest = uint16((uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_OFFHAND);
 
-                ItemTemplate const* equippedProto = nullptr;
-                if (Item const* equipped = bot->GetItemByPos(dest))
-                    equippedProto = equipped->GetTemplate();
-
                 // Do not shop below your own weight class.
                 //
                 // auctionLevelsBehindPenalty already makes stale gear score
@@ -13077,12 +13189,18 @@ namespace
                     continue;
 
                 // Same scorer as the bag equip pass: spec-aware weapon policy,
-                // armor tier before item level.
+                // armor tier before item level. Asked of either hand, so a
+                // one-hander that loses the main hand can still be bought for
+                // the off hand - and only then is the slot it would fill known.
+                if (!IsEquipUpgradeForEitherHand(bot, proto, dest))
+                    continue;
+
                 if (slotsBought.count(uint8(dest & 255)))
                     continue;
 
-                if (!IsEquipUpgrade(bot, proto, equippedProto, uint8(dest & 255)))
-                    continue;
+                ItemTemplate const* equippedProto = nullptr;
+                if (Item const* equipped = bot->GetItemByPos(dest))
+                    equippedProto = equipped->GetTemplate();
 
                 // Do not buy a bag the bot could never put on. Replacing a bag
                 // means emptying it first, and a bot whose bags are all full has
@@ -22483,6 +22601,14 @@ namespace playerbot
     bool SpecPrefersDualWield(Player const* bot)
     {
         return bot && PrefersDualWield(bot);
+    }
+
+    // Same arrangement: a forwarder, so the kit and IsEquipUpgrade read one rule.
+    std::vector<uint32> SpecWeaponSubclasses(Player const* bot)
+    {
+        if (!bot || bot->GetClass() != CLASS_ROGUE)
+            return {};
+        return RogueTreeWeaponSubclasses(bot);
     }
 
     bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top)

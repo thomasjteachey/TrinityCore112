@@ -612,6 +612,14 @@ bool GetZoneLevelBand(uint32 zoneId, uint8& bottom, uint8& top);
 // would be silent: the kit would go on issuing shields to a spec the gear
 // scorer was busy taking them off.
 bool SpecPrefersDualWield(Player const* bot);
+
+// The weapon types (ITEM_SUBCLASS_WEAPON_*) this character's spec fights with,
+// for the field kit's hands. Today that is a rogue's talent tree: daggers for
+// Assassination, swords, maces and fist weapons for Combat, swords and maces
+// for Subtlety. Empty means any type will do - every other class. Exported for
+// SpecPrefersDualWield's reason: it is the rule the gear scorer applies, and a
+// kit with its own copy would keep issuing weapons the scorer takes back off.
+std::vector<uint32> SpecWeaponSubclasses(Player const* bot);
 }
 
 #endif

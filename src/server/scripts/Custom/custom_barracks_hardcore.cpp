@@ -1903,10 +1903,41 @@ namespace BarracksHardcore
                 offProto && offProto->Class == ITEM_CLASS_WEAPON)
                 wornOffHandWeapon = true;
 
+        // The weapon types the spec fights with, from the playerbot side so the
+        // kit and the gear scorer apply one rule: a rogue's talent tree, asked of
+        // the character whose rules these are (a copy is judged by its source).
+        // Empty for everyone else - any type will do.
+        //
+        // Without it the shape the hand last held was the whole answer, and a
+        // rogue starts life holding a dagger: it got a dagger back at every
+        // death and every level-up for the rest of its life. Measured live
+        // 2026-10-28, all 46 off hands and 30 of 46 main hands on the fleet's
+        // world rogues were kit daggers - Combat and Subtlety rogues included.
+        //
+        // Bots only. A person chose the weapon they died holding, whatever their
+        // talents say, and the kit's faithfulness to that choice is for them.
+        std::vector<uint32> const specWeaponTypes = IsPlayerbot(rules)
+            ? playerbot::SpecWeaponSubclasses(rules) : std::vector<uint32>();
+        auto const fitsSpec = [&specWeaponTypes](uint32 subClass)
+        {
+            return specWeaponTypes.empty() ||
+                std::find(specWeaponTypes.begin(), specWeaponTypes.end(), subClass) != specWeaponTypes.end();
+        };
+
         uint32 granted = 0;
 
         for (uint8 slot : kKitSlots)
         {
+            bool const handSlot = slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND;
+
+            // A kit weapon of a type the spec does not fight with - a dagger in a
+            // Subtlety rogue's hand. It is replaced like a stale piece, but only
+            // by a weapon of the right type, so it stays on until the search
+            // below finds one: a level the pool has nothing right for costs the
+            // character nothing, and the kit does not reissue the same dagger on
+            // every pass.
+            Item* wrongTypeWeapon = nullptr;
+
             if (Item* worn = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
             {
                 // A kit piece that outclasses the level the kit now dresses
@@ -1933,7 +1964,9 @@ namespace BarracksHardcore
                 bool const tooGood = wornProto->RequiredLevel > kitLevel;
                 bool const fallenBehind = int32(kitLevel) - int32(wornProto->RequiredLevel) >
                     int32(s_kitStaleLevels);
-                if (!tooGood && !fallenBehind)
+                bool const wrongType = handSlot && wornProto->Class == ITEM_CLASS_WEAPON &&
+                    !fitsSpec(wornProto->SubClass);
+                if (!tooGood && !fallenBehind && !wrongType)
                     continue;
 
                 // Retire only what could be taken off right now. The replacement
@@ -1948,7 +1981,10 @@ namespace BarracksHardcore
                 if (player->CanUnequipItem(uint16(INVENTORY_SLOT_BAG_0) << 8 | slot, false) != EQUIP_ERR_OK)
                     continue;
 
-                player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+                if (tooGood || fallenBehind)
+                    player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+                else
+                    wrongTypeWeapon = worn;   // comes off once its replacement is found
             }
 
             uint32 bestItemId = 0;
@@ -2000,6 +2036,20 @@ namespace BarracksHardcore
                 preferredSubClass = wornMainSubClass;
             }
 
+            // ...but never to a type the spec does not fight with. A rogue that
+            // died holding a dagger is no reason to hand a Subtlety rogue another
+            // one. The spec's own types are searched next (pass 1), and only then
+            // anything at all.
+            if (preferShape && !fitsSpec(preferredSubClass))
+                preferShape = false;
+            bool const preferSpecTypes = handSlot && !specWeaponTypes.empty();
+
+            // The wrong-type weapon is still in the slot while its replacement is
+            // looked for, so the search asks about THIS slot with a swap, not for
+            // a free one - with both hands full there is none.
+            uint8 const probeSlot = wrongTypeWeapon ? slot : uint8(NULL_SLOT);
+            bool const probeSwap = wrongTypeWeapon != nullptr;
+
             // Somebody who died with a weapon in each hand gets one hand back at a
             // time, never a two-hander that swallows both.
             //
@@ -2019,13 +2069,19 @@ namespace BarracksHardcore
             bool const excludeTwoHanded = (diedDualWielding || dualWieldingNow) &&
                 slot == EQUIPMENT_SLOT_MAINHAND;
 
-            for (uint8 pass = 0; pass < 2 && !bestItemId; ++pass)
+            for (uint8 pass = 0; pass < 3 && !bestItemId; ++pass)
             {
-                // Pass 0 is the shape-restricted search; pass 1 is the search
-                // this function has always done. With nothing to prefer, pass 0
-                // has no work and is skipped outright.
+                // Pass 0 is the shape-restricted search, pass 1 the spec's weapon
+                // types, pass 2 the search this function has always done. A pass
+                // with nothing to restrict to has no work and is skipped outright.
                 bool const restrictToShape = (pass == 0) && preferShape;
+                bool const restrictToSpec = (pass == 1) && preferSpecTypes;
                 if (pass == 0 && !restrictToShape)
+                    continue;
+                if (pass == 1 && !restrictToSpec)
+                    continue;
+                // A wrong-type weapon is only ever replaced by a right-type one.
+                if (pass == 2 && wrongTypeWeapon)
                     continue;
 
             for (uint32 invType : InventoryTypesForSlot(slot, player))
@@ -2107,6 +2163,9 @@ namespace BarracksHardcore
                         if (restrictToShape &&
                             (proto->Class != ITEM_CLASS_WEAPON || proto->SubClass != preferredSubClass))
                             continue;
+                        if (restrictToSpec &&
+                            (proto->Class != ITEM_CLASS_WEAPON || !fitsSpec(proto->SubClass)))
+                            continue;
 
                         if (player->CanUseItem(proto) != EQUIP_ERR_OK)
                             continue;
@@ -2124,7 +2183,7 @@ namespace BarracksHardcore
 
                         // The authority on whether this can actually be worn.
                         uint16 equipDest = 0;
-                        if (player->CanEquipNewItem(NULL_SLOT, equipDest, itemId, false) != EQUIP_ERR_OK)
+                        if (player->CanEquipNewItem(probeSlot, equipDest, itemId, probeSwap) != EQUIP_ERR_OK)
                             continue;
 
                         // Closest to the wearer's own level, then the better item.
@@ -2151,8 +2210,17 @@ namespace BarracksHardcore
             if (!bestItemId)
                 continue;
 
+            // Its replacement is in hand: now the wrong-type weapon comes off, and
+            // the new one goes into the slot it leaves.
+            if (wrongTypeWeapon)
+            {
+                TC_LOG_INFO("playerbots.hardcore", "{}: field kit {} is the wrong weapon type for the spec; replacing it.",
+                    rules->GetName(), wrongTypeWeapon->GetTemplate()->Name1);
+                player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+            }
+
             uint16 equipDest = 0;
-            if (player->CanEquipNewItem(NULL_SLOT, equipDest, bestItemId, false) != EQUIP_ERR_OK)
+            if (player->CanEquipNewItem(probeSlot, equipDest, bestItemId, false) != EQUIP_ERR_OK)
                 continue;
             if (player->EquipNewItem(equipDest, bestItemId, true))
                 ++granted;
