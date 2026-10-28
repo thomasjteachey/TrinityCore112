@@ -76,7 +76,7 @@ constexpr uint32 PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY = 5;
 constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
 constexpr uint32 FORCED_DEATH_STARFIRE_SPELL_ID = 48465;
 // One person in Stranglethorn is enough: IsPlayerEligible already leaves out
-// bots and anyone who switched the chest off.
+// bots and anyone with the chest off (every world character until it opts in).
 constexpr uint32 REQUIRED_PLAYER_COUNT = 1;
 constexpr Seconds CHEST_DESPAWN_TIME = 5min;
 
@@ -159,8 +159,9 @@ bool IsPlayerEligible(Player* player)
     if (IsWithoutAPlayer(player))
         return false;
 
-    // Opted out on the Battlegrounds tab: not counted, not a summoner.
-    if (player->HasGurubashiChestOptOut())
+    // Chest off on the Battlegrounds tab: not counted, not a summoner. World
+    // characters start with it off and opt in; tournament characters start on.
+    if (!player->WantsGurubashiChest())
         return false;
 
     if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
@@ -467,9 +468,10 @@ void TeleportStranglethornPlayersToBattleRing()
             if (BarracksHardcore::IsPlayerbot(player) || IsWithoutAPlayer(player))
                 continue;
 
-            // Nor anyone who switched the chest off on the Battlegrounds tab -
-            // a character levelling in Stranglethorn can keep levelling.
-            if (player->HasGurubashiChestOptOut())
+            // Nor anyone with the chest off on the Battlegrounds tab (every
+            // world character until it opts in) - a character levelling in
+            // Stranglethorn can keep levelling.
+            if (!player->WantsGurubashiChest())
                 continue;
 
             if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID || player->GetZoneId() != STRANGLETHORN_VALE_ZONE_ID)

@@ -482,13 +482,15 @@ enum PlayerExtraFlags
     // Character services markers
     PLAYER_EXTRA_HAS_RACE_CHANGED           = 0x0200,
     PLAYER_EXTRA_GRANTED_LEVELS_FROM_RAF    = 0x0400,
-    PLAYER_EXTRA_LEVEL_BOOSTED              = 0x0800,       // reserved for master branch
 
     // CENTURION character modes, see Miscellaneous/TournamentMode.h. Unlike the
     // markers above, these survive a load (Player::LoadFromDB restores them).
+    // extra_flags is a smallint and every bit is taken, so the chest opt-in
+    // reuses master's PLAYER_EXTRA_LEVEL_BOOSTED (0x0800), never set on 3.3.5.
+    PLAYER_EXTRA_GURUBASHI_CHEST_OPT_IN     = 0x0800,       // world character opted into the hourly Gurubashi chest (off by default)
     PLAYER_EXTRA_TOURNAMENT_MODE            = 0x1000,       // created as a tournament (Legionnaire+) character
     PLAYER_EXTRA_TOURNAMENT_QUEUE           = 0x2000,       // world character opted into the tournament battleground queue
-    PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT    = 0x4000,       // not counted for, nor pulled into the ring by, the hourly Gurubashi chest
+    PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT    = 0x4000,       // tournament character opted out of the hourly Gurubashi chest (on by default); ignored for world characters
     PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT     = 0x8000,       // no clone-filled arena skirmish is ever started for this character's queue
 };
 
@@ -1084,16 +1086,34 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SetHasRaceChanged() { m_ExtraFlags |= PLAYER_EXTRA_HAS_RACE_CHANGED; }
         bool HasBeenGrantedLevelsFromRaF() const { return (m_ExtraFlags & PLAYER_EXTRA_GRANTED_LEVELS_FROM_RAF) != 0; }
         void SetBeenGrantedLevelsFromRaF() { m_ExtraFlags |= PLAYER_EXTRA_GRANTED_LEVELS_FROM_RAF; }
-        bool HasLevelBoosted() const { return (m_ExtraFlags & PLAYER_EXTRA_LEVEL_BOOSTED) != 0; }
-        void SetHasLevelBoosted() { m_ExtraFlags |= PLAYER_EXTRA_LEVEL_BOOSTED; }
         // Raw flags only. Ask Tournament::IsTournamentCharacter, which also
         // honours Centurion.Tournament.Enable.
         bool HasTournamentModeFlag() const { return (m_ExtraFlags & PLAYER_EXTRA_TOURNAMENT_MODE) != 0; }
         void SetTournamentModeFlag(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_TOURNAMENT_MODE; else m_ExtraFlags &= ~PLAYER_EXTRA_TOURNAMENT_MODE; }
         bool HasTournamentQueueFlag() const { return (m_ExtraFlags & PLAYER_EXTRA_TOURNAMENT_QUEUE) != 0; }
         void SetTournamentQueueFlag(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_TOURNAMENT_QUEUE; else m_ExtraFlags &= ~PLAYER_EXTRA_TOURNAMENT_QUEUE; }
-        bool HasGurubashiChestOptOut() const { return (m_ExtraFlags & PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT) != 0; }
-        void SetGurubashiChestOptOut(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT; else m_ExtraFlags &= ~PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT; }
+        // The hourly Gurubashi chest (Battlegrounds-tab toggle): whether it counts
+        // this character and pulls it into the Battle Ring. Tournament characters
+        // are in unless they opted out; world characters are out unless they
+        // opted in. Each mode keeps its own bit, so switching mode lands on that
+        // mode's own choice.
+        bool WantsGurubashiChest() const
+        {
+            if (HasTournamentModeFlag())
+                return (m_ExtraFlags & PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT) == 0;
+            return (m_ExtraFlags & PLAYER_EXTRA_GURUBASHI_CHEST_OPT_IN) != 0;
+        }
+        void SetWantsGurubashiChest(bool on)
+        {
+            if (HasTournamentModeFlag())
+            {
+                if (on) m_ExtraFlags &= ~PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT; else m_ExtraFlags |= PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT;
+            }
+            else
+            {
+                if (on) m_ExtraFlags |= PLAYER_EXTRA_GURUBASHI_CHEST_OPT_IN; else m_ExtraFlags &= ~PLAYER_EXTRA_GURUBASHI_CHEST_OPT_IN;
+            }
+        }
         bool HasArenaBotFillOptOut() const { return (m_ExtraFlags & PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT) != 0; }
         void SetArenaBotFillOptOut(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT; else m_ExtraFlags &= ~PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT; }
 

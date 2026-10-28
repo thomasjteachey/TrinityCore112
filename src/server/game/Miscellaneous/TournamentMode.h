@@ -115,7 +115,8 @@ namespace Tournament
     // is what the tooltip reads. Its own line so that a client that predates it
     // keeps matching the TQUEUE line whole. "CCGAMEREQ\tGURUCHEST[:0|1]"
     // is answered "CCGAME\tGURUCHEST:<on>": whether the hourly Gurubashi chest
-    // counts the character and pulls it into the Battle Ring (every realm).
+    // counts the character and pulls it into the Battle Ring (every realm; off
+    // by default for world characters, on for tournament characters).
     // "CCGAMEREQ\tARENABOTS[:0|1]" is answered "CCGAME\tARENABOTS:<on>": whether
     // an unrated arena queue this character is waiting in may be popped as a
     // clone-filled skirmish. A realm that does not fill skirmishes answers

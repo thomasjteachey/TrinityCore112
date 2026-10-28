@@ -20030,7 +20030,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     // character back into a world one. Restored this early so the home bind,
     // OnPlayerBeforeMapLoad, map entry and the first zone update all see them.
     m_ExtraFlags |= fields[36].GetUInt16() & (PLAYER_EXTRA_TOURNAMENT_MODE | PLAYER_EXTRA_TOURNAMENT_QUEUE |
-        PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT | PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT);
+        PLAYER_EXTRA_GURUBASHI_CHEST_OPT_OUT | PLAYER_EXTRA_GURUBASHI_CHEST_OPT_IN | PLAYER_EXTRA_ARENA_BOT_FILL_OPT_OUT);
 
     // And in the tournament phase before the map is entered, so the first
     // visibility update already shows the tournament NPCs.

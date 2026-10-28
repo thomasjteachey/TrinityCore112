@@ -657,7 +657,7 @@ void SendGurubashiChestState(Player* player)
     if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
         return;
 
-    SendAddonLine(player, Trinity::StringFormat("CCGAME\tGURUCHEST:{}", player->HasGurubashiChestOptOut() ? 0 : 1));
+    SendAddonLine(player, Trinity::StringFormat("CCGAME\tGURUCHEST:{}", player->WantsGurubashiChest() ? 1 : 0));
 }
 
 void SendArenaBotFillState(Player* player)
@@ -715,14 +715,15 @@ bool HandleAddonRequest(Player* sender, uint32 lang, std::string const& msg)
     }
 
     // The Gurubashi chest toggle (Battlegrounds tab): whether the hourly chest
-    // counts this character and pulls it into the Battle Ring. Realm-agnostic -
-    // every realm on the branch runs the chest.
+    // counts this character and pulls it into the Battle Ring - off until a
+    // world character ticks it, on until a tournament character unticks it.
+    // Realm-agnostic - every realm on the branch runs the chest.
     static constexpr std::string_view ChestRequest = "CCGAMEREQ\tGURUCHEST";
     if (StringStartsWith(msg, ChestRequest))
     {
         std::string_view const argument = std::string_view(msg).substr(ChestRequest.size());
         if (argument == ":1" || argument == ":0")
-            sender->SetGurubashiChestOptOut(argument == ":0");
+            sender->SetWantsGurubashiChest(argument == ":1");
 
         SendGurubashiChestState(sender);
         return true;
