@@ -35,6 +35,7 @@
 #include "Player.h"
 #include "QueryHolder.h"
 #include "QuestDef.h"
+#include "Random.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -1953,6 +1954,10 @@ void ForgetLineup(uint32 accountId, ObjectGuid::LowType playing)
 Lineup BuildBotLineup(uint8 playingClass)
 {
     Lineup lineup = BuildLineup(playingClass, {});
+    // Its own class first - life one is the bot itself - then the other eight
+    // in a random order (owner: "order of bot lives should be random").
+    if (lineup.size() > 2)
+        std::shuffle(lineup.begin() + 1, lineup.end(), RandomEngine::Instance());
     for (LineupEntry const& entry : lineup)
         if (entry.Source)
             RequestKit(entry.Source);

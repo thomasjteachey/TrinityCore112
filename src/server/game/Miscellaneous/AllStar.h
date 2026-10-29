@@ -129,7 +129,7 @@ namespace AllStar
     // false while the answer is on its way.
     bool FindLineup(uint32 accountId, ObjectGuid::LowType playing, Lineup& out);
     void ForgetLineup(uint32 accountId, ObjectGuid::LowType playing);
-    // A bot's: its own class, then the templates in class order.
+    // A bot's: its own class, then the templates in a random order.
     Lineup BuildBotLineup(uint8 playingClass);
 
     // World::Update: hands finished loads to the waiting matches.
