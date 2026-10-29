@@ -292,7 +292,11 @@ float constexpr SRF_FOUNTAIN_FACING[PVP_TEAMS_COUNT] = { 5.4978f, 2.3562f };
 
 // A turret reaches 33.75 yards (League's 750 units would be 16.9 here; owner,
 // 2026-10-20: "at least 50 yards", 45 from 2026-10-22, then 2026-10-27: "reduce
-// tower range by 25%"). A hunter's 35 now just outranges it. Yards, not League
+// tower range by 25%"). A champion's spell range to a turret counts both sizes
+// (the turret's 3.9 combat reach, a player's 1.5): Auto Shot under Summoner's
+// Focus's -35% reaches 22.75 + 5.4 to the turret's centre, with Hawk Eye 3/3
+// (35 + 6) x 0.65 + 5.4 = 32.1 - still inside it (owner, 2026-10-29: 35% so
+// Hawk Eye no longer outranges a turret; at 30% it was 34.1). Yards, not League
 // units: it does not follow the map's scale (owner, 2026-10-25). Both shot spells
 // carry it: Ice Lance 43427 is unlimited, Fireball 22088 100 yards. Measured
 // centre to centre (GetExactDist2d), so the turret's own size does not change it.
@@ -314,7 +318,7 @@ uint32 constexpr SRF_BRUSH_PROJECT_MS   = 500;      // a running client's heartb
 uint32 constexpr SRF_SPELL_BRUSH        = 94142;
 // Centurion spell 94153 "Summoner's Focus": every champion's match aura, +5% hit
 // and +3% spell hit, a buff anyone can see. Its third effect shortens the
-// champion's ranged class spells by its amount, 25% (spell_rift_focus,
+// champion's ranged class spells by its amount, 35% (spell_rift_focus,
 // RiftProgression::RangeMod); the number lives in Spell.dbc.
 uint32 constexpr SRF_SPELL_FOCUS        = 94153;
 uint32 constexpr SRF_ITEM_SYNC_MS       = 500;
