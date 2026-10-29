@@ -500,6 +500,11 @@ bool Arena::IsSquadInMatch(uint8 squad) const
 
 void Arena::UpdateArenaWorldState()
 {
+    // A replay's readout is the recorded match's (BGReplay.cpp plays it), not
+    // this empty arena's.
+    if (IsReplay())
+        return;
+
     if (IsSquadMatch())
     {
         UpdateSquadWorldStates();

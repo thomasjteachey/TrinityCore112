@@ -1095,6 +1095,14 @@ void WorldSession::HandleRequestPartyMemberStatsOpcode(WorldPacket &recvData)
     Player* player = ObjectAccessor::FindConnectedPlayer(Guid);
     if (!player)
     {
+        // "Offline" only for a member of the asker's own group. A party list
+        // the server drew for something else - a replay's spectate view
+        // (BGReplay.cpp) lists the watched player's teammates, who are not on
+        // the server - would otherwise grey them all out.
+        Group const* group = GetPlayer()->GetGroup();
+        if (!group || !group->IsMember(Guid))
+            return;
+
         WorldPacket data(SMSG_PARTY_MEMBER_STATS_FULL, 3+4+2);
         data << uint8(0);                                   // only for SMSG_PARTY_MEMBER_STATS_FULL, probably arena/bg related
         data << Guid.WriteAsPacked();

@@ -38,6 +38,7 @@
 #include "DatabaseEnv.h"
 #include "GameEventMgr.h"
 #include "GameTime.h"
+#include "Group.h"
 #include "Miscellaneous/AddonRequestRoutes.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
@@ -45,6 +46,7 @@
 #include "Log.h"
 #include "Miscellaneous/AllStar.h"
 #include "Miscellaneous/BorrowedActionBars.h"
+#include "MoveSplineFlag.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -58,6 +60,7 @@
 #include "Timer.h"
 #include "UpdateFields.h"
 #include "WorldSession.h"
+#include "WorldStatePackets.h"
 
 #include <algorithm>
 #include <cmath>
@@ -113,6 +116,7 @@ namespace
         SMSG_NOTIFICATION,
         SMSG_AURA_UPDATE,
         SMSG_WORLD_STATE_UI_TIMER_UPDATE,
+        SMSG_UPDATE_WORLD_STATE,                // the readout's counters (alive, lives, squads)
         SMSG_COMPRESSED_UPDATE_OBJECT,
         SMSG_AURA_UPDATE_ALL,
         SMSG_NAME_QUERY_RESPONSE,
@@ -247,6 +251,12 @@ namespace
         std::vector<ReplayBarSnapshot> BarSnapshots;
         std::vector<ReplayCooldownEvent> CooldownEvents;
 
+        // From the saved row, not the blob: the scoreboard's team names and
+        // which side won (winnerPlayerGuids).
+        std::string WinnerTeamName;
+        std::string LoserTeamName;
+        std::unordered_set<uint64> WinnerGuids;
+
         // Not serialized. Recording-only state.
         //
         // Sticky because transient arena-fill clones can be removed before the
@@ -261,6 +271,7 @@ namespace
         // Recording-only: the last roster/bar/cooldown state each participant
         // was recorded with (ScanRecordingParticipants).
         uint32 LastScanMs = 0;
+        bool WorldStatesSnapshotted = false;   // the arena's world states, recorded as the gates opened
         std::unordered_map<uint64, ReplayRosterEvent> LastRoster;
         std::unordered_map<uint64, uint64> LastBarHash;
         std::unordered_map<uint64, std::vector<ReplayBarButton>> LastBars;
@@ -315,6 +326,40 @@ namespace
         uint64 SpectatedOriginal = 0;
         std::unordered_set<uint32> SpectateLearned;     // spells the viewer's client was taught for it
         std::unordered_set<uint32> SpectateCooldowns;   // spells the viewer's client was given a cooldown on
+
+        // Where each participant last was, by original guid, from the replayed
+        // create blocks and movement: a spectate ended by moving puts the
+        // viewer there.
+        std::unordered_map<uint64, Position> ActorPositions;
+
+        // The world-state readout. A replay saved with its world states plays
+        // them; an older one gets the alive counts rebuilt from the actors'
+        // health (by original guid), sent when they change.
+        bool HasRecordedWorldStates = false;
+        std::unordered_map<uint64, bool> ActorAlive;
+        std::unordered_map<uint32, uint32> SentWorldStates;
+
+        // The scoreboard as playback stands, tallied from the replayed combat
+        // log the way the arena scores (Unit::DealDamage / DealHeal): damage
+        // dealt and healing that landed, a pet's for its owner, and the
+        // killing blow to whoever hit the dying player last. By original guid.
+        struct ScoreLine
+        {
+            uint32 KillingBlows = 0;
+            uint32 DamageDone = 0;
+            uint32 HealingDone = 0;
+        };
+        std::unordered_map<uint64, ScoreLine> Scores;
+        std::unordered_map<uint64, uint64> LastDamager;   // victim -> attacker
+        std::unordered_map<uint64, uint64> PetOwners;     // pet guid as replayed -> owner
+
+        // Spectating: the viewer's client is told it is in the watched
+        // player's party (SMSG_GROUP_LIST of their teammates' fake guids), so
+        // the default party frames show them. What was last sent, to resend
+        // only when a round or a life changes it.
+        bool PartyShown = false;
+        uint32 PartyCounter = 0;
+        std::vector<uint64> PartySent;
     };
 
     // Real arena records by BG instance id. Packets are recorded from every map
@@ -330,9 +375,16 @@ namespace
 
     // Spectate requests from the viewer's addon (ASSUN SPECTATE), which arrive
     // on the network thread; the viewer's map thread acts on them in
-    // UpdatePlaybackForViewer. Viewer low guid -> fake actor guid, 0 = stop.
+    // UpdatePlaybackForViewer. Viewer low guid -> fake actor guid, 0 = stop,
+    // SPECTATE_REQUEST_LAND = stop because the viewer moved: they land where
+    // the spectated player stands.
     std::mutex SpectateRequestLock;
     std::unordered_map<uint32, uint64> SpectateRequests;
+    constexpr uint64 SPECTATE_REQUEST_LAND = 1;   // never a fake guid (those start at 0xF0000000)
+
+    // Viewers whose client asked for the scoreboard (MSG_PVP_LOG_DATA, which the
+    // arena itself never answers mid-match), under SpectateRequestLock.
+    std::unordered_set<uint32> ScoreRequests;
 
 
     uint64 ReplayUnixMilliseconds()
@@ -1070,6 +1122,24 @@ namespace
             return;   // never saved; do not spend the scan on it
 
         uint32 const timestamp = ReplayRecordClock(bg, record, nowMs);
+
+        // The world states the arena opened with: SMSG_INIT_WORLD_STATES
+        // reached everyone as they zoned in, before anything was recorded, so
+        // the replay would otherwise start from the replay arena's own (no one
+        // alive, no squads). Later changes record as SMSG_UPDATE_WORLD_STATE.
+        if (!record.WorldStatesSnapshotted && bg->GetStatus() == STATUS_IN_PROGRESS)
+        {
+            record.WorldStatesSnapshotted = true;
+            WorldPackets::WorldState::InitWorldStates initial;
+            bg->FillInitialWorldStates(initial);
+            for (auto const& state : initial.Worldstates)
+            {
+                WorldPackets::WorldState::UpdateWorldState update;
+                update.VariableID = state.VariableID;
+                update.Value = state.Value;
+                record.Packets.push_back({ timestamp, *update.Write() });
+            }
+        }
 
         for (auto const& [guid, participant] : bg->GetPlayers())
         {
@@ -3783,6 +3853,8 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
     // Buffle Shuffle round, the next character of an All-Star life. The
     // actor row changes (name colours, later frames read it) and the frames
     // and the client's name cache are told.
+    void SendSpectateParty(Player* viewer, PlaybackState& state);
+
     void ApplyReplayRosterEvent(Player* viewer, PlaybackState& state, ReplayRosterEvent const& event)
     {
         ReplayActor* actor = FindMutableReplayActorByOriginal(state.Match, event.Guid);
@@ -3820,6 +3892,12 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             SendReplayASCommand(viewer, uiGuid, "SQD", uint32(actor->Squad));
             SendReplayASCommand(viewer, uiGuid, "TEM", actor->Team ? actor->Team : uint32(ALLIANCE));
             SendReplayGreenNameValueUpdate(viewer, *actor);
+        }
+
+        if (state.SpectatedOriginal && (sideChanged || identityChanged))
+        {
+            state.PartySent.clear();                        // a new name goes out too
+            SendSpectateParty(viewer, state);
         }
 
         TC_LOG_DEBUG("arena.replay", "Replay roster event viewer={} fake={} name='{}' class={} team={} squad={} ts={}",
@@ -3967,10 +4045,110 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         state.SpectateCooldowns.clear();
     }
 
+    // The watched player's party, on the viewer's party frames: their
+    // teammates (their squad in a squad match), as Group::SendUpdateToPlayer
+    // lays a list out. The units are the replay's fake actors, in the
+    // viewer's world already, so the frames read their health, power and auras
+    // themselves. More than four make it a raid, the first four in the
+    // viewer's subgroup.
+    ObjectGuid ReplayPartyGuid(Player const* viewer)
+    {
+        return ObjectGuid(HighGuid::Group, 0xFFF00000u | (viewer->GetGUID().GetCounter() & 0x000FFFFFu));
+    }
+
+    void ClearSpectateParty(Player* viewer, PlaybackState& state);
+
+    void SendSpectateParty(Player* viewer, PlaybackState& state)
+    {
+        ReplayActor const* watched = state.SpectatedOriginal
+            ? FindReplayActorByOriginalGuid(state.Match, ObjectGuid(state.SpectatedOriginal)) : nullptr;
+        if (!watched)
+            return;
+
+        std::vector<ReplayActor const*> mates;
+        for (ReplayActor const& actor : state.Match.Actors)
+        {
+            if (&actor == watched)
+                continue;
+            bool const same = watched->Squad != BATTLEGROUND_NO_SQUAD ? actor.Squad == watched->Squad : actor.Team == watched->Team;
+            if (same)
+                mates.push_back(&actor);
+        }
+
+        std::vector<uint64> sent;
+        for (ReplayActor const* mate : mates)
+            sent.push_back(mate->FakeGuid.GetRawValue());
+        sent.push_back(watched->FakeGuid.GetRawValue());
+        if (state.PartyShown && sent == state.PartySent)
+            return;
+
+        if (mates.empty())
+        {
+            ClearSpectateParty(viewer, state);
+            state.PartySent = sent;
+            return;
+        }
+
+        constexpr uint8 REPLAY_GROUPTYPE_NORMAL = 0x00;
+        constexpr uint8 REPLAY_GROUPTYPE_RAID = 0x02;
+        constexpr uint8 REPLAY_MEMBER_STATUS_ONLINE = 0x01;
+        bool const raid = mates.size() > 4;
+
+        WorldPacket data(SMSG_GROUP_LIST, 4 + 8 + 4 + 4 + mates.size() * 30 + 8 + 13);
+        data << uint8(raid ? REPLAY_GROUPTYPE_RAID : REPLAY_GROUPTYPE_NORMAL);
+        data << uint8(0);                                   // the viewer's subgroup
+        data << uint8(0);                                   // flags
+        data << uint8(0);                                   // roles
+        data << uint64(ReplayPartyGuid(viewer).GetRawValue());
+        data << uint32(++state.PartyCounter);
+        data << uint32(mates.size());
+        for (size_t i = 0; i < mates.size(); ++i)
+        {
+            data << (mates[i]->Name.empty() ? std::string("Replay") : mates[i]->Name);
+            data << uint64(mates[i]->FakeGuid.GetRawValue());
+            data << uint8(REPLAY_MEMBER_STATUS_ONLINE);
+            data << uint8(raid ? (i + 1) / 5 : 0);           // the viewer and the first four in group 1
+            data << uint8(0);                               // flags
+            data << uint8(0);                               // roles
+        }
+        data << uint64(watched->FakeGuid.GetRawValue());    // leader: the watched player, no one's crown
+        data << uint8(0);                                   // loot: free for all
+        data << uint64(0);
+        data << uint8(2);                                   // threshold: uncommon
+        data << uint8(0) << uint8(0) << uint8(0);           // dungeon / raid difficulty, dynamic
+        viewer->SendDirectMessage(&data);
+
+        state.PartyShown = true;
+        state.PartySent = std::move(sent);
+    }
+
+    // The viewer's real party back (or none), as Group::RemoveMember empties it.
+    void ClearSpectateParty(Player* viewer, PlaybackState& state)
+    {
+        state.PartySent.clear();
+        if (!state.PartyShown)
+            return;
+        state.PartyShown = false;
+
+        if (Group* group = viewer->GetGroup())
+        {
+            group->SendUpdateToPlayer(viewer->GetGUID());
+            return;
+        }
+
+        WorldPacket data(SMSG_GROUP_LIST, 1 + 1 + 1 + 1 + 8 + 4 + 4 + 8);
+        data << uint8(0x10) << uint8(0) << uint8(0) << uint8(0);
+        data << uint64(ReplayPartyGuid(viewer).GetRawValue()) << uint32(++state.PartyCounter) << uint32(0) << uint64(0);
+        viewer->SendDirectMessage(&data);
+    }
+
     // The viewer's own bars and spellbook back. Safe to call when nothing is
     // borrowed.
     void StopSpectateBars(Player* viewer, PlaybackState& state)
     {
+        if (viewer && viewer->GetSession())
+            ClearSpectateParty(viewer, state);
+
         bool const borrowed = state.SpectatedOriginal || !state.SpectateLearned.empty() || !state.SpectateCooldowns.empty();
         state.SpectatedOriginal = 0;
         if (!borrowed || !viewer || !viewer->GetSession())
@@ -4012,6 +4190,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         state.SpectatedOriginal = original;
 
         SendSpectateBars(viewer, state);
+        SendSpectateParty(viewer, state);
 
         uint32 const nowMs = getMSTime();
         if (auto itr = state.ActorCooldownEnds.find(original); itr != state.ActorCooldownEnds.end())
@@ -4021,6 +4200,25 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
 
         TC_LOG_DEBUG("arena.replay", "Replay spectate viewer={} actor='{}' learned={}",
             viewer->GetGUID().GetCounter(), actor->Name, uint32(state.SpectateLearned.size()));
+    }
+
+    // A spectate ended by moving: the viewer steps out of the player they were
+    // watching, so they start from where that player stands, facing their way.
+    void LandViewerOnActor(Player* viewer, PlaybackState const& state, uint64 original)
+    {
+        if (!original || viewer->GetMapId() != state.Match.MapId || viewer->IsBeingTeleported())
+            return;
+
+        auto const itr = state.ActorPositions.find(original);
+        if (itr == state.ActorPositions.end())
+            return;
+
+        Position const& at = itr->second;
+        if (!at.IsPositionValid() || viewer->GetExactDist(&at) > 500.0f)
+            return;
+
+        viewer->NearTeleportTo(at.GetPositionX(), at.GetPositionY(), at.GetPositionZ(), at.GetOrientation());
+        TC_LOG_DEBUG("arena.replay", "Replay spectate landed viewer={} at {}", viewer->GetGUID().GetCounter(), at.ToString());
     }
 
     // The addon's request, if one came in since the last update.
@@ -4036,7 +4234,13 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             SpectateRequests.erase(itr);
         }
 
-        if (request)
+        if (request == SPECTATE_REQUEST_LAND)
+        {
+            uint64 const spectated = state.SpectatedOriginal;
+            StopSpectateBars(viewer, state);
+            LandViewerOnActor(viewer, state, spectated);
+        }
+        else if (request)
             StartSpectateBars(viewer, state, request);
         else
             StopSpectateBars(viewer, state);
@@ -4222,6 +4426,8 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         return powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER ? value / 10 : value;
     }
 
+    void NoteReplayDeath(PlaybackState& state, uint64 victim);
+
     void SendReplayASPlayerStatusFromValues(Player* viewer, PlaybackState& state, ObjectGuid objectGuid, std::unordered_map<uint32, uint32> const& values)
     {
         MatchRecord const& match = state.Match;
@@ -4239,6 +4445,14 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
 
         if (ReplayASGetField(values, REPLAY_UNIT_FIELD_HEALTH, health))
         {
+            uint64 const original = actor->OriginalGuid.GetRawValue();
+            auto const [alive, first] = state.ActorAlive.try_emplace(original, health > 0);
+            if (!first)
+            {
+                if (alive->second && !health)
+                    NoteReplayDeath(state, original);
+                alive->second = health > 0;
+            }
             SendReplayASCommand(viewer, uiGuid, "CHP", health);
             SendReplayASCommand(viewer, uiGuid, "STA", health > 0 ? 1u : 0u);
         }
@@ -4355,6 +4569,407 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         SendReplayASCommand(viewer, owner->FakeGuid, "PHP", pct);
     }
 
+    bool ReadReplayFloat(std::vector<uint8> const& payload, size_t& pos, float& value)
+    {
+        uint32 bits = 0;
+        if (!ReadUInt32(payload, pos, bits))
+            return false;
+        std::memcpy(&value, &bits, sizeof(value));
+        return std::isfinite(value);
+    }
+
+    bool ReadReplayXYZ(std::vector<uint8> const& payload, size_t& pos, Position& at)
+    {
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        if (!ReadReplayFloat(payload, pos, x) || !ReadReplayFloat(payload, pos, y) || !ReadReplayFloat(payload, pos, z))
+            return false;
+        at.Relocate(x, y, z);
+        return true;
+    }
+
+    void NoteReplayActorPosition(PlaybackState& state, ObjectGuid guid, Position const& at)
+    {
+        if (!at.IsPositionValid())
+            return;
+        if (ReplayActor const* actor = FindReplayActorByGuid(state.Match, guid))
+            state.ActorPositions[actor->OriginalGuid.GetRawValue()] = at;
+    }
+
+    // A create / movement block's position (Object::BuildMovementUpdate): read
+    // at the block's update flags, without moving pos.
+    void NoteReplayActorCreatePosition(PlaybackState& state, std::vector<uint8> const& payload, size_t pos, ObjectGuid blockGuid)
+    {
+        if (!FindReplayActorByGuid(state.Match, blockGuid))
+            return;
+
+        constexpr uint16 REPLAY_UPDATEFLAG_LIVING = 0x0020;
+        uint16 flags = 0;
+        if (!ReadUInt16(payload, pos, flags) || !(flags & REPLAY_UPDATEFLAG_LIVING))
+            return;
+
+        // movement flags, extra movement flags, time, then x/y/z/o
+        if (!HasRemaining(payload, pos, 4 + 2 + 4))
+            return;
+        pos += 4 + 2 + 4;
+
+        Position at;
+        float o = 0.0f;
+        if (!ReadReplayXYZ(payload, pos, at) || !ReadReplayFloat(payload, pos, o))
+            return;
+        at.SetOrientation(o);
+        NoteReplayActorPosition(state, blockGuid, at);
+    }
+
+    // A participant's movement as it plays: MSG_MOVE_* carry the mover's
+    // MovementInfo, SMSG_MONSTER_MOVE (a charge, a leap) the spline's end.
+    void TrackReplayActorPosition(PlaybackState& state, WorldPacket const& packet)
+    {
+        uint16 const opcode = packet.GetOpcode();
+        if (!IsMovementLikeOpcode(opcode) && opcode != MSG_MOVE_TELEPORT && opcode != MSG_MOVE_KNOCK_BACK)
+            return;
+        if (opcode == SMSG_FORCE_RUN_SPEED_CHANGE || opcode == SMSG_FORCE_FLIGHT_SPEED_CHANGE || opcode == SMSG_FORCE_SWIM_SPEED_CHANGE)
+            return;
+
+        std::vector<uint8> payload(packet.size());
+        if (!payload.empty())
+            std::memcpy(payload.data(), packet.contents(), payload.size());
+
+        size_t pos = 0;
+        ObjectGuid mover;
+        if (!ReadPackedGuid(payload, pos, mover) || !FindReplayActorByGuid(state.Match, mover))
+            return;
+
+        Position at;
+        if (opcode != SMSG_MONSTER_MOVE)
+        {
+            // movement flags, extra movement flags, time, then x/y/z/o
+            if (!HasRemaining(payload, pos, 4 + 2 + 4))
+                return;
+            pos += 4 + 2 + 4;
+            float o = 0.0f;
+            if (!ReadReplayXYZ(payload, pos, at) || !ReadReplayFloat(payload, pos, o))
+                return;
+            at.SetOrientation(o);
+            NoteReplayActorPosition(state, mover, at);
+            return;
+        }
+
+        // Movement::PacketBuilder::WriteMonsterMove: a byte, the start, the
+        // spline id, the facing type and its data, the flags, the optional
+        // animation and parabolic parts, the duration, then the path, whose
+        // last point (linear: the first one written) is where it ends.
+        uint8 unused = 0;
+        uint32 splineId = 0;
+        uint8 type = 0;
+        if (!ReadUInt8(payload, pos, unused) || !ReadReplayXYZ(payload, pos, at)
+            || !ReadUInt32(payload, pos, splineId) || !ReadUInt8(payload, pos, type))
+            return;
+
+        float facing = 0.0f;
+        bool hasFacing = false;
+        Position facingSpot;
+        bool hasFacingSpot = false;
+        switch (type)
+        {
+            case 1:                                     // stop: it is where the start says
+            {
+                if (auto const known = state.ActorPositions.find(FindReplayActorByGuid(state.Match, mover)->OriginalGuid.GetRawValue());
+                    known != state.ActorPositions.end())
+                    at.SetOrientation(known->second.GetOrientation());
+                NoteReplayActorPosition(state, mover, at);
+                return;
+            }
+            case 2:                                     // facing a spot
+                if (!ReadReplayXYZ(payload, pos, facingSpot))
+                    return;
+                hasFacingSpot = true;
+                break;
+            case 3:                                     // facing a target
+                if (!HasRemaining(payload, pos, 8))
+                    return;
+                pos += 8;
+                break;
+            case 4:                                     // facing an angle
+                if (!ReadReplayFloat(payload, pos, facing))
+                    return;
+                hasFacing = true;
+                break;
+            default:
+                break;
+        }
+
+        uint32 splineFlags = 0;
+        if (!ReadUInt32(payload, pos, splineFlags))
+            return;
+        if (splineFlags & Movement::MoveSplineFlag::Animation)
+        {
+            if (!HasRemaining(payload, pos, 1 + 4))
+                return;
+            pos += 1 + 4;
+        }
+        if (!HasRemaining(payload, pos, 4))             // duration
+            return;
+        pos += 4;
+        if (splineFlags & Movement::MoveSplineFlag::Parabolic)
+        {
+            if (!HasRemaining(payload, pos, 4 + 4))
+                return;
+            pos += 4 + 4;
+        }
+
+        uint32 count = 0;
+        if (!ReadUInt32(payload, pos, count) || !count || count > 1000)
+            return;
+
+        Position end;
+        if (splineFlags & Movement::MoveSplineFlag::Mask_CatmullRom)
+        {
+            if (!HasRemaining(payload, pos, size_t(count) * 12))
+                return;
+            pos += size_t(count - 1) * 12;
+        }
+        if (!ReadReplayXYZ(payload, pos, end))
+            return;
+
+        if (hasFacing)
+            end.SetOrientation(facing);
+        else if (hasFacingSpot)
+            end.SetOrientation(end.GetAbsoluteAngle(&facingSpot));
+        else
+            end.SetOrientation(at.GetAbsoluteAngle(&end));
+        NoteReplayActorPosition(state, mover, end);
+    }
+
+    // A replay saved before world states were recorded: the arena readout
+    // rebuilt from the actors, the way Arena::UpdateArenaWorldState counts -
+    // each squad's living members in a squad match (its line shown while it
+    // has anyone), else each side's (3600 green = Horde, 3601 gold =
+    // Alliance). A released ghost is dead; health not seen yet is alive.
+    void UpdateLegacyReplayWorldStates(Player* viewer, PlaybackState& state)
+    {
+        if (state.HasRecordedWorldStates)
+            return;
+
+        constexpr uint32 GREEN = 3600, GOLD = 3601, SQUAD_SHOW_FIRST = 9431, SQUAD_ALIVE_FIRST = 9441;
+        constexpr uint8 SQUADS = 4;
+
+        bool squadMatch = false;
+        std::array<uint32, SQUADS> squadAlive{};
+        std::array<bool, SQUADS> squadPresent{};
+        uint32 greenAlive = 0, goldAlive = 0;
+        for (ReplayActor const& actor : state.Match.Actors)
+        {
+            uint64 const original = actor.OriginalGuid.GetRawValue();
+            auto const alive = state.ActorAlive.find(original);
+            bool const living = (alive == state.ActorAlive.end() || alive->second) && !state.ReleasedActors.count(original);
+            if (actor.Squad < SQUADS)
+            {
+                squadMatch = true;
+                squadPresent[actor.Squad] = true;
+                squadAlive[actor.Squad] += living ? 1 : 0;
+            }
+            if (actor.Team == HORDE)
+                greenAlive += living ? 1 : 0;
+            else if (actor.Team == ALLIANCE)
+                goldAlive += living ? 1 : 0;
+        }
+
+        std::vector<std::pair<uint32, uint32>> wanted;
+        if (squadMatch)
+        {
+            for (uint8 squad = 0; squad < SQUADS; ++squad)
+            {
+                wanted.emplace_back(SQUAD_SHOW_FIRST + squad, squadPresent[squad] ? 1 : 0);
+                wanted.emplace_back(SQUAD_ALIVE_FIRST + squad, squadAlive[squad]);
+            }
+        }
+        else
+        {
+            wanted.emplace_back(GREEN, greenAlive);
+            wanted.emplace_back(GOLD, goldAlive);
+        }
+
+        for (auto const& [variable, value] : wanted)
+        {
+            auto const sent = state.SentWorldStates.find(variable);
+            if (sent != state.SentWorldStates.end() && sent->second == value)
+                continue;
+            state.SentWorldStates[variable] = value;
+
+            WorldPackets::WorldState::UpdateWorldState update;
+            update.VariableID = int32(variable);
+            update.Value = int32(value);
+            viewer->SendDirectMessage(update.Write());
+        }
+    }
+
+    void NoteReplayPetOwner(PlaybackState& state, ObjectGuid pet, std::unordered_map<uint32, uint32> const& values)
+    {
+        if (ReplayActor const* owner = FindReplayASOwnerFromAnyGuidPair(state.Match, values))
+            state.PetOwners[pet.GetRawValue()] = owner->OriginalGuid.GetRawValue();
+    }
+
+    // Who a combat log line counts for: an actor, or a pet's owner. 0: no one.
+    uint64 ReplayScoreOwner(PlaybackState const& state, ObjectGuid guid)
+    {
+        if (ReplayActor const* actor = FindReplayActorByGuid(state.Match, guid))
+            return actor->OriginalGuid.GetRawValue();
+        auto const pet = state.PetOwners.find(guid.GetRawValue());
+        return pet != state.PetOwners.end() ? pet->second : 0;
+    }
+
+    void NoteReplayDamage(PlaybackState& state, ObjectGuid attacker, ObjectGuid victim, uint32 damage)
+    {
+        uint64 const from = ReplayScoreOwner(state, attacker);
+        if (!from || !damage)
+            return;
+        state.Scores[from].DamageDone += damage;
+        if (ReplayActor const* target = FindReplayActorByGuid(state.Match, victim))
+            if (target->OriginalGuid.GetRawValue() != from)
+                state.LastDamager[target->OriginalGuid.GetRawValue()] = from;
+    }
+
+    void NoteReplayHealing(PlaybackState& state, ObjectGuid healer, uint32 heal, uint32 overheal)
+    {
+        uint64 const from = ReplayScoreOwner(state, healer);
+        if (from && heal > overheal)
+            state.Scores[from].HealingDone += heal - overheal;
+    }
+
+    void NoteReplayDeath(PlaybackState& state, uint64 victim)
+    {
+        auto const killer = state.LastDamager.find(victim);
+        if (killer == state.LastDamager.end())
+            return;
+        ++state.Scores[killer->second].KillingBlows;
+        state.LastDamager.erase(killer);
+    }
+
+    void TrackReplayScores(PlaybackState& state, WorldPacket const& packet)
+    {
+        uint16 const opcode = packet.GetOpcode();
+        if (opcode != SMSG_SPELLNONMELEEDAMAGELOG && opcode != SMSG_ATTACKERSTATEUPDATE
+            && opcode != SMSG_PERIODICAURALOG && opcode != SMSG_SPELLHEALLOG)
+            return;
+
+        std::vector<uint8> payload(packet.size());
+        if (!payload.empty())
+            std::memcpy(payload.data(), packet.contents(), payload.size());
+
+        size_t pos = 0;
+        switch (opcode)
+        {
+            case SMSG_SPELLNONMELEEDAMAGELOG:   // target, attacker, spell, damage
+            {
+                ObjectGuid target, attacker;
+                uint32 spell = 0, damage = 0;
+                if (ReadPackedGuid(payload, pos, target) && ReadPackedGuid(payload, pos, attacker)
+                    && ReadUInt32(payload, pos, spell) && ReadUInt32(payload, pos, damage))
+                    NoteReplayDamage(state, attacker, target, damage);
+                return;
+            }
+            case SMSG_ATTACKERSTATEUPDATE:      // hit info, attacker, target, damage
+            {
+                uint32 hitInfo = 0, damage = 0;
+                ObjectGuid attacker, target;
+                if (ReadUInt32(payload, pos, hitInfo) && ReadPackedGuid(payload, pos, attacker)
+                    && ReadPackedGuid(payload, pos, target) && ReadUInt32(payload, pos, damage))
+                    NoteReplayDamage(state, attacker, target, damage);
+                return;
+            }
+            case SMSG_SPELLHEALLOG:             // target, healer, spell, heal, overheal
+            {
+                ObjectGuid target, healer;
+                uint32 spell = 0, heal = 0, overheal = 0;
+                if (ReadPackedGuid(payload, pos, target) && ReadPackedGuid(payload, pos, healer)
+                    && ReadUInt32(payload, pos, spell) && ReadUInt32(payload, pos, heal) && ReadUInt32(payload, pos, overheal))
+                    NoteReplayHealing(state, healer, heal, overheal);
+                return;
+            }
+            case SMSG_PERIODICAURALOG:          // target, caster, spell, count, aura type, then its amounts
+            {
+                ObjectGuid target, caster;
+                uint32 spell = 0, count = 0, auraType = 0, amount = 0, over = 0;
+                if (!ReadPackedGuid(payload, pos, target) || !ReadPackedGuid(payload, pos, caster)
+                    || !ReadUInt32(payload, pos, spell) || !ReadUInt32(payload, pos, count) || count != 1
+                    || !ReadUInt32(payload, pos, auraType) || !ReadUInt32(payload, pos, amount) || !ReadUInt32(payload, pos, over))
+                    return;
+                if (auraType == SPELL_AURA_PERIODIC_DAMAGE || auraType == SPELL_AURA_PERIODIC_DAMAGE_PERCENT)
+                    NoteReplayDamage(state, caster, target, amount);
+                else if (auraType == SPELL_AURA_PERIODIC_HEAL || auraType == SPELL_AURA_OBS_MOD_HEALTH)
+                    NoteReplayHealing(state, caster, amount, over);
+                return;
+            }
+            default:
+                return;
+        }
+    }
+
+    // MSG_PVP_LOG_DATA as Battleground::BuildPvPLogDataPacket writes an
+    // arena's: the two rating and team-name blocks, "not over", then a row per
+    // participant (guid, killing blows, side, damage, healing, no objectives).
+    // A squad match spectated from inside a squad reads the way that player's
+    // own board did: their squad on one side, everyone else on the other.
+    void SendReplayScoreboard(Player* viewer, PlaybackState const& state)
+    {
+        ReplayActor const* spectated = state.SpectatedOriginal ? FindReplayActorByOriginalGuid(state.Match, ObjectGuid(state.SpectatedOriginal)) : nullptr;
+        bool const squadView = spectated && spectated->Squad != BATTLEGROUND_NO_SQUAD;
+        uint8 const viewerSide = squadView && spectated->Team == HORDE ? uint8(PVP_TEAM_HORDE) : uint8(PVP_TEAM_ALLIANCE);
+        uint8 const otherSide = viewerSide == PVP_TEAM_ALLIANCE ? uint8(PVP_TEAM_HORDE) : uint8(PVP_TEAM_ALLIANCE);
+
+        // The saved team names by side: the winners' side is the one their
+        // first listed member was on.
+        std::array<std::string, PVP_TEAMS_COUNT> names;
+        for (ReplayActor const& actor : state.Match.Actors)
+        {
+            if (!state.Match.WinnerGuids.count(actor.OriginalGuid.GetRawValue()))
+                continue;
+            uint8 const side = actor.Team == HORDE ? uint8(PVP_TEAM_HORDE) : uint8(PVP_TEAM_ALLIANCE);
+            names[side] = state.Match.WinnerTeamName;
+            names[side == PVP_TEAM_HORDE ? PVP_TEAM_ALLIANCE : PVP_TEAM_HORDE] = state.Match.LoserTeamName;
+            break;
+        }
+
+        WorldPacket data(MSG_PVP_LOG_DATA, 1 + 2 * 12 + 2 * 16 + 1 + 4 + state.Match.Actors.size() * 29);
+        data << uint8(1);                                   // arena
+        for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
+            data << uint32(0) << uint32(0) << uint32(0);    // rating lost, won, matchmaker rating
+        for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
+            data << names[i];
+        data << uint8(0);                                   // not over
+
+        data << uint32(state.Match.Actors.size());
+        for (ReplayActor const& actor : state.Match.Actors)
+        {
+            uint8 side = actor.Team == HORDE ? uint8(PVP_TEAM_HORDE) : uint8(PVP_TEAM_ALLIANCE);
+            if (squadView)
+                side = actor.Squad == spectated->Squad ? viewerSide : otherSide;
+
+            PlaybackState::ScoreLine line;
+            if (auto const score = state.Scores.find(actor.OriginalGuid.GetRawValue()); score != state.Scores.end())
+                line = score->second;
+
+            data << uint64(actor.FakeGuid.GetRawValue());
+            data << uint32(line.KillingBlows);
+            data << uint8(side);
+            data << uint32(line.DamageDone);
+            data << uint32(line.HealingDone);
+            data << uint32(0);                              // objectives
+        }
+
+        viewer->SendDirectMessage(&data);
+    }
+
+    void ApplyPendingScoreRequest(Player* viewer, PlaybackState const& state)
+    {
+        {
+            std::lock_guard<std::mutex> lock(SpectateRequestLock);
+            if (!ScoreRequests.erase(viewer->GetGUID().GetCounter()))
+                return;
+        }
+        SendReplayScoreboard(viewer, state);
+    }
+
     bool SendReplayASStatusFromUpdatePayload(Player* viewer, PlaybackState& state, std::vector<uint8>& payload)
     {
         MatchRecord const& match = state.Match;
@@ -4407,12 +5022,16 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
                     if (FindReplayActorByGuid(match, blockGuid))
                         SendReplayASPlayerStatusFromValues(viewer, state, blockGuid, values);
                     else
+                    {
+                        NoteReplayPetOwner(state, blockGuid, values);
                         SendReplayASPetStatusFromValues(viewer, match, values);
+                    }
 
                     break;
                 }
                 case REPLAY_UPDATETYPE_MOVEMENT:
                 {
+                    NoteReplayActorCreatePosition(state, payload, pos, blockGuid);
                     if (!SkipMovementCreateData(payload, pos, match, blockGuid))
                         return false;
 
@@ -4425,6 +5044,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
                     if (!ReadUInt8(payload, pos, objectTypeId))
                         return false;
 
+                    NoteReplayActorCreatePosition(state, payload, pos, blockGuid);
                     if (!SkipMovementCreateData(payload, pos, match, blockGuid, objectTypeId))
                         return false;
 
@@ -4435,7 +5055,10 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
                     if (FindReplayActorByGuid(match, blockGuid))
                         SendReplayASPlayerStatusFromValues(viewer, state, blockGuid, values);
                     else
+                    {
+                        NoteReplayPetOwner(state, blockGuid, values);
                         SendReplayASPetStatusFromValues(viewer, match, values);
+                    }
 
                     break;
                 }
@@ -4740,9 +5363,101 @@ std::vector<uint8> payload(packet.size());
         return sentAny;
     }
 
+    // The spectated player's casts, for the viewer's own cast bar
+    // (CenturionReplaySpectate.lua drives CastingBarFrame from them; the start
+    // is the SPE line every cast already sends):
+    //   CSG=spell              SMSG_SPELL_GO - the cast went off
+    //   CSF=spell,result       SMSG_SPELL_FAILURE / FAILED_OTHER - interrupted
+    //   CSD=ms                 SMSG_SPELL_DELAYED - pushback
+    //   CHS=spell,durationMs   MSG_CHANNEL_START
+    //   CHU=remainingMs        MSG_CHANNEL_UPDATE (0 = the channel ended)
+    void SendSpectateCastEvents(Player* viewer, WorldPacket const& packet, PlaybackState& state)
+    {
+        if (!state.SpectatedOriginal)
+            return;
+
+        uint16 const opcode = packet.GetOpcode();
+        if (opcode != SMSG_SPELL_GO && opcode != SMSG_SPELL_FAILURE && opcode != SMSG_SPELL_FAILED_OTHER
+            && opcode != SMSG_SPELL_DELAYED && opcode != MSG_CHANNEL_START && opcode != MSG_CHANNEL_UPDATE)
+            return;
+
+        ReplayActor const* actor = FindMutableReplayActorByOriginal(state.Match, state.SpectatedOriginal);
+        if (!actor)
+            return;
+
+        std::vector<uint8> payload(packet.size());
+        if (!payload.empty())
+            std::memcpy(payload.data(), packet.contents(), payload.size());
+
+        size_t pos = 0;
+        ObjectGuid caster;
+        if (!ReadPackedGuid(payload, pos, caster))
+            return;
+
+        if (opcode == SMSG_SPELL_GO)
+        {
+            // caster (an item for an item's spell), then the unit casting it
+            ObjectGuid casterUnit;
+            uint8 castId = 0;
+            uint32 spell = 0;
+            if (!ReadPackedGuid(payload, pos, casterUnit) || !ReadUInt8(payload, pos, castId) || !ReadUInt32(payload, pos, spell))
+                return;
+            if (casterUnit != actor->FakeGuid && caster != actor->FakeGuid)
+                return;
+            SendReplayASCommand(viewer, actor->FakeGuid, "CSG", spell);
+            return;
+        }
+
+        if (caster != actor->FakeGuid)
+            return;
+
+        switch (opcode)
+        {
+            case SMSG_SPELL_FAILURE:
+            case SMSG_SPELL_FAILED_OTHER:
+            {
+                uint8 castCount = 0;
+                uint32 spell = 0;
+                uint8 result = 0;
+                if (!ReadUInt8(payload, pos, castCount) || !ReadUInt32(payload, pos, spell) || !ReadUInt8(payload, pos, result))
+                    return;
+                SendReplayASCommand(viewer, actor->FakeGuid, "CSF", std::to_string(spell) + "," + std::to_string(uint32(result)));
+                return;
+            }
+            case SMSG_SPELL_DELAYED:
+            {
+                uint32 delay = 0;
+                if (ReadUInt32(payload, pos, delay))
+                    SendReplayASCommand(viewer, actor->FakeGuid, "CSD", delay);
+                return;
+            }
+            case MSG_CHANNEL_START:
+            {
+                uint32 spell = 0;
+                uint32 duration = 0;
+                if (ReadUInt32(payload, pos, spell) && ReadUInt32(payload, pos, duration))
+                    SendReplayASCommand(viewer, actor->FakeGuid, "CHS", std::to_string(spell) + "," + std::to_string(duration));
+                return;
+            }
+            case MSG_CHANNEL_UPDATE:
+            {
+                uint32 remaining = 0;
+                if (ReadUInt32(payload, pos, remaining))
+                    SendReplayASCommand(viewer, actor->FakeGuid, "CHU", remaining);
+                return;
+            }
+            default:
+                return;
+        }
+    }
+
     void SendReplayASForPlaybackPacket(Player* viewer, WorldPacket const& packet, PlaybackState& state)
     {
         MatchRecord const& match = state.Match;
+
+        SendSpectateCastEvents(viewer, packet, state);
+        TrackReplayActorPosition(state, packet);
+        TrackReplayScores(state, packet);
 
         // Feed real HP / max HP / power / max power / pet HP to the replay addon from the same
         // update-object packets that make replay actors move/render.
@@ -5316,7 +6031,8 @@ std::vector<uint8> payload(packet.size());
     {
         // AC-style table only.
         QueryResult result = CharacterDatabase.PQuery(
-            "SELECT `id`, `arenaTypeId`, `typeId`, `contentSize`, `contents`, `mapId`, `timesWatched` "
+            "SELECT `id`, `arenaTypeId`, `typeId`, `contentSize`, `contents`, `mapId`, `timesWatched`, "
+            "`winnerTeamName`, `loserTeamName`, `winnerPlayerGuids` "
             "FROM `character_arena_replays` WHERE `id` = {} LIMIT 1", matchId);
 
         if (!result)
@@ -5333,6 +6049,16 @@ std::vector<uint8> payload(packet.size());
         }
 
         CharacterDatabase.Execute("UPDATE `character_arena_replays` SET `timesWatched` = `timesWatched` + 1 WHERE `id` = {}", matchId);
+
+        record.WinnerTeamName = fields[7].GetString();
+        record.LoserTeamName = fields[8].GetString();
+        for (std::string_view guid : Trinity::Tokenize(fields[9].GetStringView(), ',', false))
+        {
+            while (!guid.empty() && guid.front() == ' ')
+                guid.remove_prefix(1);
+            if (Optional<uint64> raw = Trinity::StringTo<uint64>(guid))
+                record.WinnerGuids.insert(*raw);
+        }
 
         if (record.Packets.empty())
         {
@@ -5416,6 +6142,8 @@ std::vector<uint8> payload(packet.size());
         PlaybackState state;
         state.Match = std::move(record);
         state.InitialActors = state.Match.Actors;
+        state.HasRecordedWorldStates = std::any_of(state.Match.Packets.begin(), state.Match.Packets.end(),
+            [](PacketRecord const& frame) { return frame.Packet.GetOpcode() == SMSG_UPDATE_WORLD_STATE; });
         state.ViewerLowGuid = viewerLowGuid;
         state.BgInstanceId = bg->GetInstanceID();
         state.CreatedMs = getMSTime();
@@ -5612,6 +6340,10 @@ std::vector<uint8> payload(packet.size());
             uint64 fake = 0;
             if (argument.size() == 18 && argument[0] == '0' && (argument[1] == 'x' || argument[1] == 'X'))
                 fake = std::strtoull(argument.c_str() + 2, nullptr, 16);
+            else if (argument == "OFF LAND")
+                fake = SPECTATE_REQUEST_LAND;
+            if (fake == SPECTATE_REQUEST_LAND && argument != "OFF LAND")
+                fake = 0;
 
             std::lock_guard<std::mutex> lock(SpectateRequestLock);
             SpectateRequests[session->GetPlayer()->GetGUID().GetCounter()] = fake;
@@ -5807,6 +6539,18 @@ public:
         if (!session || !session->GetPlayer())
             return;
 
+        // The scoreboard, which a replay answers from its own tally; the
+        // viewer's map thread sends it (UpdatePlaybackForViewer).
+        if (packet.GetOpcode() == MSG_PVP_LOG_DATA)
+        {
+            if (session->GetPlayer()->IsSpectator())
+            {
+                std::lock_guard<std::mutex> lock(SpectateRequestLock);
+                ScoreRequests.insert(session->GetPlayer()->GetGUID().GetCounter());
+            }
+            return;
+        }
+
         if (packet.GetOpcode() == CMSG_MESSAGECHAT)
         {
             TryHandleReplayRestartAddonMessage(session, packet);
@@ -5852,6 +6596,7 @@ public:
             {
                 std::lock_guard<std::mutex> lock(SpectateRequestLock);
                 SpectateRequests.erase(viewerLowGuid);
+                ScoreRequests.erase(viewerLowGuid);
             }
             ActiveReplays.erase(activeItr);
             return true;
@@ -5860,6 +6605,7 @@ public:
         if (state.Finished)
         {
             ApplyPendingSpectateRequest(viewer, state);
+            ApplyPendingScoreRequest(viewer, state);
             return true;
         }
 
@@ -5877,6 +6623,7 @@ public:
         }
 
         ApplyPendingSpectateRequest(viewer, state);
+        ApplyPendingScoreRequest(viewer, state);
 
         if (!state.PlaybackClockStarted)
         {
@@ -5997,6 +6744,8 @@ public:
         if (!state.ProbePaused && sentThisUpdate < sendCap)
             ApplyReplayTimelinesUpTo(viewer, state, elapsedMs);
 
+        UpdateLegacyReplayWorldStates(viewer, state);
+
         if (state.Cursor >= state.Match.Packets.size())
         {
             ApplyReplayTimelinesUpTo(viewer, state, std::numeric_limits<uint32>::max());
@@ -6077,6 +6826,12 @@ public:
         StopSpectateBars(viewer, state);
         state.LatestBars.clear();
         state.ActorCooldownEnds.clear();
+        state.ActorPositions.clear();
+        state.ActorAlive.clear();
+        state.SentWorldStates.clear();
+        state.Scores.clear();
+        state.LastDamager.clear();
+        state.PetOwners.clear();
 
         TC_LOG_DEBUG("arena.replay", "Replay restarted viewer={} bg={} packets={}",
             viewerLowGuid, state.BgInstanceId, uint32(state.Match.Packets.size()));
@@ -6111,6 +6866,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(SpectateRequestLock);
             SpectateRequests.erase(player->GetGUID().GetCounter());
+            ScoreRequests.erase(player->GetGUID().GetCounter());
         }
         // A client that logs out spectating has nothing borrowed any more; the
         // next login sends the real bars.
