@@ -619,8 +619,6 @@ namespace
         // item, itemEntry
         if (PreparedQueryResult result = holder.GetPreparedResult(KIT_QUERY_INVENTORY))
         {
-            // ORDER BY bag, slot: everything on the character itself (bag 0),
-            // the bags among it, comes before what is inside the bags.
             // ORDER BY bag, slot: everything on the character itself (bag 0)
             // - its bags among it - comes before what is inside the bags.
             std::unordered_map<uint32, uint8> bagSlots;     // a worn bag's item guid -> its bag slot
@@ -1703,6 +1701,15 @@ void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit
             entry = twin ? twin : Tournament::GetLoadoutTemplateItem(kit.Class, slot);
         }
         if (!entry)
+            continue;
+
+        // Nothing in the off hand behind a two-hander - the main hand is
+        // dressed first. A tournament match filled the empty off hand of a
+        // shaman holding Earthshaker with its template's shield (owner
+        // 2026-10-29: "my shaman had earthshaker + a shield equipped when i
+        // swapped"), and a bot's saved gear can hold both. EquipItem never asks;
+        // IsTwoHandUsed lets Titan's Grip keep its second weapon.
+        if (slot == EQUIPMENT_SLOT_OFFHAND && player->IsTwoHandUsed())
             continue;
 
         Item* item = Item::CreateItem(entry, 1, player);
