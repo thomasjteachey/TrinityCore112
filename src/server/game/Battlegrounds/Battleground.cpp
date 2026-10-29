@@ -2955,6 +2955,7 @@ void Battleground::BuildPvPLogDataPacket(WorldPacket& data, Player const* viewer
     for (auto const& score : PlayerScores)
         if (m_Players.find(score.second->PlayerGuid) != m_Players.end())
             participantScores.push_back(score.second);
+    AppendScoreboardRows(participantScores);
 
     data.Initialize(MSG_PVP_LOG_DATA, 1 + 1 + 4 + 40 * participantScores.size());
     data << uint8(type);                                // type (battleground = 0 / arena = 1)

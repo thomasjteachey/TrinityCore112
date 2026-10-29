@@ -48,9 +48,11 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -115,9 +117,16 @@ struct Kit
     bool OwnBindings = false;
     std::vector<std::pair<std::string, std::string>> Bindings;
     // The source's character macros by button number (type 5, "MACRO
-    // 0x1000000|n ..."): a button can only point at the player's own, so
-    // each becomes the spell its macro casts.
-    std::unordered_map<uint32, std::string> CharacterMacros;
+    // 0x1000000|n ..."). A button can only point at the player's own: on the
+    // server each becomes the spell its macro casts, and CENTURION_AllStar is
+    // sent the macro itself to make and put back on its buttons (SendMacros).
+    struct Macro
+    {
+        std::string Name;
+        std::string Icon;
+        std::string Body;
+    };
+    std::unordered_map<uint32, Macro> CharacterMacros;
     std::vector<uint32> RewardedQuests;     // their spells are taught at every login
     bool HasPet = false;
     uint32 SourcePetNumber = 0;
@@ -329,7 +338,7 @@ namespace
     void ParseMacros(std::string const& data, Kit& kit)
     {
         uint32 current = 0;
-        std::string body;
+        Kit::Macro macro;
         for (std::string_view raw : Trinity::Tokenize(data, '\n', true))
         {
             std::string const line = Trim(raw);
@@ -338,16 +347,23 @@ namespace
                 std::string_view const rest = std::string_view(line).substr(6);
                 uint32 const id = Trinity::StringTo<uint32>(rest.substr(0, rest.find(' '))).value_or(0);
                 current = (id & 0x1000000) ? (id & 0xFFFFFF) : 0;
-                body.clear();
+                macro = Kit::Macro();
+                size_t const open = line.find('"');
+                size_t const close = open == std::string::npos ? std::string::npos : line.find('"', open + 1);
+                if (close != std::string::npos)
+                {
+                    macro.Name = line.substr(open + 1, close - open - 1);
+                    macro.Icon = Trim(std::string_view(line).substr(close + 1));
+                }
             }
             else if (line == "END")
             {
                 if (current)
-                    kit.CharacterMacros[current] = body;
+                    kit.CharacterMacros[current] = macro;
                 current = 0;
             }
             else if (current)
-                body += line + '\n';
+                macro.Body += line + '\n';
         }
     }
 
@@ -836,6 +852,45 @@ namespace
         player->SendProficiency(ITEM_CLASS_ARMOR, player->GetArmorProficiency());
         if (player->GetPet())
             player->PetSpellInitialize();
+    }
+
+    // CENTURION_AllStar makes the persona's character macros as the player's
+    // own for the life, puts each on the buttons it sat on, and deletes them on
+    // the next MAC:RESET (every swap and the restore start with one):
+    //   MAC:B:<buttons>:<icon>:<name>, MAC:L:<line> and MAC:C:<more of that
+    //   line>, MAC:E per macro, MAC:DONE after the last.
+    void SendMacros(Player* player, Kit const* kit)
+    {
+        WorldSession* session = player->GetSession();
+        if (!session || session->IsVirtualSession())
+            return;
+
+        SendAddonLine(player, "MAC:RESET");
+        if (!kit)
+            return;
+
+        std::map<uint32, std::string> buttons;
+        for (KitButton const& button : kit->Buttons)
+            if (button.Type == ACTION_BUTTON_CMACRO && button.Button < MAX_ACTION_BUTTONS && kit->CharacterMacros.count(button.Action))
+            {
+                std::string& list = buttons[button.Action];
+                list += (list.empty() ? "" : ",") + std::to_string(uint32(button.Button));
+            }
+        if (buttons.empty())
+            return;
+
+        // An addon line is a whisper: 255 bytes with its prefix.
+        size_t constexpr CHUNK = 200;
+        for (auto const& [id, list] : buttons)
+        {
+            Kit::Macro const& macro = kit->CharacterMacros.at(id);
+            SendAddonLine(player, "MAC:B:" + list + ":" + macro.Icon + ":" + macro.Name.substr(0, 64));
+            for (std::string_view line : Trinity::Tokenize(macro.Body, '\n', false))
+                for (size_t at = 0; at < line.size(); at += CHUNK)
+                    SendAddonLine(player, (at ? "MAC:C:" : "MAC:L:") + std::string(line.substr(at, CHUNK)));
+            SendAddonLine(player, "MAC:E");
+        }
+        SendAddonLine(player, "MAC:DONE");
     }
 
     // CENTURION_AllStar puts the persona's keybindings on the client (never
@@ -1419,7 +1474,7 @@ void PersonaAccess::Build(Player* player, PersonaStash& stash, Kit const& kit)
             if (macro == kit.CharacterMacros.end())
                 continue;
             action = 0;
-            for (auto const& [name, rank] : MacroSpellCandidates(macro->second))
+            for (auto const& [name, rank] : MacroSpellCandidates(macro->second.Body))
                 if ((action = FindKnownSpell(player, name, rank)))
                     break;
             if (!action)
@@ -1501,6 +1556,7 @@ bool PersonaAccess::Apply(Player* player, KitPtr const& kit)
     NoteSwap(player);
     SyncClient(player, before);
     SendBindings(player, kit.get());
+    SendMacros(player, kit.get());
 
     TC_LOG_DEBUG("bg.battleground", "All-Star: {} ({}) now wears {} ({}, class {}{}): {} spells, {} talents, {} pieces.",
         player->GetName(), player->GetGUID().GetCounter(), kit->Name, kit->Source, uint32(kit->Class),
@@ -1603,6 +1659,7 @@ void PersonaAccess::Restore(Player* player)
     {
         SyncClient(player, before);
         SendBindings(player, nullptr);
+        SendMacros(player, nullptr);
     }
 }
 
@@ -1865,6 +1922,27 @@ bool IsPersonaFromTemplate(Player const* player)
 {
     PersonaStash const* stash = player ? PersonaAccess::Stash(player) : nullptr;
     return stash && stash->Persona && stash->Persona->Template;
+}
+
+ObjectGuid NamePastLife(std::string const& name, uint8 race, uint8 gender, uint8 playerClass)
+{
+    // Far above any character guid this realm will reach.
+    static std::atomic<uint32> next{ 0 };
+    ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(PAST_LIFE_GUID_BASE + (next++ & 0x0FFFFFFF));
+    PersonaName entry;
+    entry.Name = name;
+    entry.Race = race;
+    entry.Gender = gender;
+    entry.Class = playerClass;
+    std::lock_guard<std::mutex> lock(NameMutex);
+    Names[guid] = std::move(entry);
+    return guid;
+}
+
+void ForgetPastLife(ObjectGuid guid)
+{
+    std::lock_guard<std::mutex> lock(NameMutex);
+    Names.erase(guid);
 }
 
 bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& gender, uint8& playerClass)

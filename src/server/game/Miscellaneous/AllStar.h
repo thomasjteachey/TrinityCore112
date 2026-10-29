@@ -155,6 +155,11 @@ namespace AllStar
     // own client is never given it: Centurion addons check the server's
     // whispers against UnitName("player"). Safe from any thread.
     bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& gender, uint8& playerClass);
+    // A scoreboard line for a life that is over (Arena::KeepAllStarPastLife):
+    // a guid of its own, which GetPersonaNameData answers until it is forgotten.
+    ObjectGuid::LowType constexpr PAST_LIFE_GUID_BASE = 0xF0000000;
+    ObjectGuid NamePastLife(std::string const& name, uint8 race, uint8 gender, uint8 playerClass);
+    void ForgetPastLife(ObjectGuid guid);
 
     // True while ApplyPersona/RestorePersona is moving gear: the battleground
     // gear lock stands aside for it, the way it does for the tournament loadout.

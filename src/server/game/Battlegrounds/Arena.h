@@ -21,6 +21,8 @@
 #include "Battleground.h"
 #include "Miscellaneous/AllStar.h"
 
+struct ArenaScore;
+
 #include <map>
 #include <set>
 #include <string>
@@ -90,6 +92,7 @@ class TC_GAME_API Arena : public Battleground
 
     protected:
         Arena();
+        ~Arena() override;
 
         void AddPlayer(Player* player) override;
         void RemovePlayer(Player* /*player*/, ObjectGuid guid, uint32 /*team*/) override;
@@ -242,10 +245,16 @@ class TC_GAME_API Arena : public Battleground
         void ResetForAllStarLife(Player* player);
         bool BringBackAllStar(Player* player, AllStarSeat& seat, bool respawn);
         void ShowAllStarLives(Player* player, AllStarSeat& seat);
+        // A life that is over keeps its scoreboard line (owner: "add every
+        // player (even from past lives) to the scoreboard"); the live line
+        // starts again from nothing.
+        void KeepAllStarPastLife(Player* player);
+        void AppendScoreboardRows(std::vector<BattlegroundScore*>& rows) override;
         void UpdateAllStar(uint32 diff);
         void CheckAllStarWinConditions();
         void EndAllStarAtTimeLimit();
         std::map<ObjectGuid, AllStarSeat> _allStarSeats;
+        std::vector<ArenaScore*> _allStarPastLives;
         uint32 _allStarElapsed = 0;                 // since the gates opened
         uint32 _allStarStateTimer = 0;
 };

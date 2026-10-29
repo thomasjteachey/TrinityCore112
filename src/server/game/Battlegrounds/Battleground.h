@@ -903,6 +903,9 @@ class TC_GAME_API Battleground
         // `viewer`, when given, is who the packet is for: a squad match is
         // shown to each player as their squad against everyone else.
         void BuildPvPLogDataPacket(WorldPacket& data, Player const* viewer = nullptr);
+        // Scoreboard lines that belong to no one in the match (an All-Star
+        // life that is over), after the participants'.
+        virtual void AppendScoreboardRows(std::vector<BattlegroundScore*>& /*rows*/) { }
         virtual bool UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor = true);
 
         static TeamId GetTeamIndexByTeamId(uint32 Team) { return Team == ALLIANCE ? TEAM_ALLIANCE : TEAM_HORDE; }

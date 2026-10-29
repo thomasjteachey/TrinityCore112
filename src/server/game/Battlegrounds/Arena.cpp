@@ -73,6 +73,15 @@ void ArenaTeamScore::BuildTeamInfoBlock(WorldPacket& data)
     data << TeamName;
 }
 
+Arena::~Arena()
+{
+    for (ArenaScore* past : _allStarPastLives)
+    {
+        AllStar::ForgetPastLife(past->PlayerGuid);
+        delete past;
+    }
+}
+
 Arena::Arena()
 {
     StartDelayTimes[BG_STARTING_EVENT_FIRST]  = BG_START_DELAY_30S;
@@ -2133,6 +2142,7 @@ void Arena::HandleAllStarDeath(Player* player, Player* killer)
             seat.Waiting = true;
             seat.VisualShown = false;
             seat.RespawnAt = GameTime::GetGameTimeMS() + AllStar::GetRespawnDelayMs();
+            KeepAllStarPastLife(player);
         }
         ShowAllStarLives(player, seat);
     }
@@ -2198,6 +2208,38 @@ bool Arena::BringBackAllStar(Player* player, AllStarSeat& seat, bool respawn)
         !respawn ? ", where it stood" : atStart ? ", at the start (no floor where it fell)" : ", where it fell", "");
     ShowAllStarLives(player, seat);
     return true;
+}
+
+void Arena::KeepAllStarPastLife(Player* player)
+{
+    auto const itr = PlayerScores.find(player->GetGUID().GetCounter());
+    if (itr == PlayerScores.end())
+        return;
+
+    // Still wearing the life that just ended: its name (the player's own for
+    // a starter template), race and class.
+    ObjectGuid const guid = AllStar::NamePastLife(GetAllStarName(player), player->GetRace(), player->GetGender(), player->GetClass());
+    BattlegroundScore* live = itr->second;
+    ArenaScore* past = new ArenaScore(guid, GetPlayerTeam(player->GetGUID()));
+    past->KillingBlows = live->KillingBlows;
+    past->Deaths = live->Deaths;
+    past->HonorableKills = live->HonorableKills;
+    past->BonusHonor = live->BonusHonor;
+    past->DamageDone = live->DamageDone;
+    past->HealingDone = live->HealingDone;
+    _allStarPastLives.push_back(past);
+
+    live->KillingBlows = 0;
+    live->Deaths = 0;
+    live->HonorableKills = 0;
+    live->BonusHonor = 0;
+    live->DamageDone = 0;
+    live->HealingDone = 0;
+}
+
+void Arena::AppendScoreboardRows(std::vector<BattlegroundScore*>& rows)
+{
+    rows.insert(rows.end(), _allStarPastLives.begin(), _allStarPastLives.end());
 }
 
 void Arena::ShowAllStarLives(Player* player, AllStarSeat& seat)

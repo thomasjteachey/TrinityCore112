@@ -38,9 +38,16 @@ void WorldSession::SendNameQueryOpcode(ObjectGuid guid)
     Player* player = ObjectAccessor::FindConnectedPlayer(guid);
     CharacterCacheEntry const* nameData = sCharacterCache->GetCharacterCacheByGuid(guid);
 
+    // An All-Star persona reads as the character it borrowed, and a life that
+    // is over has a scoreboard line under a guid no character has (AllStar.h).
+    std::string personaName;
+    uint8 personaRace = 0, personaGender = 0, personaClass = 0;
+    bool const persona = (!GetPlayer() || GetPlayer()->GetGUID() != guid) &&
+        AllStar::GetPersonaNameData(guid, personaName, personaRace, personaGender, personaClass);
+
     WorldPacket data(SMSG_NAME_QUERY_RESPONSE, (8+1+1+1+1+1+10));
     data << guid.WriteAsPacked();
-    if (!nameData)
+    if (!nameData && !persona)
     {
         data << uint8(1);                           // name unknown
         SendPacket(&data);
@@ -49,11 +56,7 @@ void WorldSession::SendNameQueryOpcode(ObjectGuid guid)
 
     data << uint8(0);                               // name known
 
-    // An All-Star persona reads as the character it borrowed (AllStar.h).
-    std::string personaName;
-    uint8 personaRace = 0, personaGender = 0, personaClass = 0;
-    if ((!GetPlayer() || GetPlayer()->GetGUID() != guid) &&
-        AllStar::GetPersonaNameData(guid, personaName, personaRace, personaGender, personaClass))
+    if (persona)
     {
         data << personaName;
         data << uint8(0);
