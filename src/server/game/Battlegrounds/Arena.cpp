@@ -1993,11 +1993,11 @@ void Arena::SyncShuffleRoster()
 
 // ==================================================================== All-Star
 //
-// BATTLEGROUND_ASA (Miscellaneous/AllStar.h): nine lives a player. A death is
-// seen as one for Centurion.AllStar.RespawnDelay (2 s); then the player stands
+// BATTLEGROUND_ASA (Miscellaneous/AllStar.h): four lives a player. A death is
+// seen as one for Centurion.AllStar.RespawnDelay (4 s); then the player stands
 // up where they fell, the way a spirit guide raises a battleground's dead -
-// its visual, its Spirit Heal - as the next character of their lineup: the
-// next level-60 character of their own character list, or a class's starter
+// its visual, its Spirit Heal - as the next character of their lineup: a
+// character they picked or the next of their own character list, or a starter
 // template, swapped onto them in place, so there is no loading screen and no
 // seat changes hands. A team is beaten when nobody on it has a life left; at
 // the time limit the most lives left wins.
@@ -2064,7 +2064,7 @@ void Arena::ForgetAllStarSeat(ObjectGuid guid)
 
 uint32 Arena::GetAllStarLives(AllStarSeat const& seat)
 {
-    return seat.HasLineup ? uint32(seat.Lineup.size()) : uint32(AllStar::LIVES);
+    return seat.HasLineup ? uint32(seat.Lineup.size()) : AllStar::GetLives();
 }
 
 AllStar::KitPtr Arena::GetAllStarKit(AllStarSeat const& seat) const

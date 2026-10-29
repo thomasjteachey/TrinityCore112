@@ -216,7 +216,7 @@ class TC_GAME_API Arena : public Battleground
         // so retain the eliminated GUIDs and count survivors from m_Players.
         std::set<ObjectGuid> _customGameEliminatedPlayers;
 
-        // All-Star (BATTLEGROUND_ASA, Miscellaneous/AllStar.h): nine lives a
+        // All-Star (BATTLEGROUND_ASA, Miscellaneous/AllStar.h): four lives a
         // player, each death straight back at the start as the next character
         // of their lineup. A seat is a participant's for the whole match.
         struct AllStarSeat

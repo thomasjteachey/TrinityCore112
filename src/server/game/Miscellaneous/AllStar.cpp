@@ -161,7 +161,8 @@ namespace
         uint32 RespawnDelayMs = 4 * IN_MILLISECONDS;
         uint32 TimeLimitMs = 30 * MINUTE * IN_MILLISECONDS;
         uint8 SourceMinLevel = 60;
-        bool ShuffleLives = true;           // every life after the first in a random order
+        uint8 Lives = 4;
+        bool ShuffleLives = true;           // the lives nobody picked in a random order
         std::array<ObjectGuid::LowType, 12> Templates{};
     };
     Settings Config;
@@ -211,6 +212,65 @@ namespace
     // The Arena Master's lineups to tell (character, account).
     std::vector<std::pair<ObjectGuid, uint32>> PendingMasterLineups;
     bool TemplatesAsked = false;
+
+    // ------------------------------------------------------------- the picks
+    // What each character picked for its lives after the first, as the
+    // Arena Master's page sent it: "c<guid>", "s<class>" or "-" (random), comma
+    // separated. Kept in character_allstar_lineup, read whole at startup
+    // (Update), written as it changes. Checked against the account's
+    // characters whenever it is used, never when it is stored.
+    std::mutex PicksMutex;
+    std::unordered_map<ObjectGuid::LowType, std::string> Picks;
+    bool PicksLoaded = false;
+    // A query on a table that is not there aborts the worldserver: nothing
+    // reads or writes character_allstar_lineup until it is known to exist.
+    std::atomic<bool> PicksTable{ false };
+    std::size_t constexpr MAX_PICKS = 8;
+
+    struct Pick
+    {
+        uint8 Class = 0;                    // s<class>: that class's standard kit
+        ObjectGuid::LowType Guid = 0;       // c<guid>: that character
+    };
+
+    std::vector<Pick> ParsePicks(std::string_view text)
+    {
+        std::vector<Pick> picks;
+        for (std::string_view token : Trinity::Tokenize(text, ',', true))
+        {
+            if (picks.size() >= MAX_PICKS)
+                break;
+            Pick pick;
+            if (token.size() > 1 && (token[0] == 'c' || token[0] == 's'))
+            {
+                Optional<uint32> const value = Trinity::StringTo<uint32>(token.substr(1));
+                if (value && token[0] == 'c')
+                    pick.Guid = *value;
+                else if (value && *value < MAX_CLASSES)
+                    pick.Class = uint8(*value);
+            }
+            picks.push_back(pick);
+        }
+        while (!picks.empty() && !picks.back().Class && !picks.back().Guid)
+            picks.pop_back();
+        return picks;
+    }
+
+    std::string FormatPick(Pick const& pick)
+    {
+        if (pick.Guid)
+            return "c" + std::to_string(pick.Guid);
+        if (pick.Class)
+            return "s" + std::to_string(uint32(pick.Class));
+        return "-";
+    }
+
+    std::vector<Pick> GetPicks(ObjectGuid::LowType playing)
+    {
+        std::lock_guard<std::mutex> lock(PicksMutex);
+        auto const itr = Picks.find(playing);
+        return itr != Picks.end() ? ParsePicks(itr->second) : std::vector<Pick>();
+    }
 
     // ----------------------------------------------------------- name answers
     struct PersonaName
@@ -755,32 +815,77 @@ namespace
         uint8 Class;
         uint8 Level;
         uint32 Position;
+        std::string Name;
     };
 
-    // standIns: a bot's lineup, whose missing classes are random playerbot
-    // characters. A player's are the class's starter template - the standard
-    // spec and gear (owner 2026-10-29: "for PLAYERS, they need to transform
-    // into the standard class kit"; "how bots work rn is perfect").
-    Lineup BuildLineup(uint8 playingClass, std::vector<ListedCharacter> characters, bool standIns)
+    void SortByList(std::vector<ListedCharacter>& characters)
     {
         std::sort(characters.begin(), characters.end(), [](ListedCharacter const& a, ListedCharacter const& b)
         {
             return a.Position != b.Position ? a.Position < b.Position : a.Guid < b.Guid;
         });
+    }
 
-        Lineup lineup;
+    bool CanPlay(ListedCharacter const& character)
+    {
+        return character.Level >= Config.SourceMinLevel && IsPlayableClass(character.Class);
+    }
+
+    // The picks that hold for lives two on (one slot each, empty = random):
+    // a character of the account at the level, or a class's standard kit, of
+    // a class nobody before it in the lineup plays. `used` comes back with
+    // every class the lineup has so far.
+    std::vector<Optional<LineupEntry>> ResolvePicks(uint8 playingClass, std::vector<ListedCharacter> const& characters,
+        std::vector<Pick> const& picks, uint32& used)
+    {
+        std::vector<Optional<LineupEntry>> slots(Config.Lives > 1 ? Config.Lives - 1 : 0);
+        used = ClassBit(playingClass);
+        for (std::size_t i = 0; i < slots.size() && i < picks.size(); ++i)
+        {
+            Pick const& pick = picks[i];
+            if (pick.Guid)
+            {
+                auto const character = std::find_if(characters.begin(), characters.end(),
+                    [&](ListedCharacter const& c) { return c.Guid == pick.Guid; });
+                if (character == characters.end() || !CanPlay(*character) || (used & ClassBit(character->Class)))
+                    continue;
+                slots[i] = LineupEntry{ character->Class, character->Guid, false };
+                used |= ClassBit(character->Class);
+            }
+            else if (pick.Class && IsPlayableClass(pick.Class) && !(used & ClassBit(pick.Class)))
+            {
+                ObjectGuid::LowType const source = GetTemplateCharacter(pick.Class);
+                if (!source)
+                    continue;
+                slots[i] = LineupEntry{ pick.Class, source, true };
+                used |= ClassBit(pick.Class);
+            }
+        }
+        return slots;
+    }
+
+    // standIns: a bot's lineup, whose missing classes are random playerbot
+    // characters. A player's are the class's starter template - the standard
+    // spec and gear (owner 2026-10-29: "for PLAYERS, they need to transform
+    // into the standard class kit"; "how bots work rn is perfect").
+    Lineup BuildLineup(uint8 playingClass, std::vector<ListedCharacter> characters, bool standIns,
+        std::vector<Pick> const& picks = {})
+    {
+        SortByList(characters);
+
         uint32 used = 0;
-        lineup.push_back({ playingClass, 0, false });
-        used |= ClassBit(playingClass);
+        std::vector<Optional<LineupEntry>> slots = ResolvePicks(playingClass, characters, picks, used);
 
+        // What fills a life left on random: the account's characters in list
+        // order, one a class, then the classes nobody has.
+        Lineup rest;
         for (ListedCharacter const& character : characters)
         {
-            if (character.Level < Config.SourceMinLevel || !IsPlayableClass(character.Class) || (used & ClassBit(character.Class)))
+            if (!CanPlay(character) || (used & ClassBit(character.Class)))
                 continue;
-            lineup.push_back({ character.Class, character.Guid, false });
+            rest.push_back({ character.Class, character.Guid, false });
             used |= ClassBit(character.Class);
         }
-
         for (uint8 playerClass : CLASS_ORDER)
         {
             if (used & ClassBit(playerClass))
@@ -789,16 +894,26 @@ namespace
             if (!source)
                 source = GetTemplateCharacter(playerClass);
             if (source)
-                lineup.push_back({ playerClass, source, true });
+                rest.push_back({ playerClass, source, true });
             used |= ClassBit(playerClass);
         }
 
-        // Life one is always the character that queued; the rest in a random
-        // order unless Centurion.AllStar.ShuffleLives is off (owner: "make it
-        // random order for everyone. make this a config").
-        if (Config.ShuffleLives && lineup.size() > 2)
-            std::shuffle(lineup.begin() + 1, lineup.end(), RandomEngine::Instance());
+        // In a random order unless Centurion.AllStar.ShuffleLives is off
+        // (owner: "make it random order for everyone. make this a config").
+        if (Config.ShuffleLives && rest.size() > 1)
+            std::shuffle(rest.begin(), rest.end(), RandomEngine::Instance());
 
+        // Life one is always the character that queued.
+        Lineup lineup;
+        lineup.push_back({ playingClass, 0, false });
+        std::size_t next = 0;
+        for (Optional<LineupEntry> const& slot : slots)
+        {
+            if (slot)
+                lineup.push_back(*slot);
+            else if (next < rest.size())
+                lineup.push_back(rest[next++]);
+        }
         return lineup;
     }
 
@@ -990,12 +1105,23 @@ namespace
         KeepRealMacros(player->GetSession(), 0);
     }
 
+    void SavePicks(ObjectGuid::LowType playing, std::string_view argument);
+
     void HandleAddonRequest(Player* player, std::string_view argument)
     {
         if (argument == "MACROS:RESTORED")
         {
             std::lock_guard<std::mutex> lock(BorrowedMutex);
             MacrosBorrowed.erase(player->GetGUID().GetCounter());
+        }
+        else if (argument.substr(0, 5) == "PICK:" && argument.size() <= 5 + 16 * MAX_PICKS)
+        {
+            // A persona wears the character's own guid: what it picks is the
+            // character's, and the page is not open in a match anyway.
+            if (player->HasAllStarPersona())
+                return;
+            SavePicks(player->GetGUID().GetCounter(), argument.substr(5));
+            SendMasterLineup(player);
         }
     }
 
@@ -2192,6 +2318,7 @@ void LoadConfig()
     loaded.TimeLimitMs = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.AllStar.TimeLimit", 30))) * MINUTE * IN_MILLISECONDS;
     loaded.SourceMinLevel = uint8(std::clamp(sConfigMgr->GetIntDefault("Centurion.AllStar.SourceMinLevel", 60), 1, 255));
     loaded.ShuffleLives = sConfigMgr->GetBoolDefault("Centurion.AllStar.ShuffleLives", true);
+    loaded.Lives = uint8(std::clamp(sConfigMgr->GetIntDefault("Centurion.AllStar.Lives", 4), 1, int32(CLASS_ORDER.size())));
 
     std::string const templates = sConfigMgr->GetStringDefault("Centurion.AllStar.TemplateCharacters",
         "1:13307 2:13308 3:13314 4:13309 5:13310 7:13311 8:13315 9:13312 11:13313");
@@ -2213,6 +2340,7 @@ void LoadConfig()
 bool IsEnabled() { return Config.Enabled; }
 uint32 GetRespawnDelayMs() { return Config.RespawnDelayMs; }
 uint32 GetTimeLimitMs() { return Config.TimeLimitMs; }
+uint32 GetLives() { return Config.Lives; }
 
 ObjectGuid::LowType GetTemplateCharacter(uint8 playerClass)
 {
@@ -2315,11 +2443,11 @@ namespace
             {
                 Field* fields = result->Fetch();
                 ObjectGuid::LowType const guid = fields[0].GetUInt32();
-                characters.push_back({ guid, fields[1].GetUInt8(), fields[2].GetUInt8(), CharacterScreen::GetListPosition(guid) });
+                characters.push_back({ guid, fields[1].GetUInt8(), fields[2].GetUInt8(), CharacterScreen::GetListPosition(guid), "" });
             } while (result->NextRow());
         }
 
-        Lineup lineup = BuildLineup(playingClass, std::move(characters), false);
+        Lineup lineup = BuildLineup(playingClass, std::move(characters), false, GetPicks(key.Playing));
         for (LineupEntry const& entry : lineup)
             if (entry.Source)
                 RequestKit(entry.Source);
@@ -2334,10 +2462,20 @@ namespace
 
 namespace
 {
-    // World thread (Update): the lives the Arena Master's All-Star page shows
-    // - this character, the account's level-60 characters in list order, one
-    // a class, then the classes nobody has, in their standard kit (a player's
-    // lineup, BuildLineup with no stand-ins), before any shuffle.
+    void SendMasterLine(Player* player, std::string const& line)
+    {
+        std::string const message = "CCGAME\tAM:LU:" + line;
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
+            message, 0, player->GetName(), player->GetName());
+        player->SendDirectMessage(&data);
+    }
+
+    // World thread (Update): the Arena Master's All-Star page - this
+    // character's lives (it is life one), the account's level-60 characters
+    // it can pick for the others, in list order, and its picks as they hold
+    // (SendMasterLineup in AllStar.h). One line each: a long account would not
+    // fit one whisper.
     void QueryMasterLineup(ObjectGuid playing, uint32 account)
     {
         std::string const sql = Trinity::StringFormat(
@@ -2350,15 +2488,7 @@ namespace
             if (!player || !player->GetSession() || player->HasAllStarPersona())
                 return;
 
-            struct Listed
-            {
-                ObjectGuid::LowType Guid;
-                uint8 Class;
-                uint8 Level;
-                uint32 Position;
-                std::string Name;
-            };
-            std::vector<Listed> characters;
+            std::vector<ListedCharacter> characters;
             if (result)
             {
                 do
@@ -2369,34 +2499,90 @@ namespace
                         CharacterScreen::GetListPosition(guid), fields[3].GetString() });
                 } while (result->NextRow());
             }
-            std::sort(characters.begin(), characters.end(), [](Listed const& l, Listed const& r)
-            {
-                return l.Position != r.Position ? l.Position < r.Position : l.Guid < r.Guid;
-            });
+            SortByList(characters);
 
-            std::string lives = Trinity::StringFormat("{},{}", uint32(player->GetClass()), player->GetName());
-            uint32 used = ClassBit(player->GetClass());
-            for (Listed const& character : characters)
-            {
-                if (character.Level < Config.SourceMinLevel || !IsPlayableClass(character.Class) || (used & ClassBit(character.Class)))
-                    continue;
-                lives += Trinity::StringFormat(";{},{}", uint32(character.Class), character.Name);
-                used |= ClassBit(character.Class);
-            }
-            for (uint8 playerClass : CLASS_ORDER)
-            {
-                if (used & ClassBit(playerClass))
-                    continue;
-                lives += Trinity::StringFormat(";{},", uint32(playerClass));
-                used |= ClassBit(playerClass);
-            }
+            uint8 const playingClass = player->GetClass();
+            SendMasterLine(player, Trinity::StringFormat("BEGIN:{}:{}:{}:{}", Config.ShuffleLives ? 1 : 0,
+                uint32(Config.Lives), uint32(playingClass), player->GetName()));
+            for (ListedCharacter const& character : characters)
+                if (CanPlay(character))
+                    SendMasterLine(player, Trinity::StringFormat("O:c{}:{}:{}", character.Guid, uint32(character.Class), character.Name));
 
-            std::string const message = Trinity::StringFormat("CCGAME\tAM:LINEUP:{}:{}", Config.ShuffleLives ? 1 : 0, lives);
-            WorldPacket data;
-            ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
-                message, 0, player->GetName(), player->GetName());
-            player->SendDirectMessage(&data);
+            uint32 used = 0;
+            std::string picks;
+            for (Optional<LineupEntry> const& slot : ResolvePicks(playingClass, characters, GetPicks(playing.GetCounter()), used))
+            {
+                Pick pick;
+                if (slot && slot->Template)
+                    pick.Class = slot->Class;
+                else if (slot)
+                    pick.Guid = slot->Source;
+                picks += (picks.empty() ? "" : ",") + FormatPick(pick);
+            }
+            SendMasterLine(player, "P:" + picks);
+            SendMasterLine(player, "END");
         }));
+    }
+}
+
+namespace
+{
+    // Only what parses is stored, so the row never holds anything but
+    // c<number>, s<number> and -.
+    void SavePicks(ObjectGuid::LowType playing, std::string_view argument)
+    {
+        std::string text;
+        for (Pick const& pick : ParsePicks(argument))
+            text += (text.empty() ? "" : ",") + FormatPick(pick);
+
+        {
+            std::lock_guard<std::mutex> lock(PicksMutex);
+            if (text.empty())
+                Picks.erase(playing);
+            else
+                Picks[playing] = text;
+        }
+
+        if (!PicksTable)
+            return;     // kept for this run only
+        if (text.empty())
+            CharacterDatabase.Execute(Trinity::StringFormat(
+                "DELETE FROM character_allstar_lineup WHERE guid = {}", playing).c_str());
+        else
+            CharacterDatabase.Execute(Trinity::StringFormat(
+                "REPLACE INTO character_allstar_lineup (guid, picks) VALUES ({}, '{}')", playing, text).c_str());
+    }
+
+    // World thread, the first Update: the table (made here when it is not
+    // there yet) and every pick in it.
+    void LoadPicks()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `character_allstar_lineup` ("
+            "`guid` INT UNSIGNED NOT NULL, "
+            "`picks` VARCHAR(160) NOT NULL DEFAULT '', "
+            "PRIMARY KEY (`guid`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='All-Star: the lives each character picked after its first'");
+        if (!CharacterDatabase.Query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'character_allstar_lineup'"))
+        {
+            TC_LOG_ERROR("server.loading", "All-Star: table `character_allstar_lineup` is missing and could not be made; lineup picks last until the next restart.");
+            return;
+        }
+        PicksTable = true;
+
+        std::unordered_map<ObjectGuid::LowType, std::string> loaded;
+        if (QueryResult result = CharacterDatabase.Query("SELECT guid, picks FROM character_allstar_lineup"))
+        {
+            do
+            {
+                Field* fields = result->Fetch();
+                loaded[fields[0].GetUInt32()] = fields[1].GetString();
+            } while (result->NextRow());
+        }
+        TC_LOG_INFO("server.loading", ">> Loaded {} All-Star lineup pick(s).", uint32(loaded.size()));
+
+        std::lock_guard<std::mutex> lock(PicksMutex);
+        Picks = std::move(loaded);
     }
 }
 
@@ -2447,6 +2633,12 @@ Lineup BuildBotLineup(uint8 playingClass)
 
 void Update()
 {
+    if (!PicksLoaded)
+    {
+        PicksLoaded = true;
+        LoadPicks();
+    }
+
     if (Config.Enabled && !TemplatesAsked)
     {
         TemplatesAsked = true;

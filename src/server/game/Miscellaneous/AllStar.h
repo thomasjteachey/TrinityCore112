@@ -37,15 +37,21 @@ class WorldSession;
 // character list", and "as soon as you die, you need to immediately spawn in as
 // your new class ... maybe it shouldn't be a literal login".
 //
-// Every player has nine lives, one per class. The lineup is built from the
-// account's character list, top to bottom (CharacterScreen::GetListPosition,
-// the order the player arranges on the character screen): the character they
-// queued with first, then each level-60 character of a class not in the lineup
-// yet, then - for every class the account has no level-60 of - a random
-// level-60 playerbot character of that class (a stand-in), or that class's
-// tournament starter template when there is none (Startwarrior and the rest,
-// Centurion.AllStar.TemplateCharacters). With Centurion.AllStar.ShuffleLives
-// (the default) every life after the first is then put in a random order.
+// Every player has four lives (Centurion.AllStar.Lives; owner 2026-10-29:
+// "change all star mode to 4 lives"), each a different class. Life one is the
+// character they queued with. Lives two to four are what the player picked on
+// the Arena Master's All-Star page (owner: "allow players to rearrange what
+// characters they pick and in what order"): any level-60 character of the
+// account, or a class's standard kit, in the order they set; it is kept per
+// character (character_allstar_lineup) and checked again when the match reads
+// it. A life left on "Random" is filled from the rest as before: the account's
+// character list, top to bottom (CharacterScreen::GetListPosition), each
+// level-60 character of a class not in the lineup yet, then - for every class
+// the account has no level-60 of - a random level-60 playerbot character of
+// that class (a stand-in; bots only), or that class's tournament starter
+// template (Startwarrior and the rest, Centurion.AllStar.TemplateCharacters).
+// With Centurion.AllStar.ShuffleLives (the default) that rest is taken in a
+// random order.
 //
 // A death is a death for four seconds (Centurion.AllStar.RespawnDelay); then the
 // player stands up where they fell as the next character of the lineup. The swap is made IN PLACE, on the live character -
@@ -81,13 +87,13 @@ namespace AllStar
     bool IsEnabled();
     uint32 GetRespawnDelayMs();     // death -> back at the start as the next character
     uint32 GetTimeLimitMs();        // from the gates opening; then the most lives left wins
+    uint32 GetLives();              // lives a player has (Centurion.AllStar.Lives, 1-9)
     // The tournament starter template that stands in for a class nobody has.
     ObjectGuid::LowType GetTemplateCharacter(uint8 playerClass);
 
-    // The nine classes an All-Star plays through, in the order the templates
-    // fill the end of a lineup.
+    // The nine classes a lineup draws from, in the order the templates fill
+    // the end of one.
     std::array<uint8, 9> constexpr CLASS_ORDER = { 1, 2, 3, 4, 5, 7, 8, 9, 11 };
-    uint8 constexpr LIVES = 9;
     // Hidden, on every seat for its match: its stack count is the lives left,
     // which the name tag shows beside the World/Tournament/Bot marker. A
     // spell_dbc row (stackable clone of the 92011 Tournament Character marker).
@@ -125,18 +131,26 @@ namespace AllStar
     };
     using Lineup = std::vector<LineupEntry>;
 
-    // A player's nine lives, built from their account's character list. Asked
-    // once per seat; `playing` is the character that queued (life one).
+    // A player's lives: the character that queued, then their picks, then the
+    // rest of their account's character list. Asked once per seat; `playing`
+    // is the character that queued (life one).
     void RequestLineup(uint32 accountId, ObjectGuid::LowType playing, uint8 playingClass);
     // false while the answer is on its way.
     bool FindLineup(uint32 accountId, ObjectGuid::LowType playing, Lineup& out);
     void ForgetLineup(uint32 accountId, ObjectGuid::LowType playing);
-    // A bot's: its own class, then stand-ins/templates for the other eight
-    // (in a random order with Centurion.AllStar.ShuffleLives).
+    // A bot's: its own class, then stand-ins/templates for the rest (in a
+    // random order with Centurion.AllStar.ShuffleLives).
     Lineup BuildBotLineup(uint8 playingClass);
-    // The Arena Master's All-Star page: "AM:LINEUP:<shuffled>:<class>,<name>;..."
-    // - the lives this character would play, in order, a standard kit with an
-    // empty name. Any thread; answered from Update.
+    // The Arena Master's All-Star page - the lives this character plays and
+    // what it can pick for them:
+    //   AM:LU:BEGIN:<shuffled>:<lives>:<class>:<name>   life one
+    //   AM:LU:O:c<guid>:<class>:<name>                  a character it can pick
+    //   AM:LU:P:<pick>,<pick>,...                       lives two on: c<guid>,
+    //                                                   s<class> (standard kit)
+    //                                                   or - (random)
+    //   AM:LU:END
+    // Any thread; answered from Update. The page sends CCGAMEREQ
+    // ALLSTAR:PICK:<pick>,<pick>,... back, answered with the list again.
     void SendMasterLineup(Player* player);
 
     // World::Update: hands finished loads to the waiting matches.

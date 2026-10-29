@@ -3099,16 +3099,25 @@ Centurion.SoloShuffle.BalanceHealers = 0
 
 #
 #    Centurion.AllStar.Enable
-#        Description: The All-Star arena (battleground 890): nine lives a player, one
-#                     per class. Each death puts the player straight back at their
-#                     team's start as the next level-60 character of their own
-#                     character list (top to bottom, one per class), then the starter
-#                     template of every class they have none of. The swap is made in
-#                     place - no loading screen - and nothing of it is ever saved.
+#        Description: The All-Star arena (battleground 890): a few lives a player
+#                     (Centurion.AllStar.Lives), each a different class. Each death
+#                     puts the player back where they fell as the next character of
+#                     their lineup: the ones they picked on the Arena Master's
+#                     All-Star page, else the next level-60 character of their own
+#                     character list, else a class's starter template. The swap is
+#                     made in place - no loading screen - and nothing of it is saved.
 #        Default:     1 - (Enabled)
 #                     0 - (Disabled)
 
 Centurion.AllStar.Enable = 1
+
+#
+#    Centurion.AllStar.Lives
+#        Description: Lives a player has, the first being the character that queued.
+#                     1-9. .reload config applies it to the next match.
+#        Default:     4
+
+Centurion.AllStar.Lives = 4
 
 #
 #    Centurion.AllStar.RespawnDelay
@@ -3138,8 +3147,8 @@ Centurion.AllStar.SourceMinLevel = 60
 
 #
 #    Centurion.AllStar.ShuffleLives
-#        Description: Put every life after the first (the character that queued) in
-#                     a random order, for players and bots alike.
+#        Description: Fill the lives a player left on "Random" in a random order,
+#                     for players and bots alike (a picked life keeps its place).
 #        Default:     1 - (Random order)
 #                     0 - (The character list order, then the stand-ins and
 #                          starter templates in class order)
