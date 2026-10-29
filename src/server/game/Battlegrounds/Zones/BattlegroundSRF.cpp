@@ -478,7 +478,6 @@ uint32 constexpr SRF_PASSIVE_GOLD_TICK  = 5 * IN_MILLISECONDS;
 uint32 constexpr SRF_STRUCTURE_LEVEL_TICK  = 30 * IN_MILLISECONDS;
 // League's clock: its first wave comes at 1:30.
 uint32 constexpr SRF_LEAGUE_FIRST_WAVE     = 90 * IN_MILLISECONDS;
-uint8 constexpr SRF_UNIT_BASE_LEVEL = 10;          // the match's starting level (RiftProgression)
 uint32 constexpr SRF_MAINTAIN_TICK         = 3 * IN_MILLISECONDS;
 // The denying rule: under this share of its health a minion turns neutral.
 float constexpr SRF_DENY_HEALTH_PCT     = 50.0f;
@@ -667,7 +666,7 @@ void BattlegroundSRF::Reset()
     _unstuckTargets = 0;
     _unstuckPlaced = 0;
     _matchClock = 0;
-    _combatLevel = SRF_UNIT_BASE_LEVEL;
+    _combatLevel = RiftProgression::MatchStartLevel();
     _unitScale = 0.0f;
     _respawnAt.clear();
     _championPet.clear();
@@ -2963,13 +2962,14 @@ uint8 BattlegroundSRF::AverageMatchLevel() const
 }
 
 // Minions, monsters and structures level with the champions: from the match's
-// starting level, Centurion.Rift.UnitLevelRate of the way the champions' average
-// has come (1.0: the average itself; .reload config takes a change).
+// starting level (Centurion.Rift.StartLevel), Centurion.Rift.UnitLevelRate of the
+// way the champions' average has come (1.0: the average itself; .reload config
+// takes a change).
 uint8 BattlegroundSRF::UnitLevel() const
 {
     float const rate = std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.UnitLevelRate", 1.0f));
     float const average = float(AverageMatchLevel());
-    float const base = std::min(average, float(SRF_UNIT_BASE_LEVEL));
+    float const base = std::min(average, float(RiftProgression::MatchStartLevel()));
     return uint8(std::clamp(std::lround(base + (average - base) * rate), 1L, long(DEFAULT_MAX_LEVEL)));
 }
 

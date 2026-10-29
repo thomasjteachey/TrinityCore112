@@ -16,6 +16,7 @@
  */
 
 #include "RiftLeague.h"
+#include "RiftProgression.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
@@ -206,11 +207,47 @@ UnitAt At(UnitStats const& u, float minutes)
     return at;
 }
 
+// Centurion.Rift.Scale.* is fitted along the climb the match first had - WoW level
+// 10 at League level 1, the realm's cap at 18 - where it gives a champion its class's
+// own base health for its WoW level. A match that starts elsewhere
+// (Centurion.Rift.StartLevel) reaches each WoW level at another League level, where
+// League's champions have more or less health, so the scale is restated by that
+// share: a champion of a WoW level keeps the health the fit gives it there, and WoW's
+// spells their weight. League's own ratios stay exact (one scale for the match). At
+// the 40 start it runs from about 2.0 at League level 1 down to 0.96 at 18.
 float Scale(float leagueLevel)
 {
+    float constexpr FIT_START_LEVEL = 10.0f;
+    float constexpr LEAGUE_TOP = 18.0f;
     float const base = sConfigMgr->GetFloatDefault("Centurion.Rift.Scale.Base", 0.365f);
     float const perLevel = sConfigMgr->GetFloatDefault("Centurion.Rift.Scale.PerLevel", 0.0352f);
-    return std::max(0.01f, base + perLevel * (std::max(1.0f, leagueLevel) - 1.0f));
+    float const l = std::clamp(leagueLevel, 1.0f, LEAGUE_TOP);
+
+    float const start = float(RiftProgression::MatchStartLevel());
+    float const top = float(RiftProgression::ClimbTopLevel());
+    float fitted = l;   // the League level the fit's climb is at this WoW level
+    if (start != FIT_START_LEVEL && top > FIT_START_LEVEL)
+    {
+        float const wowLevel = start + (l - 1.0f) / (LEAGUE_TOP - 1.0f) * (top - start);
+        fitted = std::clamp(1.0f + (wowLevel - FIT_START_LEVEL) / (top - FIT_START_LEVEL) * (LEAGUE_TOP - 1.0f), 1.0f, LEAGUE_TOP);
+    }
+
+    float scale = base + perLevel * (fitted - 1.0f);
+    if (fitted != l)
+    {
+        // League's champion health at a League level, the classes' average
+        std::shared_ptr<Tables const> const tables = Get();
+        auto const health = [&tables](float level)
+        {
+            float total = 0.0f;
+            for (auto const& [playerClass, champion] : tables->Champions)
+                total += champion.Health + champion.HealthPerLevel * level;
+            return tables->Champions.empty() ? 0.0f : total / float(tables->Champions.size());
+        };
+        if (float const here = health(l); here > 0.0f)
+            scale *= health(fitted) / here;
+    }
+    return std::max(0.01f, scale);
 }
 
 float ArmorConstant(uint8 level)

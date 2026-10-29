@@ -65,9 +65,12 @@ namespace
     uint32 constexpr START_GOLD = 475;
     uint32 constexpr COPPER_PER_LEAGUE_GOLD = GOLD;
 
-    // The match starts at level 10, where the first talent point comes, and
-    // climbs to the character's real level.
-    uint8 constexpr START_LEVEL = 10;
+    // The match starts at Centurion.Rift.StartLevel (RiftProgression::MatchStartLevel)
+    // and climbs to the realm's level cap. Owner, 2026-10-29: "40-60 instead of 10-60".
+    uint8 constexpr DEFAULT_START_LEVEL = 40;
+    // Every class rank trained at or below Centurion.Rift.FreeSpellLevel comes with
+    // the match (owner, 2026-10-29: "have all spells up to level 30 learned").
+    uint8 constexpr DEFAULT_FREE_SPELL_LEVEL = 30;
 
     // League's recall: Centurion spell 94120 "Recall" (8 s cast, usable in
     // combat, broken by moving or taking damage; custom_rift_progression.cpp
@@ -199,10 +202,10 @@ namespace
         uint32 BankedXp = 0;         // what the match paid the real character (BankExperience)
         bool Persistent = true;      // false for a transient copy: nothing is written down
 
-        uint8 StartLevel = START_LEVEL;
+        uint8 StartLevel = DEFAULT_START_LEVEL;
         float LeagueXp = 0.0f;
         uint8 LeagueLevel = 1;
-        uint8 MatchLevel = START_LEVEL;
+        uint8 MatchLevel = DEFAULT_START_LEVEL;
 
         std::map<uint32 /*first rank*/, Chain> Chains;
         std::unordered_map<uint32 /*spell*/, uint32 /*first rank*/> SpellToChain;
@@ -808,6 +811,41 @@ namespace
         for (auto const& [first, ranks] : state.Unlocked)
             total += ranks;
         return total;
+    }
+
+    // How many of a chain's ranks come free (Centurion.Rift.FreeSpellLevel): its
+    // ranks trained at or below that level, lowest first.
+    uint8 FreeRanks(Chain const& chain)
+    {
+        uint8 const level = RiftProgression::FreeSpellLevel();
+        uint8 given = 0;
+        for (uint32 spell : chain.Ranks)
+        {
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
+            if (!info || info->SpellLevel > level)
+                break;
+            ++given;
+        }
+        return given;
+    }
+
+    // A rank given back, picked or free: one the talent reset put aside (disabled
+    // with the talent) is learned again, alone; one the character never trained is
+    // taught for the match only (dependent: never written down, MatchRanks). A bot
+    // learns its unlocked ranks in BotSyncSpellbook instead.
+    void TeachRank(Player* player, State& state, uint32 spell)
+    {
+        if (!state.Persistent || state.Removed.count(spell))
+            return;
+        auto const known = player->GetSpellMap().find(spell);
+        if (known != player->GetSpellMap().end() && known->second.state != PLAYERSPELL_REMOVED)
+        {
+            if (known->second.disabled)
+                player->LearnSpell(spell, false);
+            return;
+        }
+        player->LearnSpell(spell, true);
+        state.MatchRanks.insert(spell);
     }
 
     // One skill pick per level, League's skill point: the starting level's, then
@@ -2191,8 +2229,7 @@ namespace
     // never under the character's own level.
     uint8 MatchTopLevel(uint8 realLevel)
     {
-        uint32 const cap = std::min<uint32>(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL), STRONG_MAX_LEVEL);
-        return uint8(std::max<uint32>(cap, realLevel));
+        return std::max<uint8>(RiftProgression::ClimbTopLevel(), realLevel);
     }
 
     // League progress 0..1: level 1 is 0, level 18 is 1.
@@ -2219,7 +2256,8 @@ namespace
     }
 
     // The field kit is issued for the 5-level bracket the match has reached
-    // (10, 15, 20 ...), never above the top level, and swapped as it climbs.
+    // (40, 45, 50 ...), never below the start or above the top level, and swapped
+    // as it climbs.
     uint8 constexpr KIT_BRACKET = 5;
     uint8 KitLevelFor(State const& state)
     {
@@ -2285,6 +2323,23 @@ namespace
     struct CrestCover;
     CrestCover const& CrestCoverOf(uint8 classId);
     CrestCover const& RangeCoverOf(uint8 classId);
+}
+
+uint8 ClimbTopLevel()
+{
+    return uint8(std::min<uint32>(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL), STRONG_MAX_LEVEL));
+}
+
+uint8 MatchStartLevel()
+{
+    int32 const level = sConfigMgr->GetIntDefault("Centurion.Rift.StartLevel", DEFAULT_START_LEVEL);
+    return uint8(std::clamp<int32>(level, 1, ClimbTopLevel()));
+}
+
+uint8 FreeSpellLevel()
+{
+    int32 const level = sConfigMgr->GetIntDefault("Centurion.Rift.FreeSpellLevel", DEFAULT_FREE_SPELL_LEVEL);
+    return uint8(std::clamp<int32>(level, 0, STRONG_MAX_LEVEL));
 }
 
 void ProbeStorage()
@@ -2479,35 +2534,42 @@ void Enter(Player* player)
         Stashed.insert(player->GetGUID().GetCounter());
     }
 
+    // Every champion starts at the same level, a character below it raised to it
+    // ("it shouldn't matter what level you enter at").
+    state.StartLevel = std::min<uint8>(MatchStartLevel(), state.TopLevel);
+    state.MatchLevel = state.StartLevel;
+
     // The temporal gear - the field set issued for the level the match starts at
     // - goes on while the character still has its real level to equip it with.
-    Tournament::ApplyRiftLoadout(player, std::min<uint8>(START_LEVEL, state.RealLevel), state.Weapons);
+    // One raised to the start is dressed for its own level here, and SyncItems
+    // swaps the kit up to the start's moments later, as it does on a level-up.
+    uint8 const dressedAt = std::min<uint8>(state.StartLevel, state.RealLevel);
+    Tournament::ApplyRiftLoadout(player, dressedAt, state.Weapons);
     player->SetMoney(START_GOLD * COPPER_PER_LEAGUE_GOLD);
     player->ResetTalents(true);
+    state.KitApplied = dressedAt;   // KitLevelFor(state) unless the character was raised
 
-    // Only what the core list makes free comes with it (stances, forms, the
-    // pet's call); everything else is a skill pick - one now, one a level.
-    state.StartLevel = std::min<uint8>(START_LEVEL, state.RealLevel);
-    state.MatchLevel = state.StartLevel;
-    state.KitApplied = KitLevelFor(state);   // ApplyRiftLoadout dressed it for the start
-    for (uint32 first : state.FreeChains)
-        state.Unlocked[first] = uint8(state.Chains.at(first).Ranks.size());
-    // A free chain comes whole, so its ranks the character never trained (the
-    // trainers' up to the top level, BuildState) are taught now, for the match
-    // alone, as a pick's would be (HandlePickRequest). A bot learns its unlocked
-    // ranks in BotSyncSpellbook.
-    if (state.Persistent)
-        for (uint32 first : state.FreeChains)
-            for (uint32 spell : state.Chains.at(first).Ranks)
-            {
-                if (state.Removed.count(spell))
-                    continue;
-                auto const known = player->GetSpellMap().find(spell);
-                if (known != player->GetSpellMap().end() && known->second.state != PLAYERSPELL_REMOVED)
-                    continue;
-                player->LearnSpell(spell, true);
-                state.MatchRanks.insert(spell);
-            }
+    // What comes with the match: what the core list makes free (stances, forms,
+    // the pet's call) whole, and every other chain's ranks trained up to
+    // Centurion.Rift.FreeSpellLevel. A talent's trained ranks come with the
+    // talent (OnTalentLearned). The rest is a skill pick - one now, one a level.
+    // A rank the character never trained (the trainers' up to the top level,
+    // BuildState) is taught now, for the match alone, as a pick's would be.
+    std::vector<uint32> newSpells;   // chains it knew no rank of at the door: to the bars
+    for (auto const& [first, chain] : state.Chains)
+    {
+        uint8 const given = state.FreeChains.count(first) ? uint8(chain.Ranks.size()) : chain.Talent ? 0 : FreeRanks(chain);
+        if (!given)
+            continue;
+        state.Unlocked[first] = given;
+        bool knewAny = false;   // the poison coats AddPoisonChains taught just now are new too
+        for (uint32 spell : chain.Ranks)
+            knewAny = knewAny || (player->HasSpell(spell) && !state.MatchPoisons.count(spell));
+        for (uint8 k = 0; k < given; ++k)
+            TeachRank(player, state, chain.Ranks[k]);
+        if (!knewAny)
+            newSpells.push_back(chain.Ranks[given - 1]);
+    }
     state.PendingPicks = PICKS_PER_LEVEL;
     player->GiveLevel(state.StartLevel, true);
     SyncPetRanks(player, state);
@@ -2524,6 +2586,21 @@ void Enter(Player* player)
     if (!player->HasSpell(SPELL_RIFT_RECALL))
         player->LearnSpell(SPELL_RIFT_RECALL, false);
     PlaceUnlockedSpell(player, state, 0, SPELL_RIFT_RECALL);
+    // The spells the match gave that the character never had go on free buttons,
+    // the lowest-level first, as a pick's first rank does. The ones it had keep
+    // the buttons its own bars gave them.
+    if (state.Persistent)
+    {
+        std::sort(newSpells.begin(), newSpells.end(), [](uint32 a, uint32 b)
+        {
+            uint32 const firstA = sSpellMgr->GetFirstSpellInChain(a), firstB = sSpellMgr->GetFirstSpellInChain(b);
+            SpellInfo const* infoA = sSpellMgr->GetSpellInfo(firstA ? firstA : a);
+            SpellInfo const* infoB = sSpellMgr->GetSpellInfo(firstB ? firstB : b);
+            return std::make_tuple(infoA ? infoA->SpellLevel : 0, a) < std::make_tuple(infoB ? infoB->SpellLevel : 0, b);
+        });
+        for (uint32 spell : newSpells)
+            PlaceUnlockedSpell(player, state, state.SpellToChain.at(spell), spell);
+    }
     PublishBars(player, state);
     CoatBotPoisons(player, state);
     SyncItemsFor(player, state);
@@ -3213,11 +3290,32 @@ void OnTalentLearned(Player* player, uint32 talentSpell)
     // each at its trainer's level. The talent used to count as the first of
     // them too: rank 2 came with the talent, before its level, put aside and
     // so never castable, and the first pick went straight to rank 3.
+    // Its trained ranks up to Centurion.Rift.FreeSpellLevel come with it, as
+    // every other chain's did at the door (Aimed Shot 2, Pyroblast 2 and 3).
+    std::unordered_map<uint32 /*first rank*/, uint32 /*best free rank*/> freeBest;
     for (auto const& [first, chain] : state->Chains)
-        if (chain.Talent && player->HasSpell(first))
-            state->TalentKnown.insert(first);
+    {
+        if (!chain.Talent || !player->HasSpell(first) || !state->TalentKnown.insert(first).second)
+            continue;
+        uint8 const given = FreeRanks(chain);
+        auto const unlocked = state->Unlocked.find(first);
+        uint8 const have = unlocked != state->Unlocked.end() ? unlocked->second : 0;
+        if (given <= have)
+            continue;
+        for (uint8 k = have; k < given; ++k)
+            TeachRank(player, *state, chain.Ranks[k]);
+        state->Unlocked[first] = given;
+        freeBest[first] = chain.Ranks[given - 1];
+    }
     if (IsTransient(player))
         return;
+    // the talent's own rank on the bars becomes the best free rank, as a trainer's would
+    for (auto const& [first, best] : freeBest)
+        if (player->HasSpell(best))
+            for (uint8 button = 0; button < MAX_ACTION_BUTTONS; ++button)
+                if (ActionButton const* ab = player->GetActionButton(button))
+                    if (ab->GetType() == ACTION_BUTTON_SPELL && ab->GetAction() == first)
+                        player->addActionButton(button, best, ACTION_BUTTON_SPELL);
     RefillSavedButtons(player, *state);
     std::vector<uint32> given;
     if (SpellInfo const* info = sSpellMgr->GetSpellInfo(talentSpell))
@@ -3235,6 +3333,8 @@ void OnTalentLearned(Player* player, uint32 talentSpell)
         if (!player->HasSpell(spell))
             continue;
         uint32 const first = sSpellMgr->GetFirstSpellInChain(spell);
+        if (auto const best = freeBest.find(first); best != freeBest.end() && player->HasSpell(best->second))
+            spell = best->second;
         bool onBars = false;
         for (uint8 button = 0; button < MAX_ACTION_BUTTONS && !onBars; ++button)
             if (ActionButton const* ab = player->GetActionButton(button))
@@ -4123,20 +4223,7 @@ void HandlePickRequest(Player* player, std::string_view argument)
         {
             uint32 const first = state->SpellToChain.at(*spellId);
             bool const firstUnlock = ++state->Unlocked[first] == 1;
-            // A talent's trained rank the match reset put aside (disabled with
-            // the talent) is learned again now, alone; one the character never
-            // trained is taught for the match only (dependent: never written down).
-            auto const known = player->GetSpellMap().find(*spellId);
-            if (known != player->GetSpellMap().end() && known->second.state != PLAYERSPELL_REMOVED)
-            {
-                if (known->second.disabled)
-                    player->LearnSpell(*spellId, false);
-            }
-            else
-            {
-                player->LearnSpell(*spellId, true);
-                state->MatchRanks.insert(*spellId);
-            }
+            TeachRank(player, *state, *spellId);
             if (firstUnlock)
                 PlaceUnlockedSpell(player, *state, first, *spellId);
             MoveButtonsUpRank(player, *state, first);

@@ -6835,6 +6835,33 @@ VanillaRaids.Naxx40.Nerf.Razuvious = 0
 VanillaRaids.Naxx40.Nerf.Gluth = 0
 
 #
+#    Centurion.Rift.StartLevel
+#        Description: Summoner's Rift: the level every match starts at. The match
+#                     climbs from here to the realm's level cap in the same League
+#                     match time whatever level the character entered at, and a
+#                     character below it is raised to it. Minions, monsters and
+#                     structures level from here too, and the match scale
+#                     (Centurion.Rift.Scale.*) is restated for it. Read as each
+#                     champion enters, so .reload config applies from the next match.
+#        Default:     40 - (40-60; it was 10 until 2026-10-29)
+
+Centurion.Rift.StartLevel = 40
+
+#
+#    Centurion.Rift.FreeSpellLevel
+#        Description: Summoner's Rift: every class rank trained at or below this
+#                     level comes with the match, learned and usable from the start
+#                     (taught for the match alone when the character never trained
+#                     it). A talent's trained ranks up to it come with the talent.
+#                     Higher ranks are skill picks, one a level. 0 gives only the
+#                     core list's free abilities (rift_ability_whitelist). Read as
+#                     each champion enters, so .reload config applies from the next
+#                     match.
+#        Default:     30
+
+Centurion.Rift.FreeSpellLevel = 30
+
+#
 #    Centurion.Rift.PlayerGoldRate
 #    Centurion.Rift.PlayerXpRate
 #        Description: Summoner's Rift: the share of League's gold and experience a
@@ -6886,11 +6913,11 @@ Centurion.Rift.MaxExperienceLevels = 1.0
 #    Centurion.Rift.UnitLevelRate
 #        Description: Summoner's Rift: how fast minions, jungle monsters and
 #                     structures level with the champions - the share of the way
-#                     from the match's starting level (10) to the champions'
-#                     average level. Their League numbers are converted at the
-#                     League level that share gives (1.0: the champions' own, so
-#                     units and champions meet as in League). .reload config
-#                     applies a change at once.
+#                     from the match's starting level (Centurion.Rift.StartLevel)
+#                     to the champions' average level. Their League numbers are
+#                     converted at the League level that share gives (1.0: the
+#                     champions' own, so units and champions meet as in League).
+#                     .reload config applies a change at once.
 #        Default:     1.0 - (the champions' average level)
 
 Centurion.Rift.UnitLevelRate = 1.0
@@ -6906,7 +6933,12 @@ Centurion.Rift.UnitLevelRate = 1.0
 #                     damage against League's, so WoW's spells keep their weight.
 #                     Every League ratio (hits and seconds to kill) is the same at
 #                     any scale. .reload config applies a change at once.
-#        Default:     0.365 - (League level 1)
+#                     The fit is for a climb from WoW level 10 (League 1) to the
+#                     cap (League 18). With another Centurion.Rift.StartLevel the
+#                     server restates it so a champion of each WoW level keeps the
+#                     health the fit gives it there (at 40: about 2.0 at League 1,
+#                     falling to 0.96 at 18) - leave these as they are.
+#        Default:     0.365 - (League level 1 of the 10-60 climb)
 #                     0.0352 - (0.96 at League level 18)
 
 Centurion.Rift.Scale.Base = 0.365

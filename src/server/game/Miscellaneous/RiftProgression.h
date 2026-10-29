@@ -31,11 +31,11 @@ class SpellInfo;
 class Unit;
 struct SpellModifier;
 
-// Summoner's Rift progression: every match starts at level 10 - where the first
-// talent point comes - and climbs back to the character's real level, the way a
-// League match climbs from 1 to 18.
+// Summoner's Rift progression: every match starts at the same level
+// (Centurion.Rift.StartLevel, 40) and climbs to the realm's level cap, the way a
+// League match climbs from 1 to 18. A character below the start is raised to it.
 //
-// The level drop is real (Player::GiveLevel, borrowed). On the way in:
+// The level change is real (Player::GiveLevel, borrowed). On the way in:
 //
 //  - The active spec's talents are written down and reset; the match's talent
 //    points are the character's to spend in the ordinary talent frame, one per
@@ -44,8 +44,10 @@ struct SpellModifier;
 //    character is in a match (or has a stash row) InitTalentForLevel neither
 //    resets talents it cannot pay for nor folds the specs together, and the spec
 //    cannot be switched (SuppressTalentReset).
-//  - Spells stay known. Everything a character of the starting level would know
-//    is usable from the start; anything higher is refused until it is unlocked
+//  - Spells stay known. Every class rank trained at or below
+//    Centurion.Rift.FreeSpellLevel (30) is usable from the start - taught for the
+//    match when the character never trained it - and a talent's trained ranks up
+//    to it come with the talent. Anything higher is refused until it is unlocked
 //    (Spell::CheckCast, AdjustCast), and a higher rank than the one unlocked
 //    casts the unlocked rank instead, so the action bar keeps working.
 //  - The gear goes aside for the field set (Tournament::ApplyRiftLoadout, the
@@ -71,6 +73,14 @@ namespace RiftProgression
     // World startup: is `custom_rift_stash` there? A realm without it never
     // enters the progression (the Rift then plays at the character's own level).
     void ProbeStorage();
+
+    // The level every match starts at (Centurion.Rift.StartLevel), the level its
+    // climb ends at (the realm's level cap), and the level up to which every class
+    // rank comes free (Centurion.Rift.FreeSpellLevel; 0: only the core list's free
+    // ones). Read each time, so .reload config applies from the next champion in.
+    TC_GAME_API uint8 MatchStartLevel();
+    TC_GAME_API uint8 ClimbTopLevel();
+    TC_GAME_API uint8 FreeSpellLevel();
 
     // True while this character is playing a Rift match under these rules.
     TC_GAME_API bool IsInMatch(Player const* player);

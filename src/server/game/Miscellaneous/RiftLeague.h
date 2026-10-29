@@ -42,8 +42,9 @@
 //
 // so hits and seconds to kill come out as League's. Scale follows WoW's own
 // growth (Centurion.Rift.Scale.*; fitted to the classes' base health and
-// basic-attack damage against League's, 0.365 at League level 1 to 0.96 at 18),
-// so WoW's spells keep their natural weight against health.
+// basic-attack damage against League's along a 10-60 climb, 0.365 at League
+// level 1 to 0.96 at 18, and restated for the match's real start level), so
+// WoW's spells keep their natural weight against health.
 namespace RiftLeague
 {
     struct UnitStats
