@@ -19,6 +19,7 @@
 #define TRINITYCORE_RIFT_PROGRESSION_H
 
 #include "Define.h"
+#include "DatabaseEnvFwd.h"
 
 #include <string>
 #include <string_view>
@@ -68,6 +69,9 @@ struct SpellModifier;
 // written to `custom_rift_stash` before anything changes, so leaving by any
 // route - the match ending, the leave button, a disconnect, a crash, a restart -
 // ends the same way: Leave(), or OnLogin() at the next login, gives it all back.
+// The row is only deleted inside the character's next save (OnSave), the one
+// that writes the real character down, so a crash between the two cannot
+// leave the character on the match's build with nothing to restore it from.
 namespace RiftProgression
 {
     // World startup: is `custom_rift_stash` there? A realm without it never
@@ -105,6 +109,12 @@ namespace RiftProgression
     // that left a match without Leave() running, or re-applies the rules to one
     // that logged back into the match it left.
     TC_GAME_API void OnLogin(Player* player);
+
+    // Player::SaveToDB: a stash already given back (Leave, or a login's restore)
+    // is deleted in this save's transaction, alongside the real character it held
+    // - never on its own. Until that save lands the row stays, and a crash before
+    // it is put right by the next login like any other match left mid-way.
+    void OnSave(Player* player, CharacterDatabaseTransaction trans);
 
     // Player::InitTalentForLevel and ActivateSpec: true while talents must not be
     // reset, the specs folded together or switched.

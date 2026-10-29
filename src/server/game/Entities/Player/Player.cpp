@@ -22304,6 +22304,11 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
     if (!create)
         sScriptMgr->OnPlayerSave(this);
 
+    // A Summoner's Rift stash already given back is deleted here, in the same
+    // transaction as the real character it held - past the early returns above,
+    // so a save that writes nothing never takes it (RiftProgression::OnSave).
+    RiftProgression::OnSave(this, trans);
+
     CharacterDatabasePreparedStatement* stmt = nullptr;
     uint8 index = 0;
 

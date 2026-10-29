@@ -292,10 +292,11 @@ namespace
     // InitTalentForLevel into SuppressTalentReset.
     std::recursive_mutex StateMutex;
     std::unordered_map<ObjectGuid::LowType, State> States;
-    // Characters with a row in custom_rift_stash. Read at startup and kept with the
-    // rows: a character that crashed out of a match loads at its match level, and
-    // the talents of its OTHER spec - more than that level pays for - must already
-    // be protected while it loads.
+    // Characters with a row in custom_rift_stash still owed to them. Read at startup
+    // and kept with the rows: a character that crashed out of a match loads at its
+    // match level, and the talents of its OTHER spec - more than that level pays
+    // for - must already be protected while it loads. A row given back leaves this
+    // at once and waits in Released for its deletion.
     std::unordered_set<ObjectGuid::LowType> Stashed;
     bool StoragePresent = false;
     // custom_rift_stash's `skills` and `pet_spells` columns (2026-10-23): without them the
@@ -305,6 +306,30 @@ namespace
     // and its `banked_xp` (2026-10-27): what a match paid in experience (BankExperience),
     // for a character restored from the stash rather than by Leave.
     bool StashBankColumn = false;
+
+    // Rows already given back (Leave, RestoreFromStash) whose deletion waits for the
+    // character's next save: OnSave puts it in that save's own transaction, the one
+    // that writes the real character down. Deleted on its own instead, a crash
+    // before that save left the database holding the match's level, talents and
+    // gold from the last save inside the match, and no row to put them right.
+    //
+    // Every write to the table goes through the character database's asynchronous
+    // queue, as every save does, and that queue runs in order
+    // (CharacterDatabase.WorkerThreads = 1): a new match's row is queued after the
+    // save still carrying the last one's deletion, never overtaken by it.
+    //
+    // A leaf lock of its own, never held while calling out: Player::SaveToDB asks
+    // it from wherever a save happens.
+    std::mutex ReleaseMutex;
+    std::unordered_set<ObjectGuid::LowType> Released;
+    void SetReleased(ObjectGuid::LowType guid, bool released)
+    {
+        std::lock_guard<std::mutex> lock(ReleaseMutex);
+        if (released)
+            Released.insert(guid);
+        else
+            Released.erase(guid);
+    }
     // The characters whose skills follow the tournament's rules while they are in a match
     // (Tournament::AlwaysMaxWeaponSkill / AlwaysMaxSkillForLevel ask UsesMatchSkills): a
     // leaf lock of its own, never held while calling out, because those are asked from
@@ -2523,14 +2548,20 @@ void Enter(Player* player)
     }
 
     // Written down before anything changes: from here on every way out restores.
+    // Queued, not written on the spot: every save the match causes is queued
+    // behind it, so none can reach the disk first, and a save still carrying the
+    // last match's deletion (Released) goes ahead of it instead of after.
     if (state.Persistent)
     {
-        CharacterDatabase.DirectPExecute("REPLACE INTO custom_rift_stash (guid, real_level, real_xp, money, talents, actions) VALUES ({}, {}, {}, {}, '{}', '{}')",
+        SetReleased(player->GetGUID().GetCounter(), false);   // this row replaces that one
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        trans->PAppend("REPLACE INTO custom_rift_stash (guid, real_level, real_xp, money, talents, actions) VALUES ({}, {}, {}, {}, '{}', '{}')",
             player->GetGUID().GetCounter(), uint32(state.RealLevel), state.RealXp, state.RealMoney, TalentsToString(state.RealTalents),
             ButtonsToString(state.RealButtons));
         if (StashSkillsColumn)
-            CharacterDatabase.DirectPExecute("UPDATE custom_rift_stash SET skills = '{}' WHERE guid = {}",
+            trans->PAppend("UPDATE custom_rift_stash SET skills = '{}' WHERE guid = {}",
                 SkillsToString(state.RealSkills), player->GetGUID().GetCounter());
+        CharacterDatabase.CommitTransaction(trans);
         Stashed.insert(player->GetGUID().GetCounter());
     }
 
@@ -2652,8 +2683,10 @@ void Leave(Player* player)
     ResetClientSpellbook(player, state, false);
     ForgetRecall(player);
 
+    // The row goes with the character's next save, in one transaction with the
+    // real level, talents and gold just put back (OnSave).
     if (state.Persistent)
-        CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
+        SetReleased(player->GetGUID().GetCounter(), true);
     SendLine(player, "RIFT:END");
 
     // What the match paid in experience (BankExperience), now that the real level is
@@ -2742,7 +2775,8 @@ namespace
     player->SendActionButtons(1);
     ResetClientSpellbook(player, shown, false);
     ForgetRecall(player);
-    CharacterDatabase.PExecute("DELETE FROM custom_rift_stash WHERE guid = {}", player->GetGUID().GetCounter());
+    // Deleted with the next save, as Leave's is: a crash before it restores again.
+    SetReleased(player->GetGUID().GetCounter(), true);
     TC_LOG_INFO("bg.battleground", "Rift: {} restored from the stash of a match it left; level {}, experience, money, talents and bars back.", player->GetName(), realLevel);
     // and what the match paid in experience, as Leave gives it.
     // (BIGINT either way: the column, or the literal 0 read in its place.)
@@ -2778,6 +2812,20 @@ void OnLogin(Player* player)
     // the real character just restored.
     if (inRift)
         Enter(player);
+}
+
+void OnSave(Player* player, CharacterDatabaseTransaction trans)
+{
+    if (!player || !StoragePresent)
+        return;
+
+    ObjectGuid::LowType const guid = player->GetGUID().GetCounter();
+    {
+        std::lock_guard<std::mutex> lock(ReleaseMutex);
+        if (!Released.erase(guid))
+            return;
+    }
+    trans->PAppend("DELETE FROM custom_rift_stash WHERE guid = {}", guid);
 }
 
 bool SuppressTalentReset(Player const* player)
