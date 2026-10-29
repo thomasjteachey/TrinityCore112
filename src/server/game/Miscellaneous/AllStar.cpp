@@ -1615,6 +1615,70 @@ void PersonaAccess::PutBackCarried(Player* player, uint8 slot, Item* item)
     delete item;
 }
 
+void PersonaAccess::GiveConjured(Player* player, PersonaStash& stash)
+{
+    // A warlock life comes in with its Healthstone and a mage's with its mana
+    // gems (owner: "when you switch to a warlock or mage, grant them their
+    // mana gem and health stone"): the life's own top Create Healthstone and
+    // every Conjure Mana gem it knows, cast for free the way the character
+    // would cast them - a talent such as Improved Healthstone still picks the
+    // stronger stone, its script does. What they make is issued like the gear.
+    if (player->GetClass() != CLASS_WARLOCK && player->GetClass() != CLASS_MAGE)
+        return;
+
+    uint32 healthstone = 0;
+    uint32 healthstoneLevel = 0;
+    std::vector<uint32> manaGems;
+    for (auto const& [spell, known] : player->m_spells)
+    {
+        if (known.state == PLAYERSPELL_REMOVED || known.disabled || !known.active)
+            continue;
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
+        if (!info || info->IsPassive() || !info->SpellName[LOCALE_enUS])
+            continue;
+        if (uint32 const next = sSpellMgr->GetNextSpellInChain(spell))
+            if (player->HasSpell(next))
+                continue;
+        std::string const name = info->SpellName[LOCALE_enUS];
+        if (info->SpellFamilyName == SPELLFAMILY_WARLOCK && name.rfind("Create Healthstone", 0) == 0)
+        {
+            if (!healthstone || info->SpellLevel > healthstoneLevel)
+            {
+                healthstone = spell;
+                healthstoneLevel = info->SpellLevel;
+            }
+        }
+        else if (info->SpellFamilyName == SPELLFAMILY_MAGE && name.rfind("Conjure Mana", 0) == 0)
+            manaGems.push_back(spell);
+    }
+    if (healthstone)
+        manaGems.push_back(healthstone);
+    if (manaGems.empty())
+        return;
+
+    auto const carried = [player]()
+    {
+        std::unordered_set<ObjectGuid> items;
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                items.insert(item->GetGUID());
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Item* bagItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, bagSlot))
+                if (Bag* bag = bagItem->ToBag())
+                    for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                        if (Item* item = bag->GetItemByPos(uint8(slot)))
+                            items.insert(item->GetGUID());
+        return items;
+    };
+
+    std::unordered_set<ObjectGuid> const before = carried();
+    for (uint32 spell : manaGems)
+        player->CastSpell(player, spell, true);
+    for (ObjectGuid const& guid : carried())
+        if (!before.count(guid))
+            stash.Issued.push_back(guid);
+}
+
 void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit)
 {
     // A match fought under the tournament's rules dresses everyone the same
