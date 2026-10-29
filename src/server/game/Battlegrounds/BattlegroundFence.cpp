@@ -285,27 +285,34 @@ namespace
         fence.MapId = map->GetId();
         fence.Usable = true;
 
-        // Which building the arena floor is in, sampled at a team start rather
-        // than the geometric centre - the centre can sit over a pit or a gap,
-        // while a start is by definition somewhere a player stands. Any hit
-        // makes containment exact; none means the floor is terrain and the
-        // radial shape above stays in charge.
+        // Which building the arena is, when it is one: containment is then
+        // exact (Contains). Only when both team pens AND the floor the fence was
+        // measured from are that one building. A start alone is not enough: in
+        // Ashamane's Fall each pen is a model of its own, so the floor beyond
+        // the gate read as outside, and every bot that stepped out of its pen
+        // was "walked back" to where it stood and teleported home 4 s later,
+        // over and over. Anything less than all three agreeing - two buildings,
+        // a terrain floor, a centre over a pit - keeps the radial shape above.
         if (VMAP::VMapManager2* vmap = VMAP::VMapFactory::createOrGetVMapManager())
         {
-            for (Position const* start : { allianceStart, hordeStart })
+            auto const rootAt = [&](float x, float y, float z)
             {
-                float sampleZ = start->GetPositionZ() + 2.0f;
+                float sampleZ = z + 2.0f;
                 uint32 areaFlags = 0;
                 int32 adtId = 0;
                 int32 rootId = -1;
                 int32 groupId = 0;
-                if (vmap->getAreaInfo(map->GetId(), start->GetPositionX(), start->GetPositionY(),
-                    sampleZ, areaFlags, adtId, rootId, groupId) && rootId >= 0)
-                {
-                    fence.WmoRootId = rootId;
-                    break;
-                }
-            }
+                return vmap->getAreaInfo(map->GetId(), x, y, sampleZ, areaFlags, adtId, rootId, groupId) ? rootId : -1;
+            };
+            int32 const allianceRoot = rootAt(allianceStart->GetPositionX(), allianceStart->GetPositionY(), allianceStart->GetPositionZ());
+            int32 const hordeRoot = rootAt(hordeStart->GetPositionX(), hordeStart->GetPositionY(), hordeStart->GetPositionZ());
+            int32 const floorRoot = rootAt(fence.CentreX, fence.CentreY, floorZ);
+            if (allianceRoot >= 0 && allianceRoot == hordeRoot && allianceRoot == floorRoot)
+                fence.WmoRootId = allianceRoot;
+            else if (allianceRoot >= 0 || hordeRoot >= 0 || floorRoot >= 0)
+                TC_LOG_INFO("bg.battleground",
+                    "BattlegroundFence: map {} bg {}: pens and floor are not one building (roots {}, {}, floor {}) - radial shape.",
+                    bg->GetMapId(), uint32(bg->GetTypeID()), allianceRoot, hordeRoot, floorRoot);
         }
 
         float const smallest = *std::min_element(fence.SectorRadius.begin(), fence.SectorRadius.end());
