@@ -47,7 +47,7 @@ class WorldSession;
 // Centurion.AllStar.TemplateCharacters). With Centurion.AllStar.ShuffleLives
 // (the default) every life after the first is then put in a random order.
 //
-// A death is a death for two seconds (Centurion.AllStar.RespawnDelay); then the
+// A death is a death for four seconds (Centurion.AllStar.RespawnDelay); then the
 // player stands up where they fell as the next character of the lineup. The swap is made IN PLACE, on the live character -
 // same guid, same session, same seat - so there is no loading screen: what the
 // next character is made of - its name, race and looks, spells, talents,

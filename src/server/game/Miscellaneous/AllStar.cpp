@@ -158,7 +158,7 @@ namespace
     struct Settings
     {
         bool Enabled = true;
-        uint32 RespawnDelayMs = 2 * IN_MILLISECONDS;
+        uint32 RespawnDelayMs = 4 * IN_MILLISECONDS;
         uint32 TimeLimitMs = 30 * MINUTE * IN_MILLISECONDS;
         uint8 SourceMinLevel = 60;
         bool ShuffleLives = true;           // every life after the first in a random order
@@ -2117,7 +2117,7 @@ void LoadConfig()
 
     Settings loaded;
     loaded.Enabled = sConfigMgr->GetBoolDefault("Centurion.AllStar.Enable", true);
-    loaded.RespawnDelayMs = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.AllStar.RespawnDelay", 2 * IN_MILLISECONDS)));
+    loaded.RespawnDelayMs = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.AllStar.RespawnDelay", 4 * IN_MILLISECONDS)));
     loaded.TimeLimitMs = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.AllStar.TimeLimit", 30))) * MINUTE * IN_MILLISECONDS;
     loaded.SourceMinLevel = uint8(std::clamp(sConfigMgr->GetIntDefault("Centurion.AllStar.SourceMinLevel", 60), 1, 255));
     loaded.ShuffleLives = sConfigMgr->GetBoolDefault("Centurion.AllStar.ShuffleLives", true);
