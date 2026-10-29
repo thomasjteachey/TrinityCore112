@@ -662,21 +662,30 @@ namespace
 
         //   0   1      2        3      4    5           6     7     8        9          10       11            12      13        14              15
         // id, entry, modelid, level, exp, Reactstate, slot, name, renamed, curhealth, curmana, curhappiness, abdata, savetime, CreatedBySpell, PetType
-        if (kit->Class == CLASS_HUNTER)
+        // A hunter's pet, and a warlock's demon (owner: "for warlocks,
+        // automatically summon their last summoned pet").
+        if (kit->Class == CLASS_HUNTER || kit->Class == CLASS_WARLOCK)
         {
+            PetType const wanted = kit->Class == CLASS_HUNTER ? HUNTER_PET : SUMMON_PET;
             if (PreparedQueryResult result = holder.GetPreparedResult(KIT_QUERY_PETS))
             {
                 bool haveCurrent = false;
+                uint32 newestPutAway = 0;
                 do
                 {
                     Field* row = result->Fetch();
-                    if (PetType(row[15].GetUInt8()) != HUNTER_PET)
+                    if (PetType(row[15].GetUInt8()) != wanted)
                         continue;
                     bool const current = row[6].GetUInt8() == PET_SAVE_AS_CURRENT;
                     // The pet out, or else the one that is neither out nor
-                    // stabled (dismissed, the hunter dead or mounted at logout).
+                    // stabled (dismissed, the hunter dead or mounted at logout)
+                    // - a warlock's last one put away, when it has several.
                     if (haveCurrent || (!current && row[6].GetUInt8() != PET_SAVE_NOT_IN_SLOT))
                         continue;
+                    if (!current && kit->HasPet && row[13].GetUInt32() < newestPutAway)
+                        continue;
+                    if (!current)
+                        newestPutAway = row[13].GetUInt32();
 
                     PetStable::PetInfo& pet = kit->Pet;
                     kit->SourcePetNumber = row[0].GetUInt32();
@@ -693,7 +702,7 @@ namespace
                     pet.ActionBar = row[12].GetString();
                     pet.LastSaveTime = row[13].GetUInt32();
                     pet.CreatedBySpellId = row[14].GetUInt32();
-                    pet.Type = HUNTER_PET;
+                    pet.Type = wanted;
                     kit->HasPet = true;
                     haveCurrent = current;
                 } while (result->NextRow());
@@ -722,7 +731,7 @@ namespace
                 return;
             }
 
-            // A hunter's pet comes with what it was taught.
+            // A hunter's pet - a warlock's demon - comes with what it was taught.
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_PET_SPELL);
             stmt->setUInt32(0, kit->SourcePetNumber);
             QueryCallbacks.AddCallback(CharacterDatabase.AsyncQuery(stmt).WithPreparedCallback(
@@ -1159,6 +1168,7 @@ private:
     static void EquipKit(Player* player, PersonaStash& stash, Kit const& kit);
     static void GiveAmmo(Player* player, PersonaStash& stash, uint32 ammo);
     static void GiveConsumables(Player* player, PersonaStash& stash, Kit const& kit);
+    static void GiveConjured(Player* player, PersonaStash& stash);
     static void SummonPet(Player* player, PersonaStash& stash, Kit const& kit);
     static void PutBack(Player* player, uint8 slot, Item* item);
     static void RecastPassives(Player* player);
@@ -1486,6 +1496,70 @@ void PersonaAccess::GiveConsumables(Player* player, PersonaStash& stash, Kit con
             player->GetName(), player->GetGUID().GetCounter(), left, kit.Name, given);
 }
 
+void PersonaAccess::GiveConjured(Player* player, PersonaStash& stash)
+{
+    // A warlock life comes in with its Healthstone and a mage's with its mana
+    // gems (owner: "when you switch to a warlock or mage, grant them their
+    // mana gem and health stone"): the life's own top Create Healthstone and
+    // every Conjure Mana gem it knows, cast for free the way the character
+    // would cast them - a talent such as Improved Healthstone still picks the
+    // stronger stone, its script does. What they make is issued like the gear.
+    if (player->GetClass() != CLASS_WARLOCK && player->GetClass() != CLASS_MAGE)
+        return;
+
+    uint32 healthstone = 0;
+    uint32 healthstoneLevel = 0;
+    std::vector<uint32> manaGems;
+    for (auto const& [spell, known] : player->m_spells)
+    {
+        if (known.state == PLAYERSPELL_REMOVED || known.disabled || !known.active)
+            continue;
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
+        if (!info || info->IsPassive() || !info->SpellName[LOCALE_enUS])
+            continue;
+        if (uint32 const next = sSpellMgr->GetNextSpellInChain(spell))
+            if (player->HasSpell(next))
+                continue;
+        std::string const name = info->SpellName[LOCALE_enUS];
+        if (info->SpellFamilyName == SPELLFAMILY_WARLOCK && name.rfind("Create Healthstone", 0) == 0)
+        {
+            if (!healthstone || info->SpellLevel > healthstoneLevel)
+            {
+                healthstone = spell;
+                healthstoneLevel = info->SpellLevel;
+            }
+        }
+        else if (info->SpellFamilyName == SPELLFAMILY_MAGE && name.rfind("Conjure Mana", 0) == 0)
+            manaGems.push_back(spell);
+    }
+    if (healthstone)
+        manaGems.push_back(healthstone);
+    if (manaGems.empty())
+        return;
+
+    auto const carried = [player]()
+    {
+        std::unordered_set<ObjectGuid> items;
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                items.insert(item->GetGUID());
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+            if (Item* bagItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, bagSlot))
+                if (Bag* bag = bagItem->ToBag())
+                    for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                        if (Item* item = bag->GetItemByPos(uint8(slot)))
+                            items.insert(item->GetGUID());
+        return items;
+    };
+
+    std::unordered_set<ObjectGuid> const before = carried();
+    for (uint32 spell : manaGems)
+        player->CastSpell(player, spell, true);
+    for (ObjectGuid const& guid : carried())
+        if (!before.count(guid))
+            stash.Issued.push_back(guid);
+}
+
 void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit)
 {
     // A match fought under the tournament's rules dresses everyone the same
@@ -1543,11 +1617,12 @@ void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit
     if (kit.Class == CLASS_HUNTER && kit.Ammo)
         GiveAmmo(player, stash, kit.Ammo);
     GiveConsumables(player, stash, kit);
+    GiveConjured(player, stash);
 }
 
 void PersonaAccess::SummonPet(Player* player, PersonaStash& stash, Kit const& kit)
 {
-    if (kit.Class != CLASS_HUNTER || !kit.HasPet)
+    if ((kit.Class != CLASS_HUNTER && kit.Class != CLASS_WARLOCK) || !kit.HasPet)
         return;
 
     // The source's pet, under a number of its own that has no rows anywhere:
@@ -1563,7 +1638,7 @@ void PersonaAccess::SummonPet(Player* player, PersonaStash& stash, Kit const& ki
     stash.PersonaPetNumber = info.PetNumber;
     stash.PetSpellsTaught = kit.PetSpells.empty();
 
-    Pet* pet = new Pet(player, HUNTER_PET);
+    Pet* pet = new Pet(player, info.Type);
     if (!pet->LoadPetFromDB(player, 0, info.PetNumber, true))
     {
         delete pet;
