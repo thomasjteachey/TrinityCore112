@@ -589,6 +589,7 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
 
     WriteMovementInfo(&data, &movementInfo);
     mover->SendMessageToSet(&data, _player);
+    sScriptMgr->OnMovementRelay(this, data);
 
     mover->m_movementInfo = movementInfo;
 

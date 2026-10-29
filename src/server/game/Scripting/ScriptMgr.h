@@ -232,6 +232,11 @@ class TC_GAME_API ServerScript : public ScriptObject
         // Called when a (valid) packet is received by a client. The packet object is a copy of the original packet, so
         // reading and modifying it is safe. Make sure to check WorldSession pointer before usage, it might be null in case of auth packets
         virtual void OnPacketReceive(WorldSession* session, WorldPacket& packet);
+
+        // Called when the server relays a client's movement (a MSG_MOVE_* it accepted) to the players
+        // around the mover. The sending session never receives that packet, so OnPacketSend does not
+        // see it there. Map thread.
+        virtual void OnMovementRelay(WorldSession* session, WorldPacket const& packet);
 };
 
 class TC_GAME_API WorldScript : public ScriptObject
@@ -983,6 +988,7 @@ class TC_GAME_API ScriptMgr
         void OnSocketClose(std::shared_ptr<WorldSocket> socket);
         void OnPacketReceive(WorldSession* session, WorldPacket const& packet);
         void OnPacketSend(WorldSession* session, WorldPacket const& packet);
+        void OnMovementRelay(WorldSession* session, WorldPacket const& packet);
 
     public: /* WorldScript */
 

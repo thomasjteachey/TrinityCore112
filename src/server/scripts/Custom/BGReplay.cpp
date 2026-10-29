@@ -4456,31 +4456,20 @@ std::vector<uint8> payload(packet.size());
     }
 
 
-class BGReplayServerScript : public ServerScript
-{
-public:
-    BGReplayServerScript() : ServerScript("BGReplayServerScript") { }
-
-    void OnPacketSend(WorldSession* session, WorldPacket& packet) override
+    // The arena whose replay records this session's packets, or nullptr.
+    Battleground* RecordedArenaFor(WorldSession* session)
     {
-        if (!session || !session->GetPlayer())
-            return;
+        Player* player = session ? session->GetPlayer() : nullptr;
+        Battleground* bg = player ? player->GetBattleground() : nullptr;
 
-        Player* player = session->GetPlayer();
-        Battleground* bg = player->GetBattleground();
+        if (!bg || bg->IsReplay() || bg->IsCustomGame() || bg->IsBotFillMatch() || !bg->isArena())
+            return nullptr;
 
-        if (!bg || bg->IsReplay() || bg->IsCustomGame() || bg->IsBotFillMatch())
-            return;
+        return bg;
+    }
 
-        if (!bg->isArena())
-            return;
-
-        if (!ShouldRecordPacket(bg, packet))
-            return;
-
-        if (!IsTeamRecorder(bg, player))
-            return;
-
+    void RecordArenaPacket(Battleground* bg, WorldPacket const& packet)
+    {
         MatchRecord& record = GetOrCreateRecord(bg);
         uint32 nowMs = getMSTime();
 
@@ -4513,6 +4502,42 @@ public:
             bg->GetInstanceID(), uint32(bg->GetStatus()), packet.GetOpcode(), timestamp,
             record.Packets.size() > 1 ? timestamp - record.Packets[record.Packets.size() - 2].TimestampMs : 0,
             uint32(packet.size()), uint32(record.Packets.size()), record.PreStartPacketCount);
+    }
+
+class BGReplayServerScript : public ServerScript
+{
+public:
+    BGReplayServerScript() : ServerScript("BGReplayServerScript") { }
+
+    void OnPacketSend(WorldSession* session, WorldPacket& packet) override
+    {
+        Battleground* bg = RecordedArenaFor(session);
+        if (!bg || !ShouldRecordPacket(bg, packet))
+            return;
+
+        if (!IsTeamRecorder(bg, session->GetPlayer()))
+            return;
+
+        RecordArenaPacket(bg, packet);
+    }
+
+    // The server leaves a mover out of its own movement broadcast, so a recorder's
+    // movement reached the record only through the other team's recorder: never while
+    // that team could not see them (Stealth, Vanish, Shadowmeld, invisibility), and the
+    // replay showed them frozen where they vanished until they reappeared. Record every
+    // participant's movement from the server's copy. Where a recorder received it too,
+    // the copies are the same bytes in the same tick and the dedupe keeps one.
+    void OnMovementRelay(WorldSession* session, WorldPacket const& packet) override
+    {
+        Battleground* bg = RecordedArenaFor(session);
+        if (!bg || !ShouldRecordPacket(bg, packet))
+            return;
+
+        // A participant, not a spectator watching the match from inside it.
+        if (!bg->IsPlayerInBattleground(session->GetPlayer()->GetGUID()))
+            return;
+
+        RecordArenaPacket(bg, packet);
     }
 
     void OnPacketReceive(WorldSession* session, WorldPacket& packet) override

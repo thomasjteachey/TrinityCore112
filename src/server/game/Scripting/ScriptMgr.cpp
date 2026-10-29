@@ -1311,6 +1311,16 @@ void ScriptMgr::OnPacketSend(WorldSession* session, WorldPacket const& packet)
     FOREACH_SCRIPT(ServerScript)->OnPacketSend(session, copy);
 }
 
+void ScriptMgr::OnMovementRelay(WorldSession* session, WorldPacket const& packet)
+{
+    ASSERT(session);
+
+    if (SCR_REG_LST(ServerScript).empty())
+        return;
+
+    FOREACH_SCRIPT(ServerScript)->OnMovementRelay(session, packet);
+}
+
 void ScriptMgr::OnBattlegroundUpdate(Battleground* bg, uint32 diff)
 {
     if (SCR_REG_LST(BattlegroundScript).empty())
@@ -2330,6 +2340,10 @@ void ServerScript::OnPacketSend(WorldSession* /*session*/, WorldPacket& /*packet
 }
 
 void ServerScript::OnPacketReceive(WorldSession* /*session*/, WorldPacket& /*packet*/)
+{
+}
+
+void ServerScript::OnMovementRelay(WorldSession* /*session*/, WorldPacket const& /*packet*/)
 {
 }
 
