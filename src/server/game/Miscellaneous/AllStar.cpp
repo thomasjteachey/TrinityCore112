@@ -481,6 +481,22 @@ namespace
         return best;
     }
 
+    // A tournament kit's eat, drink or bandage: an aura that regenerates
+    // health or power (Eat 29073, Drink 22734), or a First Aid ability.
+    bool IsInnateRefreshment(uint32 spellId)
+    {
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
+        if (!info || info->IsPassive())
+            return false;
+        if (info->HasAura(SPELL_AURA_MOD_REGEN) || info->HasAura(SPELL_AURA_MOD_POWER_REGEN))
+            return true;
+        SkillLineAbilityMapBounds const bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
+        for (auto itr = bounds.first; itr != bounds.second; ++itr)
+            if (itr->second->SkillLine == SKILL_FIRST_AID)
+                return true;
+        return false;
+    }
+
     std::shared_ptr<Kit> ParseKit(KitQueryHolder const& holder)
     {
         PreparedQueryResult character = holder.GetPreparedResult(KIT_QUERY_CHARACTER);
@@ -1572,6 +1588,18 @@ void PersonaAccess::Build(Player* player, PersonaStash& stash, Kit const& kit)
             for (uint32 spell : *custom)
                 player->AddSpell(spell, true, false, true, false, true);
     }
+
+    // All-Star is a tournament arena: every life eats, drinks and bandages the
+    // way a tournament character does, out of nothing - its race and class's
+    // tournament kit's eat and drink (the regen auras) and First Aid. A world
+    // alt or a playerbot stand-in has none of them, and a persona carries
+    // nothing from the bags but what the player had there already.
+    if (Tournament::IsEnabled())
+        if (Tournament::CreateInfo const* info = Tournament::GetCreateInfo(kit.Race, kit.Class))
+            if (info->HasCustomSpells)
+                for (uint32 spell : info->CustomSpells)
+                    if (!player->HasSpell(spell) && IsInnateRefreshment(spell))
+                        player->AddSpell(spell, true, false, true, false, true);
 
     for (uint8 i = 0; i < MAX_GLYPH_SLOT_INDEX; ++i)
         if (kit.Glyphs[i])
