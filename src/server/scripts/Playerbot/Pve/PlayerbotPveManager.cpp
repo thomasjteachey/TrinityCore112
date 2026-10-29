@@ -5471,6 +5471,22 @@ namespace
         }
     }
 
+    // The same question asked of THIS bot. "Can't equip that with a two-hander"
+    // is a moment for a protection paladin caught holding one -
+    // TryRestoreShieldProfile puts its one-hander and shield back on - but for a
+    // spec that swings a two-hander and is holding one, it is the shape it
+    // chose, and nothing will ever take the two-hander off for a shield or a
+    // held item. Read as "not right now", it kept every shield and orb a ret
+    // paladin picked up for good: Garel carried twelve shields and seven held
+    // off-hands, none of which he could ever wear.
+    bool EquipRefusalIsPermanentFor(Player const* bot, InventoryResult result)
+    {
+        if (EquipRefusalIsPermanent(result))
+            return true;
+        return result == EQUIP_ERR_CANT_EQUIP_WITH_TWOHANDED && bot->IsTwoHandUsed() &&
+            PrefersTwoHandedMainhand(bot);
+    }
+
     // dryRun counts what a merchant would take without selling it, so the errand
     // scan can ask whether a trip would empty anything before it walks there.
     uint32 SellVendorJunk(Player* bot, bool dryRun = false)
@@ -5604,7 +5620,7 @@ namespace
 
                         wantsToWear = IsEquipUpgradeForEitherHand(bot, proto, dest);
                     }
-                    else if (!EquipRefusalIsPermanent(probe))
+                    else if (!EquipRefusalIsPermanentFor(bot, probe))
                         wantsToWear = true;
                 }
                 sellable = !wantsToWear;
@@ -12395,7 +12411,7 @@ namespace
             if (!EquipProbeWouldBenchOffhand(bot, proto) && !EquipPassWouldRefuseTwoHander(bot, proto))
             {
                 InventoryResult const probe = bot->CanEquipItem(NULL_SLOT, dest, item, true);
-                if (!EquipRefusalIsPermanent(probe) && probe != EQUIP_ERR_OK)
+                if (!EquipRefusalIsPermanentFor(bot, probe) && probe != EQUIP_ERR_OK)
                     return false;
 
                 if (probe == EQUIP_ERR_OK)
