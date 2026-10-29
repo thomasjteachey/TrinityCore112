@@ -851,12 +851,14 @@ namespace
     }
 
     // Everybody in the match has the old name cached against this guid; the
-    // answer to a name query is what the client keeps, so it is sent again.
+    // answer to a name query is what the client keeps, so it is sent again -
+    // to the player too (owner 2026-10-29: "my name and others' names are not
+    // changing"). Its addons' requests are whispers to UnitName("player"),
+    // which then names the persona; that is harmless, as the chat handler
+    // answers CCGAMEREQ before it ever looks the whisper's target up.
     void BroadcastName(Player* player)
     {
         Map* map = player->FindMap();
-        if (!map)
-            return;
 
         std::string name;
         uint8 race = 0;
@@ -881,8 +883,12 @@ namespace
         data << uint8(playerClass);
         data << uint8(0);
 
-        // Everybody but the player: its own client keeps its real name, which
-        // the addons compare the server's whispers to (sender == UnitName).
+        // The player first, map or not: the hand-back may come after it left
+        // the arena, and its own client must not keep a persona's name.
+        if (player->GetSession() && !player->GetSession()->IsVirtualSession())
+            player->SendDirectMessage(&data);
+        if (!map)
+            return;
         for (MapReference const& ref : map->GetPlayers())
             if (Player* viewer = ref.GetSource())
                 if (viewer != player && viewer->GetSession() && !viewer->GetSession()->IsVirtualSession())
@@ -1879,7 +1885,10 @@ bool PersonaAccess::Apply(Player* player, KitPtr const& kit)
         DropPersona(player, stash);
 
     stash.Persona = kit;
-    if (!kit->Template)
+    // A borrowed character - the account's own, or a bot's stand-in - is
+    // shown under its own name (owner 2026-10-29: "scoreboard should be
+    // changing names based on who was in it").
+    if (!kit->Template || kit->StandIn)
     {
         PersonaName name;
         name.Name = Surnames::Decorated(ObjectGuid::Create<HighGuid::Player>(kit->Source), kit->Name);
@@ -2406,8 +2415,9 @@ uint8 GetRealClass(Player const* player)
 
 std::string GetPersonaName(Player const* player)
 {
+    // A standard kit is the player itself; a stand-in is the bot character it is.
     PersonaStash const* stash = player ? PersonaAccess::Stash(player) : nullptr;
-    if (!stash || !stash->Persona || stash->Persona->Template)
+    if (!stash || !stash->Persona || (stash->Persona->Template && !stash->Persona->StandIn))
         return std::string();
     return stash->Persona->Name;
 }
