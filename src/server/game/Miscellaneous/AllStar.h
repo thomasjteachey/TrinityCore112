@@ -151,17 +151,20 @@ namespace AllStar
 
     // WorldSession::SendNameQueryOpcode: what to answer for a guid wearing a
     // persona - its source's name (with its family name), race, gender and
-    // class. false for everybody else, who are answered as ever. Safe from any
-    // thread.
+    // class. false for everybody else, who are answered as ever. The player's
+    // own client is never given it: Centurion addons check the server's
+    // whispers against UnitName("player"). Safe from any thread.
     bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& gender, uint8& playerClass);
 
     // True while ApplyPersona/RestorePersona is moving gear: the battleground
     // gear lock stands aside for it, the way it does for the tournament loadout.
     bool IsSwapInProgress(Player const* player);
-    // MiscHandler: the client answers every bars packet with "this button is
-    // empty" for buttons it has not caught up with; for a few seconds after a
-    // swap those answers are not news and are ignored.
-    bool KeepsButton(Player* player, uint8 button);
+    // MiscHandler: for a few seconds after a swap every action button change
+    // the client sends is ignored. They are its answers to the swap itself -
+    // "empty" for each button of the bars packet it has not caught up with,
+    // and a button moved up a rank for each SMSG_LEARNED_SPELL - and taken as
+    // the player's they rewrote bars, the real ones included.
+    bool IgnoresClientButtons(Player const* player);
     // A persona's hunter pet arrives a moment after the persona (LoadPetFromDB
     // answers asynchronously): its trained spells are taught then. Called from
     // the match's update.

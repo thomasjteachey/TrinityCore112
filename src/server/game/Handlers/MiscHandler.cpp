@@ -1065,9 +1065,13 @@ void WorldSession::HandleSetActionButtonOpcode(WorldPacket& recvData)
     recvData >> button >> packetData;
     TC_LOG_DEBUG("network", "CMSG_SET_ACTION_BUTTON Button: {} Data: {}", button, packetData);
 
+    // The client answering an All-Star class swap, not the player (AllStar.h).
+    if (AllStar::IgnoresClientButtons(GetPlayer()))
+        return;
+
     if (!packetData)
     {
-        if (!RiftProgression::KeepsButton(GetPlayer(), button) && !AllStar::KeepsButton(GetPlayer(), button))
+        if (!RiftProgression::KeepsButton(GetPlayer(), button))
             GetPlayer()->removeActionButton(button);
     }
     else

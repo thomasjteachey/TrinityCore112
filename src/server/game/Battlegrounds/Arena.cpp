@@ -2098,6 +2098,10 @@ void Arena::HandleAllStarDeath(Player* player, Player* killer)
         char const* const playedClass = AllStar::ClassName(player->GetClass());
         ++seat.Deaths;
         uint32 const lives = GetAllStarLives(seat);
+        TC_LOG_INFO("bg.battleground", "All-Star: instance {} map {}: {} ({}) died as {} at ({:.1f}, {:.1f}, {:.1f}) - death {} of {}{}.",
+            GetInstanceID(), GetMapId(), name, player->GetGUID().GetCounter(), playedClass,
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), uint32(seat.Deaths), lives,
+            killer ? "" : ", no killer");
         if (seat.Deaths >= lives)
         {
             seat.Out = true;
@@ -2162,6 +2166,10 @@ bool Arena::BringBackAllStar(Player* player, AllStarSeat& seat, bool respawn)
     ApplyArenaFlag(player);
     player->SetFullHealth();
     player->ResetAllPowers();
+    TC_LOG_INFO("bg.battleground", "All-Star: instance {} map {}: {} ({}) is back as {} ({}, class {}{}){}.",
+        GetInstanceID(), GetMapId(), before, player->GetGUID().GetCounter(), AllStar::GetKitName(*kit),
+        AllStar::IsTemplateKit(*kit) ? "template" : "own character", uint32(AllStar::GetKitClass(*kit)),
+        respawn ? ", at the start" : ", where it stood", "");
 
     uint32 const life = uint32(seat.Deaths) + 1;
     uint32 const lives = GetAllStarLives(seat);

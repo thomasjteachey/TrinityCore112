@@ -52,7 +52,8 @@ void WorldSession::SendNameQueryOpcode(ObjectGuid guid)
     // An All-Star persona reads as the character it borrowed (AllStar.h).
     std::string personaName;
     uint8 personaRace = 0, personaGender = 0, personaClass = 0;
-    if (AllStar::GetPersonaNameData(guid, personaName, personaRace, personaGender, personaClass))
+    if ((!GetPlayer() || GetPlayer()->GetGUID() != guid) &&
+        AllStar::GetPersonaNameData(guid, personaName, personaRace, personaGender, personaClass))
     {
         data << personaName;
         data << uint8(0);

@@ -32,6 +32,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "QueryHolder.h"
+#include "QuestDef.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -104,6 +105,8 @@ struct Kit
     std::vector<KitButton> Buttons;         // the source's active talent group
     std::array<uint32, MAX_GLYPH_SLOT_INDEX> Glyphs{};
     std::vector<KitItem> Items;             // equipment slots only
+    bool TournamentMode = false;            // extra_flags PLAYER_EXTRA_TOURNAMENT_MODE
+    std::vector<uint32> RewardedQuests;     // their spells are taught at every login
     bool HasPet = false;
     uint32 SourcePetNumber = 0;
     PetStable::PetInfo Pet;
@@ -202,6 +205,7 @@ namespace
         KIT_QUERY_GLYPHS,
         KIT_QUERY_INVENTORY,
         KIT_QUERY_PETS,
+        KIT_QUERY_QUESTS,
         MAX_KIT_QUERY
     };
 
@@ -230,6 +234,7 @@ namespace
             add(KIT_QUERY_GLYPHS, CHAR_SEL_CHARACTER_GLYPHS);
             add(KIT_QUERY_INVENTORY, CHAR_SEL_CHARACTER_INVENTORY);
             add(KIT_QUERY_PETS, CHAR_SEL_CHAR_PETS);
+            add(KIT_QUERY_QUESTS, CHAR_SEL_CHARACTER_QUESTSTATUSREW);
             return res;
         }
 
@@ -289,6 +294,7 @@ namespace
         kit->HairStyle = fields[11].GetUInt8();
         kit->HairColor = fields[12].GetUInt8();
         kit->FacialStyle = fields[13].GetUInt8();
+        kit->TournamentMode = (fields[36].GetUInt16() & PLAYER_EXTRA_TOURNAMENT_MODE) != 0;
         uint8 const activeGroup = fields[65].GetUInt8();
         kit->Ammo = fields[68].GetUInt32();
 
@@ -328,13 +334,28 @@ namespace
         }
 
         // Already the active group's (the statement joins activeTalentGroup).
+        // A macro or an equipment set on a button is only an index: the client
+        // looks it up among ITS character's macros and sets. The source's
+        // character macros and sets would show the player's own, so they are
+        // left off; its account macros are the player's too, except for a
+        // template, which lives on another account.
         if (PreparedQueryResult result = holder.GetPreparedResult(KIT_QUERY_ACTIONS))
         {
             do
             {
                 Field* row = result->Fetch();
-                kit->Buttons.push_back({ row[0].GetUInt8(), row[1].GetUInt32(), row[2].GetUInt8() });
+                uint8 const type = row[2].GetUInt8();
+                if (type == ACTION_BUTTON_CMACRO || type == ACTION_BUTTON_EQSET || (kit->Template && type == ACTION_BUTTON_MACRO))
+                    continue;
+                kit->Buttons.push_back({ row[0].GetUInt8(), row[1].GetUInt32(), type });
             } while (result->NextRow());
+        }
+
+        if (PreparedQueryResult result = holder.GetPreparedResult(KIT_QUERY_QUESTS))
+        {
+            do
+                kit->RewardedQuests.push_back(result->Fetch()[0].GetUInt32());
+            while (result->NextRow());
         }
 
         if (PreparedQueryResult result = holder.GetPreparedResult(KIT_QUERY_GLYPHS))
@@ -569,9 +590,11 @@ namespace
         data << uint8(playerClass);
         data << uint8(0);
 
+        // Everybody but the player: its own client keeps its real name, which
+        // the addons compare the server's whispers to (sender == UnitName).
         for (MapReference const& ref : map->GetPlayers())
             if (Player* viewer = ref.GetSource())
-                if (viewer->GetSession() && !viewer->GetSession()->IsVirtualSession())
+                if (viewer != player && viewer->GetSession() && !viewer->GetSession()->IsVirtualSession())
                     viewer->SendDirectMessage(&data);
     }
 
@@ -1103,7 +1126,40 @@ void PersonaAccess::Build(Player* player, PersonaStash& stash, Kit const& kit)
         player->AddTalent(talent, 0, false);
     for (KitSpell const& spell : kit.Spells)
         player->AddSpell(spell.Id, spell.Active, false, false, spell.Disabled, true);
+
+    // What a login teaches on top of the saved rows (Player::LoadFromDB): the
+    // spells the source's rewarded quests teach - stances, forms, demons,
+    // totems (LearnQuestRewardedSpells), ...
+    for (uint32 questId : kit.RewardedQuests)
+    {
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        int32 const rewardSpell = quest ? quest->GetRewSpellCast() : 0;
+        SpellInfo const* rewardInfo = rewardSpell > 0 ? sSpellMgr->GetSpellInfo(rewardSpell) : nullptr;
+        if (!rewardInfo)
+            continue;
+        for (SpellEffectInfo const& effect : rewardInfo->GetEffects())
+            if (effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) && effect.TriggerSpell && !player->HasSpell(effect.TriggerSpell))
+                player->AddSpell(effect.TriggerSpell, true, false, false, false, true);
+    }
     player->LearnDefaultSkills();
+
+    // ... and Player::LearnCustomSpells' list for its race, class and mode:
+    // most of a tournament character's kit - every starter template's - is
+    // that list, never saved.
+    if (sWorld->getBoolConfig(CONFIG_START_ALL_SPELLS))
+    {
+        std::vector<uint32> const* custom = nullptr;
+        if (kit.TournamentMode && Tournament::IsEnabled())
+            if (Tournament::CreateInfo const* info = Tournament::GetCreateInfo(kit.Race, kit.Class))
+                if (info->HasCustomSpells)
+                    custom = &info->CustomSpells;
+        if (!custom)
+            if (PlayerInfo const* info = sObjectMgr->GetPlayerInfo(kit.Race, kit.Class))
+                custom = &info->customSpells;
+        if (custom)
+            for (uint32 spell : *custom)
+                player->AddSpell(spell, true, false, true, false, true);
+    }
 
     for (uint8 i = 0; i < MAX_GLYPH_SLOT_INDEX; ++i)
         if (kit.Glyphs[i])
@@ -1572,9 +1628,9 @@ bool IsSwapInProgress(Player const* player)
     return player && Swapping == player;
 }
 
-bool KeepsButton(Player* player, uint8 button)
+bool IgnoresClientButtons(Player const* player)
 {
-    if (!player || !player->GetActionButton(button))
+    if (!player)
         return false;
     std::lock_guard<std::mutex> lock(SwapTimeMutex);
     auto const itr = SwapTimes.find(player->GetGUID());
