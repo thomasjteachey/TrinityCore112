@@ -360,6 +360,22 @@ namespace
         bool PartyShown = false;
         uint32 PartyCounter = 0;
         std::vector<uint64> PartySent;
+
+        // Spectating hides the viewer's own model (the spectator goblin): the
+        // display it had, put back when spectating stops. 0: not hidden.
+        uint32 HiddenFromDisplay = 0;
+
+        // Buffle Shuffle's rounds won, for the scoreboard (RWN lines), counted
+        // the way Arena::EndShuffleRound counts them: a side wiped out, every
+        // member of the other side wins the round. A round is over once
+        // decided, until the next deal (or everyone standing again). Sent only
+        // once teams have been re-dealt mid-replay - a shuffle; the saved
+        // replay does not say so otherwise.
+        std::unordered_map<uint64, uint32> RoundWins;        // original guid
+        std::unordered_map<uint64, uint32> SentRoundWins;
+        bool RoundDecided = false;
+        bool RoundRedealt = false;
+        bool SawRedeal = false;
     };
 
     // Real arena records by BG instance id. Packets are recorded from every map
@@ -3855,6 +3871,17 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
     // and the client's name cache are told.
     void SendSpectateParty(Player* viewer, PlaybackState& state);
 
+    // Teams changed mid-replay (a Buffle Shuffle round): the last round is
+    // over. The first seconds are the roster settling, not a deal.
+    void NoteReplayRedeal(PlaybackState& state)
+    {
+        constexpr uint32 REPLAY_REDEAL_AFTER_MS = 15000;
+        if (!state.PlaybackClockStarted || getMSTimeDiff(state.PlaybackStartMs, getMSTime()) < REPLAY_REDEAL_AFTER_MS)
+            return;
+        state.SawRedeal = true;
+        state.RoundRedealt = true;
+    }
+
     void ApplyReplayRosterEvent(Player* viewer, PlaybackState& state, ReplayRosterEvent const& event)
     {
         ReplayActor* actor = FindMutableReplayActorByOriginal(state.Match, event.Guid);
@@ -3893,6 +3920,9 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             SendReplayASCommand(viewer, uiGuid, "TEM", actor->Team ? actor->Team : uint32(ALLIANCE));
             SendReplayGreenNameValueUpdate(viewer, *actor);
         }
+
+        if (sideChanged)
+            NoteReplayRedeal(state);
 
         if (state.SpectatedOriginal && (sideChanged || identityChanged))
         {
@@ -4142,12 +4172,40 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         viewer->SendDirectMessage(&data);
     }
 
+    // The viewer is a camera while spectating, not a goblin standing in the
+    // middle of the fight: an invisible model (the client's InvisibleStalker,
+    // as triggers use), and the one they had back after.
+    constexpr uint32 REPLAY_SPECTATE_HIDDEN_DISPLAY = 11686;
+
+    void HideSpectatingViewer(Player* viewer, PlaybackState& state)
+    {
+        if (!viewer->IsSpectator() || viewer->GetDisplayId() == REPLAY_SPECTATE_HIDDEN_DISPLAY)
+            return;
+        state.HiddenFromDisplay = viewer->GetDisplayId();
+        viewer->SetDisplayId(REPLAY_SPECTATE_HIDDEN_DISPLAY);
+    }
+
+    void ShowSpectatingViewer(Player* viewer, PlaybackState& state)
+    {
+        uint32 const before = state.HiddenFromDisplay;
+        state.HiddenFromDisplay = 0;
+        if (!before || viewer->GetDisplayId() != REPLAY_SPECTATE_HIDDEN_DISPLAY)
+            return;                     // left the replay: SetIsSpectator(false) restored it already
+        if (viewer->IsSpectator())
+            viewer->SetDisplayId(before);
+        else
+            viewer->RestoreDisplayId();
+    }
+
     // The viewer's own bars and spellbook back. Safe to call when nothing is
     // borrowed.
     void StopSpectateBars(Player* viewer, PlaybackState& state)
     {
         if (viewer && viewer->GetSession())
+        {
             ClearSpectateParty(viewer, state);
+            ShowSpectatingViewer(viewer, state);
+        }
 
         bool const borrowed = state.SpectatedOriginal || !state.SpectateLearned.empty() || !state.SpectateCooldowns.empty();
         state.SpectatedOriginal = 0;
@@ -4191,6 +4249,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
 
         SendSpectateBars(viewer, state);
         SendSpectateParty(viewer, state);
+        HideSpectatingViewer(viewer, state);
 
         uint32 const nowMs = getMSTime();
         if (auto itr = state.ActorCooldownEnds.find(original); itr != state.ActorCooldownEnds.end())
@@ -4427,6 +4486,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
     }
 
     void NoteReplayDeath(PlaybackState& state, uint64 victim);
+    void NoteReplayRedeal(PlaybackState& state);
 
     void SendReplayASPlayerStatusFromValues(Player* viewer, PlaybackState& state, ObjectGuid objectGuid, std::unordered_map<uint32, uint32> const& values)
     {
@@ -4492,6 +4552,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             ReplayActor* mutableActor = FindMutableReplayActorByFake(state.Match, uiGuid);
             if (mutableActor && mutableActor->Team != team)
             {
+                NoteReplayRedeal(state);
                 mutableActor->Team = team;
                 SendReplayASCommand(viewer, uiGuid, "TEM", team);
                 SendReplayGreenNameValueUpdate(viewer, *mutableActor);
@@ -4968,6 +5029,58 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
                 return;
         }
         SendReplayScoreboard(viewer, state);
+    }
+
+    void UpdateReplayRounds(Player* viewer, PlaybackState& state)
+    {
+        uint32 standing[2] = { 0, 0 };      // gold (Alliance), green (Horde)
+        uint32 seated[2] = { 0, 0 };
+        for (ReplayActor const& actor : state.Match.Actors)
+        {
+            if (actor.Squad != BATTLEGROUND_NO_SQUAD)
+                return;                     // a squad match plays no rounds
+            int const side = actor.Team == ALLIANCE ? 0 : (actor.Team == HORDE ? 1 : -1);
+            if (side < 0)
+                continue;
+            uint64 const original = actor.OriginalGuid.GetRawValue();
+            auto const alive = state.ActorAlive.find(original);
+            bool const living = (alive == state.ActorAlive.end() || alive->second) && !state.ReleasedActors.count(original);
+            ++seated[side];
+            standing[side] += living ? 1 : 0;
+        }
+        if (!seated[0] || !seated[1])
+            return;
+
+        bool const everyoneUp = standing[0] == seated[0] && standing[1] == seated[1];
+        if (state.RoundDecided)
+        {
+            if (state.RoundRedealt || everyoneUp)
+                state.RoundDecided = false;
+            state.RoundRedealt = false;
+        }
+        else if (!standing[0] || !standing[1])
+        {
+            state.RoundDecided = true;
+            state.RoundRedealt = false;
+            uint32 const winner = standing[0] ? ALLIANCE : (standing[1] ? HORDE : 0);
+            if (winner)
+                for (ReplayActor const& actor : state.Match.Actors)
+                    if (actor.Team == winner)
+                        ++state.RoundWins[actor.OriginalGuid.GetRawValue()];
+        }
+
+        if (!state.SawRedeal)
+            return;
+        for (ReplayActor const& actor : state.Match.Actors)
+        {
+            uint64 const original = actor.OriginalGuid.GetRawValue();
+            uint32 const wins = state.RoundWins[original];
+            auto const sent = state.SentRoundWins.find(original);
+            if (sent != state.SentRoundWins.end() && sent->second == wins)
+                continue;
+            state.SentRoundWins[original] = wins;
+            SendReplayASCommand(viewer, actor.FakeGuid, "RWN", wins);
+        }
     }
 
     bool SendReplayASStatusFromUpdatePayload(Player* viewer, PlaybackState& state, std::vector<uint8>& payload)
@@ -6745,6 +6858,7 @@ public:
             ApplyReplayTimelinesUpTo(viewer, state, elapsedMs);
 
         UpdateLegacyReplayWorldStates(viewer, state);
+        UpdateReplayRounds(viewer, state);
 
         if (state.Cursor >= state.Match.Packets.size())
         {
@@ -6832,6 +6946,11 @@ public:
         state.Scores.clear();
         state.LastDamager.clear();
         state.PetOwners.clear();
+        state.RoundWins.clear();
+        state.SentRoundWins.clear();
+        state.RoundDecided = false;
+        state.RoundRedealt = false;
+        state.SawRedeal = false;
 
         TC_LOG_DEBUG("arena.replay", "Replay restarted viewer={} bg={} packets={}",
             viewerLowGuid, state.BgInstanceId, uint32(state.Match.Packets.size()));
