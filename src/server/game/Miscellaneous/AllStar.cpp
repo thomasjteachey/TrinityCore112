@@ -22,6 +22,7 @@
 #include "CharacterCache.h"
 #include "CharacterScreen.h"
 #include "Chat.h"
+#include "Containers.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
@@ -95,7 +96,8 @@ struct KitItem
 struct Kit
 {
     ObjectGuid::LowType Source = 0;
-    bool Template = false;
+    bool Template = false;                  // worn under the player's own name
+    bool StandIn = false;                   // a playerbot character (a Template too)
     std::string Name;
     uint8 Race = 0;
     uint8 Class = 0;
@@ -271,6 +273,31 @@ namespace
 
     uint32 ClassBit(uint8 playerClass) { return playerClass ? 1u << (playerClass - 1) : 0; }
 
+    // Level-60 characters of the realm's playerbot accounts, by class. A class
+    // the lineup has nobody for is played as one of them at random rather than
+    // as its one starter template every time (owner: "the lives should be a
+    // little more random ... take from other specs"). Read once at startup
+    // (Update); like a template, a stand-in is worn under the player's name.
+    std::mutex StandInMutex;
+    std::array<std::vector<ObjectGuid::LowType>, MAX_CLASSES> StandIns;
+    std::unordered_set<ObjectGuid::LowType> StandInGuids;
+    bool StandInsAsked = false;
+
+    bool IsStandInGuid(ObjectGuid::LowType guid)
+    {
+        std::lock_guard<std::mutex> lock(StandInMutex);
+        return StandInGuids.count(guid) != 0;
+    }
+
+    ObjectGuid::LowType PickStandIn(uint8 playerClass)
+    {
+        if (playerClass >= MAX_CLASSES)
+            return 0;
+        std::lock_guard<std::mutex> lock(StandInMutex);
+        std::vector<ObjectGuid::LowType> const& candidates = StandIns[playerClass];
+        return candidates.empty() ? 0 : Trinity::Containers::SelectRandomContainerElement(candidates);
+    }
+
     bool IsTemplateGuid(ObjectGuid::LowType guid)
     {
         if (!guid)
@@ -278,7 +305,7 @@ namespace
         for (ObjectGuid::LowType templateGuid : Config.Templates)
             if (templateGuid == guid)
                 return true;
-        return false;
+        return IsStandInGuid(guid);
     }
 
     void Publish(ObjectGuid::LowType source, std::shared_ptr<Kit> kit)
@@ -461,7 +488,8 @@ namespace
 
         auto kit = std::make_shared<Kit>();
         kit->Source = holder.GetGuid();
-        kit->Template = IsTemplateGuid(kit->Source);
+        kit->StandIn = IsStandInGuid(kit->Source);
+        kit->Template = kit->StandIn || IsTemplateGuid(kit->Source);
 
         // The columns of CHAR_SEL_CHARACTER (Player::LoadFromDB lists them).
         Field* fields = character->Fetch();
@@ -706,8 +734,11 @@ namespace
         {
             if (used & ClassBit(playerClass))
                 continue;
-            if (ObjectGuid::LowType const templateGuid = GetTemplateCharacter(playerClass))
-                lineup.push_back({ playerClass, templateGuid, true });
+            ObjectGuid::LowType source = PickStandIn(playerClass);
+            if (!source)
+                source = GetTemplateCharacter(playerClass);
+            if (source)
+                lineup.push_back({ playerClass, source, true });
             used |= ClassBit(playerClass);
         }
 
@@ -1544,7 +1575,14 @@ void PersonaAccess::Build(Player* player, PersonaStash& stash, Kit const& kit)
     uint32 const points = player->CalculateTalentsPoints();
     player->SetFreeTalentPoints(points > player->m_usedTalentCount ? points - player->m_usedTalentCount : 0);
 
-    for (KitButton const& button : kit.Buttons)
+    // A stand-in's own bars are a bot's - empty, or nothing a player would
+    // want. It plays on its class's starter template's: each spell button
+    // moved to the stand-in's rank of that spell, or left off when it has
+    // none, and then the abilities its talents teach that are on none of them
+    // go on what is left of the main bars.
+    KitPtr const layout = kit.StandIn ? FindKit(GetTemplateCharacter(kit.Class)) : nullptr;
+    Kit const& bars = layout ? *layout : kit;
+    for (KitButton const& button : bars.Buttons)
     {
         if (button.Button >= MAX_ACTION_BUTTONS)
             continue;
@@ -1554,8 +1592,8 @@ void PersonaAccess::Build(Player* player, PersonaStash& stash, Kit const& kit)
         if (type == ACTION_BUTTON_CMACRO)
         {
             // The spell the macro casts, if the persona knows one of them.
-            auto const macro = kit.CharacterMacros.find(button.Action);
-            if (macro == kit.CharacterMacros.end())
+            auto const macro = bars.CharacterMacros.find(button.Action);
+            if (macro == bars.CharacterMacros.end())
                 continue;
             action = 0;
             for (auto const& [name, rank] : MacroSpellCandidates(macro->second.Body))
@@ -1565,10 +1603,52 @@ void PersonaAccess::Build(Player* player, PersonaStash& stash, Kit const& kit)
                 continue;
             type = ACTION_BUTTON_SPELL;
         }
+        else if (layout && type == ACTION_BUTTON_SPELL)
+        {
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(action);
+            action = info && info->SpellName[LOCALE_enUS]
+                ? FindKnownSpell(player, info->SpellName[LOCALE_enUS], sSpellMgr->GetSpellRank(button.Action)) : 0;
+            if (!action)
+                continue;
+        }
 
         ActionButton& ab = player->m_actionButtons[button.Button];
         ab.SetActionAndType(action, ActionButtonType(type));
         ab.uState = ACTIONBUTTON_UNCHANGED;
+    }
+
+    if (layout)
+    {
+        std::unordered_set<uint32> onBars;
+        for (auto const& [slot, ab] : player->m_actionButtons)
+            if (ab.uState != ACTIONBUTTON_DELETED && ab.GetType() == ACTION_BUTTON_SPELL)
+                onBars.insert(ab.GetAction());
+
+        // The main bar first, then the bottom left and right bars.
+        std::vector<uint8> free;
+        for (uint8 first : { 0, 60, 48 })
+            for (uint8 slot = first; slot < first + 12; ++slot)
+                if (!player->m_actionButtons.count(slot))
+                    free.push_back(slot);
+
+        size_t next = 0;
+        for (uint32 talentSpell : kit.Talents)
+        {
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(talentSpell);
+            if (!info)
+                continue;
+            uint32 ability = talentSpell;
+            for (SpellEffectInfo const& effect : info->GetEffects())
+                if (effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) && effect.TriggerSpell)
+                    ability = effect.TriggerSpell;
+            SpellInfo const* abilityInfo = sSpellMgr->GetSpellInfo(ability);
+            if (!abilityInfo || abilityInfo->IsPassive() || !player->HasSpell(ability) || onBars.count(ability) || next >= free.size())
+                continue;
+            ActionButton& ab = player->m_actionButtons[free[next++]];
+            ab.SetActionAndType(ability, ACTION_BUTTON_SPELL);
+            ab.uState = ACTIONBUTTON_UNCHANGED;
+            onBars.insert(ability);
+        }
     }
 
     EquipKit(player, stash, kit);
@@ -1971,6 +2051,52 @@ void Update()
         TemplatesAsked = true;
         for (uint8 playerClass : CLASS_ORDER)
             RequestKit(GetTemplateCharacter(playerClass));
+    }
+
+    // The playerbot accounts' level-60 characters, by class (StandIns).
+    if (Config.Enabled && !StandInsAsked)
+    {
+        StandInsAsked = true;
+        QueryCallbacks.AddCallback(LoginDatabase.AsyncQuery("SELECT id FROM account WHERE username LIKE 'PLAYERBOT%'").WithCallback(
+            [](QueryResult accounts)
+        {
+            if (!accounts)
+                return;
+            std::string ids;
+            do
+            {
+                if (!ids.empty())
+                    ids += ',';
+                ids += std::to_string(accounts->Fetch()[0].GetUInt32());
+            } while (accounts->NextRow());
+
+            std::string const sql = Trinity::StringFormat(
+                "SELECT guid, class FROM characters WHERE account IN ({}) AND level >= {} AND deleteDate IS NULL",
+                ids, uint32(Config.SourceMinLevel));
+            QueryCallbacks.AddCallback(CharacterDatabase.AsyncQuery(sql.c_str()).WithCallback([](QueryResult characters)
+            {
+                std::array<std::vector<ObjectGuid::LowType>, MAX_CLASSES> found;
+                std::unordered_set<ObjectGuid::LowType> guids;
+                if (characters)
+                {
+                    do
+                    {
+                        Field* row = characters->Fetch();
+                        uint8 const playerClass = row[1].GetUInt8();
+                        if (!IsPlayableClass(playerClass) || playerClass >= MAX_CLASSES)
+                            continue;
+                        ObjectGuid::LowType const guid = row[0].GetUInt32();
+                        found[playerClass].push_back(guid);
+                        guids.insert(guid);
+                    } while (characters->NextRow());
+                }
+                TC_LOG_INFO("bg.battleground", "All-Star: {} playerbot characters can stand in for a class a lineup has nobody for.",
+                    uint32(guids.size()));
+                std::lock_guard<std::mutex> lock(StandInMutex);
+                StandIns = std::move(found);
+                StandInGuids = std::move(guids);
+            }));
+        }));
     }
 
     // What other threads asked for since the last tick. The processors are

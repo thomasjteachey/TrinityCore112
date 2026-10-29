@@ -2072,10 +2072,11 @@ AllStar::KitPtr Arena::GetAllStarKit(AllStarSeat const& seat) const
     if (AllStar::KitPtr kit = AllStar::FindKit(entry.Source))
         return kit;
 
-    // A character of theirs that cannot be worn plays its class's template.
-    if (!entry.Template && AllStar::KitFailed(entry.Source))
+    // A character of theirs - or a playerbot stand-in - that cannot be worn
+    // plays its class's starter template.
+    ObjectGuid::LowType const fallback = AllStar::GetTemplateCharacter(entry.Class);
+    if (entry.Source != fallback && AllStar::KitFailed(entry.Source))
     {
-        ObjectGuid::LowType const fallback = AllStar::GetTemplateCharacter(entry.Class);
         AllStar::RequestKit(fallback);
         return AllStar::FindKit(fallback);
     }
@@ -2205,7 +2206,13 @@ bool Arena::BringBackAllStar(Player* player, AllStarSeat& seat, bool respawn)
     // What a spirit guide gives the battleground's dead it raises (Battleground::
     // Update's resurrect wave) - after the swap, which strips every aura.
     if (respawn)
-        player->CastSpell(player, SPELL_SPIRIT_HEAL_MANA, true);
+    {
+        SpellCastResult const healed = player->CastSpell(player, SPELL_SPIRIT_HEAL_MANA, true);
+        if (healed != SPELL_CAST_OK)
+            TC_LOG_INFO("bg.battleground", "All-Star: instance {}: Spirit Heal ({}) on {} ({}) failed: {}.",
+                GetInstanceID(), uint32(SPELL_SPIRIT_HEAL_MANA), GetPlayerDisplayName(player),
+                player->GetGUID().GetCounter(), uint32(healed));
+    }
     TC_LOG_INFO("bg.battleground", "All-Star: instance {} map {}: {} ({}) is back as {} ({}, class {}{}){}.",
         GetInstanceID(), GetMapId(), before, player->GetGUID().GetCounter(), AllStar::GetKitName(*kit),
         AllStar::IsTemplateKit(*kit) ? "template" : "own character", uint32(AllStar::GetKitClass(*kit)),
