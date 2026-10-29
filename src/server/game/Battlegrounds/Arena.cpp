@@ -2204,15 +2204,12 @@ bool Arena::BringBackAllStar(Player* player, AllStarSeat& seat, bool respawn)
     player->SetFullHealth();
     player->ResetAllPowers();
     // What a spirit guide gives the battleground's dead it raises (Battleground::
-    // Update's resurrect wave) - after the swap, which strips every aura.
-    if (respawn)
-    {
-        SpellCastResult const healed = player->CastSpell(player, SPELL_SPIRIT_HEAL_MANA, true);
-        if (healed != SPELL_CAST_OK)
-            TC_LOG_INFO("bg.battleground", "All-Star: instance {}: Spirit Heal ({}) on {} ({}) failed: {}.",
-                GetInstanceID(), uint32(SPELL_SPIRIT_HEAL_MANA), GetPlayerDisplayName(player),
-                player->GetGUID().GetCounter(), uint32(healed));
-    }
+    // Update's resurrect wave) - after the swap, which strips every aura. Put
+    // on as an aura: cast, 44535 is refused in an arena (SPELL_FAILED_REQUIRES_AREA,
+    // its area group is the battlegrounds'), every time.
+    if (respawn && !player->AddAura(SPELL_SPIRIT_HEAL_MANA, player))
+        TC_LOG_INFO("bg.battleground", "All-Star: instance {}: Spirit Heal ({}) could not be put on {} ({}).",
+            GetInstanceID(), uint32(SPELL_SPIRIT_HEAL_MANA), GetPlayerDisplayName(player), player->GetGUID().GetCounter());
     TC_LOG_INFO("bg.battleground", "All-Star: instance {} map {}: {} ({}) is back as {} ({}, class {}{}){}.",
         GetInstanceID(), GetMapId(), before, player->GetGUID().GetCounter(), AllStar::GetKitName(*kit),
         AllStar::IsTemplateKit(*kit) ? "template" : "own character", uint32(AllStar::GetKitClass(*kit)),
