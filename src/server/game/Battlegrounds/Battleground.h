@@ -841,6 +841,11 @@ class TC_GAME_API Battleground
         // All-Star (BATTLEGROUND_ASA): a death brings the player back as the
         // next character of their lineup (Miscellaneous/AllStar.h, Arena.cpp).
         bool IsAllStar() const { return m_TypeID == BATTLEGROUND_ASA; }
+        // Whether the participant `guid` on `team` won a match that ended with
+        // `winner`: their squad won, in a squad match; in a shuffle, they won
+        // more rounds than they lost. Public for the replay recorder, which
+        // files each replay's players under winners and losers.
+        virtual bool IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const;
         // Between two rounds of a match fought in rounds: the last one is
         // decided and the next has not begun. The start-of-match checks (bounds,
         // start exits) wait for the gates as they do before the first round,
@@ -1156,10 +1161,6 @@ class TC_GAME_API Battleground
         virtual void EndAtTimeLimit() { EndBattleground(0); }
 
         void SetWinnerSquad(uint8 squad) { m_WinnerSquad = squad; }
-        // Whether the participant `guid` on `team` won a match that ended with
-        // `winner`: their squad won, in a squad match; in a shuffle, they won
-        // more rounds than they lost.
-        virtual bool IsWinningParticipant(ObjectGuid guid, uint32 team, uint32 winner) const;
 
         // A match fought in rounds keeps its own clock (Arena::UpdateRounds):
         // the time limit is a round's, not the whole match's.

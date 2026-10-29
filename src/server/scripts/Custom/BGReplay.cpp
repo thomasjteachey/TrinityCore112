@@ -43,12 +43,15 @@
 #include "StringFormat.h"
 #include "Util.h"
 #include "Log.h"
+#include "Miscellaneous/AllStar.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
+#include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Timer.h"
@@ -61,6 +64,7 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -87,6 +91,13 @@ namespace
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
     constexpr uint32 ARENA_REPLAY_V2_VERSION = 2;
+    // V3 = V2 + a squad per actor + the roster, action bar and cooldown
+    // timelines after the packets. Both still load.
+    constexpr uint32 ARENA_REPLAY_V3_VERSION = 3;
+    constexpr uint32 ARENA_REPLAY_PARTICIPANT_SCAN_MS = 250;
+    // A cooldown end that moved less than this between two scans is the same
+    // cooldown seen again, not a new one.
+    constexpr uint32 ARENA_REPLAY_COOLDOWN_SLACK_MS = 600;
     constexpr uint32 ARENA_REPLAY_FAKE_GUID_BASE = 0xF0000000u;
     constexpr uint32 ARENA_REPLAY_SEND_CAP_PER_UPDATE = 800;
     constexpr uint32 ARENA_REPLAY_LOAD_GRACE_MS = 15000;
@@ -165,6 +176,59 @@ namespace
         uint8 Class = 0;
         uint8 Gender = 0;
         uint32 Team = 0;
+        uint8 Squad = BATTLEGROUND_NO_SQUAD;    // V3: Four Corners squad, else none
+    };
+
+    // V3: who a participant is, from a timestamp on. Buffle Shuffle moves
+    // people between teams every round and All-Star turns them into another
+    // character on every death, so the roster the replay starts with goes
+    // stale; playback applies these as the clock passes them.
+    struct ReplayRosterEvent
+    {
+        uint32 TimestampMs = 0;
+        uint64 Guid = 0;                        // original guid
+        uint32 Team = 0;
+        uint8 Squad = BATTLEGROUND_NO_SQUAD;
+        uint8 Race = 0;
+        uint8 Class = 0;
+        uint8 Gender = 0;
+        std::string Name;
+    };
+
+    // V3: a participant's action bars (the spectate view shows them). A macro
+    // button carries what the macro shows, since the viewer has none of the
+    // player's macros.
+    struct ReplayBarButton
+    {
+        uint8 Slot = 0;
+        uint32 Packed = 0;                      // ACTION_BUTTON_ACTION | type << 24
+        std::string MacroName;
+        std::string MacroIcon;
+        uint32 MacroSpell = 0;
+    };
+
+    struct ReplayBarSnapshot
+    {
+        uint32 TimestampMs = 0;
+        uint64 Guid = 0;
+        std::vector<ReplayBarButton> Buttons;
+    };
+
+    // V3: a cooldown on one of a participant's buttons, read from the server's
+    // spell history (the cooldown packets only ever reach the caster).
+    enum ReplayCooldownKind : uint8
+    {
+        REPLAY_COOLDOWN_SPELL = 0,
+        REPLAY_COOLDOWN_ITEM  = 1,
+    };
+
+    struct ReplayCooldownEvent
+    {
+        uint32 TimestampMs = 0;
+        uint64 Guid = 0;
+        uint8 Kind = REPLAY_COOLDOWN_SPELL;
+        uint32 Id = 0;                          // spell or item entry
+        uint32 RemainingMs = 0;                 // 0: the cooldown was cleared early
     };
 
     struct MatchRecord
@@ -175,8 +239,12 @@ namespace
         uint32 RecordStartMs = 0;
         uint32 InProgressStartMs = 0;
         uint32 PreStartPacketCount = 0;
+        uint32 FormatVersion = ARENA_REPLAY_V3_VERSION;   // as loaded; 1 = the headerless blobs
         std::vector<ReplayActor> Actors;
         std::vector<PacketRecord> Packets;
+        std::vector<ReplayRosterEvent> RosterEvents;
+        std::vector<ReplayBarSnapshot> BarSnapshots;
+        std::vector<ReplayCooldownEvent> CooldownEvents;
 
         // Not serialized. Recording-only state.
         //
@@ -188,6 +256,14 @@ namespace
 
         // Used only while recording to collapse duplicate cross-team broadcasts.
         std::unordered_map<uint64, uint32> RecentPacketHashTimes;
+
+        // Recording-only: the last roster/bar/cooldown state each participant
+        // was recorded with (ScanRecordingParticipants).
+        uint32 LastScanMs = 0;
+        std::unordered_map<uint64, ReplayRosterEvent> LastRoster;
+        std::unordered_map<uint64, uint64> LastBarHash;
+        std::unordered_map<uint64, std::vector<ReplayBarButton>> LastBars;
+        std::unordered_map<uint64, std::unordered_map<uint64, uint32>> CooldownEnds;   // guid -> kind<<32|id -> end (getMSTime)
     };
 
     struct PlaybackState
@@ -215,10 +291,28 @@ namespace
         // V103 diagnostic controls. These are activated by chat markers like .replaymark / .replaystep.
         bool ProbePaused = false;
         uint32 ProbeStepBudget = 0;
+
+        // V3 timelines. Roster events change Match.Actors as they play, so a
+        // restart puts the actors back the way the replay began.
+        std::vector<ReplayActor> InitialActors;
+        size_t RosterCursor = 0;
+        size_t BarCursor = 0;
+        size_t CooldownCursor = 0;
+
+        // What the addon was last told per fake actor guid, so the frames are
+        // only sent a power type, class or form when it changes.
+        std::unordered_map<uint64, uint32> SentPowerType;
+        std::unordered_map<uint64, uint32> SentClass;
+        std::unordered_map<uint64, uint32> SentForm;
     };
 
-    // Real arena records by BG instance id.
+    // Real arena records by BG instance id. Packets are recorded from every map
+    // thread that sends to an arena participant, and the participant scan runs
+    // on the world thread, so every access holds RecordsLock. Recursive: saving
+    // a replay tells the players, and that chat packet comes back through
+    // OnPacketSend on the same thread.
     std::unordered_map<uint32, MatchRecord> Records;
+    std::recursive_mutex RecordsLock;
 
     // Active playback states by viewer low guid.
     std::unordered_map<uint32, PlaybackState> ActiveReplays;
@@ -517,6 +611,39 @@ namespace
         }
     }
 
+    // Who a participant is right now, as the replay should show them: the
+    // character an All-Star life plays (its name, race and class, as the
+    // match's own name broadcasts give it), the team they fight for this
+    // Buffle Shuffle round, their Four Corners squad.
+    ReplayRosterEvent CaptureParticipantIdentity(Battleground const* bg, Player const* player, uint32 team)
+    {
+        ReplayRosterEvent identity;
+        identity.Guid = player->GetGUID().GetRawValue();
+        identity.Team = team;
+        identity.Squad = bg->IsSquadMatch() ? bg->GetPlayerSquad(player->GetGUID()) : BATTLEGROUND_NO_SQUAD;
+
+        std::string personaName;
+        uint8 personaRace = 0;
+        uint8 personaGender = 0;
+        uint8 personaClass = 0;
+        if (AllStar::GetPersonaNameData(player->GetGUID(), personaName, personaRace, personaGender, personaClass))
+        {
+            identity.Name = personaName;
+            identity.Race = personaRace;
+            identity.Gender = personaGender;
+            identity.Class = personaClass;
+        }
+        else
+        {
+            identity.Name = Battleground::GetPlayerDisplayName(player);
+            identity.Race = player->GetRace();
+            identity.Gender = uint8(player->GetGender());
+            identity.Class = player->GetClass();
+        }
+
+        return identity;
+    }
+
     void RefreshActorsFromBattleground(Battleground* bg, MatchRecord& match)
     {
         if (!bg)
@@ -538,16 +665,437 @@ namespace
             if (bg->IsBotParticipantSession(player->GetSession()))
                 match.ContainsBotParticipant = true;
 
+            ReplayRosterEvent const identity = CaptureParticipantIdentity(bg, player, it.second.Team);
+
             ReplayActor actor;
             actor.OriginalGuid = player->GetGUID();
-            actor.Name = Battleground::GetPlayerDisplayName(player);
-            actor.Race = player->GetRace();
-            actor.Class = player->GetClass();
-            actor.Gender = uint8(player->GetGender());
-            actor.Team = it.second.Team;
+            actor.Name = identity.Name;
+            actor.Race = identity.Race;
+            actor.Class = identity.Class;
+            actor.Gender = identity.Gender;
+            actor.Team = identity.Team;
+            actor.Squad = identity.Squad;
 
             match.Actors.push_back(actor);
             seen.insert(actor.OriginalGuid.GetRawValue());
+
+            // The actor row is the replay's starting roster: only later
+            // changes become roster events.
+            match.LastRoster[identity.Guid] = identity;
+        }
+    }
+
+    // The replay's clock for something recorded now: 0 for the gates-closed
+    // preparation (played the moment a replay starts), else time since the
+    // gates opened plus the preload (OnPacketSend's timestamps).
+    uint32 ReplayRecordClock(Battleground const* bg, MatchRecord& record, uint32 nowMs)
+    {
+        if (bg->GetStatus() == STATUS_WAIT_JOIN)
+            return 0;
+
+        if (!record.InProgressStartMs)
+        {
+            record.InProgressStartMs = nowMs;
+            TC_LOG_INFO("arena.replay", "Arena replay combat clock started instance={} packetsBeforeStart={}",
+                bg->GetInstanceID(), record.PreStartPacketCount);
+        }
+
+        return ARENA_REPLAY_PRELOAD_MS + getMSTimeDiff(record.InProgressStartMs, nowMs);
+    }
+
+    bool SameIdentity(ReplayRosterEvent const& left, ReplayRosterEvent const& right)
+    {
+        return left.Team == right.Team && left.Squad == right.Squad && left.Race == right.Race
+            && left.Class == right.Class && left.Gender == right.Gender && left.Name == right.Name;
+    }
+
+    std::string ReplayLowerAscii(std::string text)
+    {
+        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        return text;
+    }
+
+    std::string ReplayTrim(std::string_view text)
+    {
+        size_t begin = 0;
+        size_t end = text.size();
+        while (begin < end && std::isspace(static_cast<unsigned char>(text[begin])))
+            ++begin;
+        while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])))
+            --end;
+        return std::string(text.substr(begin, end - begin));
+    }
+
+    struct ReplayMacroInfo
+    {
+        std::string Name;
+        std::string Icon;
+        std::string Body;
+    };
+
+    // macros-cache text: "MACRO <id> \"<name>\" <icon>", the body, "END" (the
+    // format AllStar::ParseMacros reads). A character macro's id is 0x1000000 |
+    // the number its action buttons hold; an account macro's is that number.
+    void ParseReplayMacros(std::string const& data, bool characterMacros, std::unordered_map<uint32, ReplayMacroInfo>& out)
+    {
+        uint32 current = 0;
+        ReplayMacroInfo macro;
+        std::istringstream lines(data);
+        std::string raw;
+        while (std::getline(lines, raw))
+        {
+            std::string const line = ReplayTrim(raw);
+            if (line.rfind("MACRO ", 0) == 0)
+            {
+                std::string_view const rest = std::string_view(line).substr(6);
+                uint32 const id = uint32(std::strtoul(std::string(rest.substr(0, rest.find(' '))).c_str(), nullptr, 10));
+                if (characterMacros)
+                    current = (id & 0x1000000) ? (id & 0xFFFFFF) : 0;
+                else
+                    current = (id & 0x1000000) ? 0 : id;
+                macro = ReplayMacroInfo();
+                size_t const open = line.find('"');
+                size_t const close = open == std::string::npos ? std::string::npos : line.find('"', open + 1);
+                if (close != std::string::npos)
+                {
+                    macro.Name = line.substr(open + 1, close - open - 1);
+                    macro.Icon = ReplayTrim(std::string_view(line).substr(close + 1));
+                }
+            }
+            else if (line == "END")
+            {
+                if (current)
+                    out[current] = macro;
+                current = 0;
+            }
+            else if (current)
+                macro.Body += line + '\n';
+        }
+    }
+
+    // The first spell a macro names on a #showtooltip, /cast or /use line,
+    // conditions, !, reset= and (Rank N) taken off.
+    std::string FirstMacroSpellName(std::string const& body)
+    {
+        std::istringstream lines(body);
+        std::string raw;
+        while (std::getline(lines, raw))
+        {
+            std::string const line = ReplayTrim(raw);
+            std::string const lower = ReplayLowerAscii(line);
+            std::string rest;
+            for (char const* command : { "#showtooltip ", "/castsequence ", "/castrandom ", "/cast ", "/use " })
+            {
+                if (lower.rfind(command, 0) == 0)
+                {
+                    rest = line.substr(std::strlen(command));
+                    break;
+                }
+            }
+            if (rest.empty())
+                continue;
+
+            std::istringstream options(rest);
+            std::string option;
+            while (std::getline(options, option, ';'))
+            {
+                std::string name = ReplayTrim(option);
+                while (!name.empty() && name[0] == '[')
+                {
+                    size_t const close = name.find(']');
+                    name = close == std::string::npos ? std::string() : ReplayTrim(std::string_view(name).substr(close + 1));
+                }
+                if (ReplayLowerAscii(name).rfind("reset=", 0) == 0)
+                {
+                    size_t const space = name.find(' ');
+                    name = space == std::string::npos ? std::string() : ReplayTrim(std::string_view(name).substr(space + 1));
+                }
+                size_t const comma = name.find(',');
+                if (comma != std::string::npos)
+                    name = ReplayTrim(std::string_view(name).substr(0, comma));
+                while (!name.empty() && (name[0] == '!' || name[0] == '?'))
+                    name.erase(0, 1);
+                size_t const paren = name.find('(');
+                if (paren != std::string::npos)
+                    name = ReplayTrim(std::string_view(name).substr(0, paren));
+                if (!name.empty())
+                    return name;
+            }
+        }
+        return std::string();
+    }
+
+    // The highest rank of a spell with this name that the player knows.
+    uint32 FindKnownSpellByName(Player const* player, std::string const& name)
+    {
+        if (name.empty())
+            return 0;
+
+        std::string const wanted = ReplayLowerAscii(name);
+        uint32 best = 0;
+        uint32 bestLevel = 0;
+        for (auto const& [spellId, known] : player->GetSpellMap())
+        {
+            if (known.state == PLAYERSPELL_REMOVED || known.disabled || !known.active)
+                continue;
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
+            if (!info || !info->SpellName[LOCALE_enUS])
+                continue;
+            if (ReplayLowerAscii(info->SpellName[LOCALE_enUS]) != wanted)
+                continue;
+            if (!best || info->SpellLevel >= bestLevel)
+            {
+                best = spellId;
+                bestLevel = info->SpellLevel;
+            }
+        }
+        return best;
+    }
+
+    // Addon payloads are split on ';' ',' '=' and '^' ('|' is the client's
+    // escape character); a macro's name or icon must not carry them.
+    std::string ReplayAddonSafe(std::string text, size_t maxLength)
+    {
+        for (char& c : text)
+            if (c == ';' || c == ',' || c == '|' || c == '=' || c == '^' || c == '\t' || c == '\r' || c == '\n')
+                c = ' ';
+        if (text.size() > maxLength)
+            text.resize(maxLength);
+        return text;
+    }
+
+    // A participant's buttons as the server holds them (slot, action | type <<
+    // 24), equipment sets left off: the viewer has none of them.
+    std::vector<ReplayBarButton> CaptureActionBars(Player* player)
+    {
+        std::vector<ReplayBarButton> buttons;
+        for (uint8 slot = 0; slot < MAX_ACTION_BUTTONS; ++slot)
+        {
+            ActionButton const* button = player->GetActionButton(slot);
+            if (!button)
+                continue;
+
+            uint32 const action = button->GetAction();
+            uint8 const type = button->GetType();
+            if (!action || type == ACTION_BUTTON_EQSET)
+                continue;
+
+            ReplayBarButton entry;
+            entry.Slot = slot;
+            entry.Packed = action | (uint32(type) << 24);
+            buttons.push_back(std::move(entry));
+        }
+        return buttons;
+    }
+
+    // What each macro button shows: the macro's name and icon from the
+    // player's macros, and the spell its first /cast names (the spectate bar
+    // lights the button and runs its cooldown by that spell).
+    void ResolveMacroButtons(Player* player, std::vector<ReplayBarButton>& buttons)
+    {
+        std::unordered_map<uint32, ReplayMacroInfo> characterMacros;
+        std::unordered_map<uint32, ReplayMacroInfo> accountMacros;
+        bool parsed = false;
+
+        for (ReplayBarButton& button : buttons)
+        {
+            uint8 const type = uint8(button.Packed >> 24);
+            if (type != ACTION_BUTTON_MACRO && type != ACTION_BUTTON_CMACRO)
+                continue;
+
+            if (!parsed)
+            {
+                parsed = true;
+                if (WorldSession* session = player->GetSession())
+                {
+                    ParseReplayMacros(session->GetAccountData(PER_CHARACTER_MACROS_CACHE)->Data, true, characterMacros);
+                    ParseReplayMacros(session->GetAccountData(GLOBAL_MACROS_CACHE)->Data, false, accountMacros);
+                }
+            }
+
+            uint32 const action = button.Packed & 0x00FFFFFF;
+            ReplayMacroInfo const* macro = nullptr;
+            if (auto itr = characterMacros.find(action); itr != characterMacros.end())
+                macro = &itr->second;
+            else if (auto accountItr = accountMacros.find(action); accountItr != accountMacros.end())
+                macro = &accountItr->second;
+
+            if (!macro)
+                continue;
+
+            button.MacroName = ReplayAddonSafe(macro->Name, 32);
+            button.MacroIcon = ReplayAddonSafe(macro->Icon, 64);
+            button.MacroSpell = FindKnownSpellByName(player, FirstMacroSpellName(macro->Body));
+        }
+    }
+
+    uint64 HashActionBars(std::vector<ReplayBarButton> const& buttons)
+    {
+        uint64 hash = 1469598103934665603ull;
+        auto mix = [&hash](uint32 value)
+        {
+            for (uint8 i = 0; i < 4; ++i)
+            {
+                hash ^= uint8(value >> (i * 8));
+                hash *= 1099511628211ull;
+            }
+        };
+
+        for (ReplayBarButton const& button : buttons)
+        {
+            mix(button.Slot);
+            mix(button.Packed);
+        }
+        return hash;
+    }
+
+    // The on-use spell of an item on a button (a trinket, a potion): what its
+    // cooldown is kept under.
+    uint32 ItemUseSpell(uint32 itemId)
+    {
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+        if (!proto)
+            return 0;
+
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+            if (proto->Spells[i].SpellId > 0 && proto->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+                return uint32(proto->Spells[i].SpellId);
+
+        return 0;
+    }
+
+    void RecordParticipantCooldowns(MatchRecord& record, Player* player, std::vector<ReplayBarButton> const& buttons, uint32 timestamp, uint32 nowMs)
+    {
+        uint64 const guid = player->GetGUID().GetRawValue();
+        std::unordered_map<uint64, uint32>& ends = record.CooldownEnds[guid];
+        SpellHistory const* history = player->GetSpellHistory();
+
+        std::unordered_set<uint64> checked;
+        for (ReplayBarButton const& button : buttons)
+        {
+            uint8 const type = uint8(button.Packed >> 24);
+            uint32 const action = button.Packed & 0x00FFFFFF;
+
+            uint8 kind = REPLAY_COOLDOWN_SPELL;
+            uint32 id = 0;
+            uint32 spellId = 0;
+            if (type == ACTION_BUTTON_SPELL)
+                id = spellId = action;
+            else if (type == ACTION_BUTTON_ITEM)
+            {
+                kind = REPLAY_COOLDOWN_ITEM;
+                id = action;
+                spellId = ItemUseSpell(action);
+            }
+            else if (button.MacroSpell)
+                id = spellId = button.MacroSpell;
+
+            if (!id || !spellId)
+                continue;
+
+            uint64 const key = (uint64(kind) << 32) | id;
+            if (!checked.insert(key).second)
+                continue;
+
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
+            if (!info)
+                continue;
+
+            uint32 const remaining = history->GetRemainingCooldown(info);
+            auto itr = ends.find(key);
+
+            if (remaining)
+            {
+                uint32 const end = nowMs + remaining;
+                if (itr != ends.end() && itr->second > nowMs
+                    && (end > itr->second ? end - itr->second : itr->second - end) < ARENA_REPLAY_COOLDOWN_SLACK_MS)
+                    continue;
+
+                ends[key] = end;
+                record.CooldownEvents.push_back({ timestamp, guid, kind, id, remaining });
+            }
+            else if (itr != ends.end())
+            {
+                // Ended on time: nothing to tell. Ended early (Preparation,
+                // Cold Snap, a round reset): the buttons clear now.
+                if (itr->second > nowMs + ARENA_REPLAY_COOLDOWN_SLACK_MS)
+                    record.CooldownEvents.push_back({ timestamp, guid, kind, id, 0 });
+                ends.erase(itr);
+            }
+        }
+    }
+
+    // Every ARENA_REPLAY_PARTICIPANT_SCAN_MS of a recorded arena: who each
+    // participant is now, their action bars and their button cooldowns. World
+    // thread (BattlegroundMgr::Update -> OnBattlegroundUpdate).
+    void ScanRecordingParticipants(Battleground* bg)
+    {
+        if (!bg || bg->IsReplay() || bg->IsCustomGame() || bg->IsBotFillMatch() || !bg->isArena())
+            return;
+
+        if (bg->GetStatus() != STATUS_WAIT_JOIN && bg->GetStatus() != STATUS_IN_PROGRESS)
+            return;
+
+        std::lock_guard<std::recursive_mutex> lock(RecordsLock);
+
+        auto recordItr = Records.find(bg->GetInstanceID());
+        if (recordItr == Records.end())
+            return;   // nothing recorded yet: the first packet starts the record
+
+        MatchRecord& record = recordItr->second;
+        uint32 const nowMs = getMSTime();
+        if (record.LastScanMs && getMSTimeDiff(record.LastScanMs, nowMs) < ARENA_REPLAY_PARTICIPANT_SCAN_MS)
+            return;
+        record.LastScanMs = nowMs;
+
+        RefreshActorsFromBattleground(bg, record);
+        if (record.ContainsBotParticipant)
+            return;   // never saved; do not spend the scan on it
+
+        uint32 const timestamp = ReplayRecordClock(bg, record, nowMs);
+
+        for (auto const& [guid, participant] : bg->GetPlayers())
+        {
+            if (participant.OfflineRemoveTime)
+                continue;
+
+            Player* player = ObjectAccessor::FindConnectedPlayer(guid);
+            if (!player || !player->IsInWorld() || player->GetBattlegroundId() != bg->GetInstanceID())
+                continue;
+
+            // An All-Star swap is mid-way: its name, class and bars land
+            // together once it is done.
+            if (AllStar::IsSwapInProgress(player))
+                continue;
+
+            uint64 const raw = guid.GetRawValue();
+
+            ReplayRosterEvent identity = CaptureParticipantIdentity(bg, player, participant.Team);
+            auto lastItr = record.LastRoster.find(raw);
+            if (lastItr == record.LastRoster.end() || !SameIdentity(lastItr->second, identity))
+            {
+                identity.TimestampMs = timestamp;
+                record.RosterEvents.push_back(identity);
+                record.LastRoster[raw] = identity;
+            }
+
+            std::vector<ReplayBarButton> buttons = CaptureActionBars(player);
+            uint64 const barHash = HashActionBars(buttons);
+            auto barItr = record.LastBarHash.find(raw);
+            if (barItr == record.LastBarHash.end() || barItr->second != barHash)
+            {
+                ResolveMacroButtons(player, buttons);
+                record.LastBarHash[raw] = barHash;
+                record.LastBars[raw] = buttons;
+
+                ReplayBarSnapshot snapshot;
+                snapshot.TimestampMs = timestamp;
+                snapshot.Guid = raw;
+                snapshot.Buttons = std::move(buttons);
+                record.BarSnapshots.push_back(std::move(snapshot));
+            }
+
+            RecordParticipantCooldowns(record, player, record.LastBars[raw], timestamp, nowMs);
         }
     }
 
@@ -3173,6 +3721,9 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             uint32 team = actor.Team ? actor.Team : ALLIANCE;
 
             SendReplayASCommand(viewer, guid, "NME", actor.Name.empty() ? "Replay" : actor.Name);
+            // The squad before the team: the team update is what lays the
+            // frames out, and a squad match lays them out by squad.
+            SendReplayASCommand(viewer, guid, "SQD", uint32(actor.Squad));
             SendReplayASCommand(viewer, guid, "TEM", team);
             SendReplayASCommand(viewer, guid, "CLA", uint32(actor.Class));
             SendReplayASCommand(viewer, guid, "MHP", 100u);
@@ -3186,10 +3737,145 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             SendReplayASCommand(viewer, guid, "RES", 1u);
             SendReplayASCommand(viewer, guid, "CDC", 1u);
             SendReplayASCommand(viewer, guid, "TIM", durationSeconds);
+
+            state.SentPowerType[guid.GetRawValue()] = powerType;
+            state.SentClass[guid.GetRawValue()] = actor.Class;
         }
 
         state.SentReplayASInitial = true;
         SendReplayGreenNameUpdates(viewer, state, "initial replay addon setup");
+    }
+
+    ReplayActor* FindMutableReplayActorByOriginal(MatchRecord& match, uint64 originalRaw)
+    {
+        for (ReplayActor& actor : match.Actors)
+            if (actor.OriginalGuid.GetRawValue() == originalRaw)
+                return &actor;
+        return nullptr;
+    }
+
+    ReplayActor* FindMutableReplayActorByFake(MatchRecord& match, ObjectGuid fakeGuid)
+    {
+        for (ReplayActor& actor : match.Actors)
+            if (actor.FakeGuid == fakeGuid)
+                return &actor;
+        return nullptr;
+    }
+
+    // A participant became someone else from here on: another team for this
+    // Buffle Shuffle round, the next character of an All-Star life. The
+    // actor row changes (name colours, later frames read it) and the frames
+    // and the client's name cache are told.
+    void ApplyReplayRosterEvent(Player* viewer, PlaybackState& state, ReplayRosterEvent const& event)
+    {
+        ReplayActor* actor = FindMutableReplayActorByOriginal(state.Match, event.Guid);
+        if (!actor)
+            return;
+
+        bool const identityChanged = actor->Name != event.Name || actor->Race != event.Race
+            || actor->Class != event.Class || actor->Gender != event.Gender;
+        bool const sideChanged = actor->Team != event.Team || actor->Squad != event.Squad;
+
+        actor->Name = event.Name;
+        actor->Race = event.Race;
+        actor->Class = event.Class;
+        actor->Gender = event.Gender;
+        actor->Team = event.Team;
+        actor->Squad = event.Squad;
+
+        ObjectGuid const uiGuid = actor->FakeGuid;
+        uint64 const uiRaw = uiGuid.GetRawValue();
+
+        if (identityChanged)
+        {
+            SendReplayNameResponse(viewer->GetSession(), *actor);
+            SendReplayASCommand(viewer, uiGuid, "NME", actor->Name.empty() ? "Replay" : actor->Name);
+
+            if (state.SentClass[uiRaw] != actor->Class)
+            {
+                state.SentClass[uiRaw] = actor->Class;
+                SendReplayASCommand(viewer, uiGuid, "CLA", uint32(actor->Class));
+            }
+        }
+
+        if (sideChanged)
+        {
+            SendReplayASCommand(viewer, uiGuid, "SQD", uint32(actor->Squad));
+            SendReplayASCommand(viewer, uiGuid, "TEM", actor->Team ? actor->Team : uint32(ALLIANCE));
+            SendReplayGreenNameValueUpdate(viewer, *actor);
+        }
+
+        TC_LOG_DEBUG("arena.replay", "Replay roster event viewer={} fake={} name='{}' class={} team={} squad={} ts={}",
+            viewer->GetGUID().GetCounter(), uiRaw, actor->Name, uint32(actor->Class), actor->Team, uint32(actor->Squad), event.TimestampMs);
+    }
+
+    // A participant's action bars, for the spectate view: BRS (a new set
+    // starts, with its button count), BAR lines of "slot:type:action" entries,
+    // and one BMC line per macro button ("slot^icon^spell^name").
+    void ApplyReplayBarSnapshot(Player* viewer, PlaybackState& state, ReplayBarSnapshot const& snapshot)
+    {
+        ReplayActor const* actor = FindMutableReplayActorByOriginal(state.Match, snapshot.Guid);
+        if (!actor)
+            return;
+
+        ObjectGuid const uiGuid = actor->FakeGuid;
+        constexpr size_t kBarPayloadLength = 170;
+
+        SendReplayASCommand(viewer, uiGuid, "BRS", uint32(snapshot.Buttons.size()));
+
+        std::string line;
+        for (ReplayBarButton const& button : snapshot.Buttons)
+        {
+            std::string const entry = std::to_string(button.Slot) + ":" + std::to_string(button.Packed >> 24) + ":"
+                + std::to_string(button.Packed & 0x00FFFFFF);
+            if (!line.empty() && line.size() + 1 + entry.size() > kBarPayloadLength)
+            {
+                SendReplayASCommand(viewer, uiGuid, "BAR", line);
+                line.clear();
+            }
+            if (!line.empty())
+                line += ",";
+            line += entry;
+        }
+        if (!line.empty())
+            SendReplayASCommand(viewer, uiGuid, "BAR", line);
+
+        for (ReplayBarButton const& button : snapshot.Buttons)
+        {
+            uint8 const type = uint8(button.Packed >> 24);
+            if (type != ACTION_BUTTON_MACRO && type != ACTION_BUTTON_CMACRO)
+                continue;
+
+            SendReplayASCommand(viewer, uiGuid, "BMC", std::to_string(button.Slot) + "^" + button.MacroIcon + "^"
+                + std::to_string(button.MacroSpell) + "^" + button.MacroName);
+        }
+    }
+
+    // A cooldown on a participant's button: BCD "kind:id:remainingMs" (kind 0
+    // a spell, 1 an item; 0 ms = cleared).
+    void ApplyReplayCooldownEvent(Player* viewer, PlaybackState& state, ReplayCooldownEvent const& event)
+    {
+        ReplayActor const* actor = FindMutableReplayActorByOriginal(state.Match, event.Guid);
+        if (!actor)
+            return;
+
+        SendReplayASCommand(viewer, actor->FakeGuid, "BCD", std::to_string(uint32(event.Kind)) + ":" + std::to_string(event.Id)
+            + ":" + std::to_string(event.RemainingMs));
+    }
+
+    // Everything on the V3 timelines up to `timestampMs` (inclusive), in order.
+    void ApplyReplayTimelinesUpTo(Player* viewer, PlaybackState& state, uint32 timestampMs)
+    {
+        MatchRecord const& match = state.Match;
+
+        while (state.RosterCursor < match.RosterEvents.size() && match.RosterEvents[state.RosterCursor].TimestampMs <= timestampMs)
+            ApplyReplayRosterEvent(viewer, state, match.RosterEvents[state.RosterCursor++]);
+
+        while (state.BarCursor < match.BarSnapshots.size() && match.BarSnapshots[state.BarCursor].TimestampMs <= timestampMs)
+            ApplyReplayBarSnapshot(viewer, state, match.BarSnapshots[state.BarCursor++]);
+
+        while (state.CooldownCursor < match.CooldownEvents.size() && match.CooldownEvents[state.CooldownCursor].TimestampMs <= timestampMs)
+            ApplyReplayCooldownEvent(viewer, state, match.CooldownEvents[state.CooldownCursor++]);
     }
 
     constexpr uint32 REPLAY_OBJECT_FIELD_GUID_LOW       = 0x0000;
@@ -3327,13 +4013,21 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         return FindReplayASPetCapableFallbackOwner(match);
     }
 
-    void SendReplayASPlayerStatusFromValues(Player* viewer, MatchRecord const& match, ObjectGuid objectGuid, std::unordered_map<uint32, uint32> const& values)
+    // Rage and runic power are kept x10; the frames show what the bar shows.
+    uint32 ReplayASDisplayPower(uint32 powerType, uint32 value)
     {
+        return powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER ? value / 10 : value;
+    }
+
+    void SendReplayASPlayerStatusFromValues(Player* viewer, PlaybackState& state, ObjectGuid objectGuid, std::unordered_map<uint32, uint32> const& values)
+    {
+        MatchRecord const& match = state.Match;
         ReplayActor const* actor = FindReplayActorByGuid(match, objectGuid);
         if (!actor)
             return;
 
         ObjectGuid uiGuid = actor->FakeGuid;
+        uint64 const uiRaw = uiGuid.GetRawValue();
 
         uint32 health = 0;
         uint32 maxHealth = 0;
@@ -3346,16 +4040,77 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             SendReplayASCommand(viewer, uiGuid, "STA", health > 0 ? 1u : 0u);
         }
 
+        // Class and power type from the unit itself (UNIT_FIELD_BYTES_0:
+        // race, class, gender, display power): an All-Star life changes the
+        // class in place, and a druid's form changes the power it shows.
+        uint32 bytes0 = 0;
+        if (ReplayASGetField(values, UNIT_FIELD_BYTES_0, bytes0))
+        {
+            uint32 const unitClass = (bytes0 >> 8) & 0xFF;
+            uint32 const displayPower = (bytes0 >> 24) & 0xFF;
+
+            auto classItr = state.SentClass.find(uiRaw);
+            if (unitClass && (classItr == state.SentClass.end() || classItr->second != unitClass))
+            {
+                state.SentClass[uiRaw] = unitClass;
+                SendReplayASCommand(viewer, uiGuid, "CLA", unitClass);
+            }
+
+            auto powerItr = state.SentPowerType.find(uiRaw);
+            if (displayPower < MAX_POWERS && (powerItr == state.SentPowerType.end() || powerItr->second != displayPower))
+            {
+                state.SentPowerType[uiRaw] = displayPower;
+                SendReplayASCommand(viewer, uiGuid, "PWT", displayPower);
+            }
+        }
+
+        // Replays saved before the roster timeline (V3) only have the unit
+        // fields: a Buffle Shuffle round's move shows as the arena-team byte
+        // (PLAYER_BYTES_3 byte 3, 1 = the Alliance side, Player::SetBGTeam),
+        // which a two-team arena sends every viewer alike.
+        uint32 bytes3 = 0;
+        if (match.FormatVersion < ARENA_REPLAY_V3_VERSION && ReplayASGetField(values, PLAYER_BYTES_3, bytes3))
+        {
+            uint32 const team = ((bytes3 >> 24) & 0xFF) ? uint32(ALLIANCE) : uint32(HORDE);
+            ReplayActor* mutableActor = FindMutableReplayActorByFake(state.Match, uiGuid);
+            if (mutableActor && mutableActor->Team != team)
+            {
+                mutableActor->Team = team;
+                SendReplayASCommand(viewer, uiGuid, "TEM", team);
+                SendReplayGreenNameValueUpdate(viewer, *mutableActor);
+            }
+        }
+
+        // The shapeshift form (UNIT_FIELD_BYTES_2 byte 3) picks the stance or
+        // form bar the spectate view shows.
+        uint32 bytes2 = 0;
+        if (ReplayASGetField(values, UNIT_FIELD_BYTES_2, bytes2))
+        {
+            uint32 const form = (bytes2 >> 24) & 0xFF;
+            auto formItr = state.SentForm.find(uiRaw);
+            if (formItr == state.SentForm.end() || formItr->second != form)
+            {
+                state.SentForm[uiRaw] = form;
+                SendReplayASCommand(viewer, uiGuid, "FRM", form);
+            }
+        }
+
         uint32 powerType = ReplayASPowerTypeForClass(actor->Class);
-        SendReplayASCommand(viewer, uiGuid, "PWT", powerType);
+        if (auto powerItr = state.SentPowerType.find(uiRaw); powerItr != state.SentPowerType.end())
+            powerType = powerItr->second;
+        else
+        {
+            state.SentPowerType[uiRaw] = powerType;
+            SendReplayASCommand(viewer, uiGuid, "PWT", powerType);
+        }
 
         uint32 maxPower = 0;
         if (ReplayASGetField(values, ReplayASMaxPowerFieldForType(powerType), maxPower) && maxPower > 0)
-            SendReplayASCommand(viewer, uiGuid, "MPW", maxPower);
+            SendReplayASCommand(viewer, uiGuid, "MPW", ReplayASDisplayPower(powerType, maxPower));
 
         uint32 currentPower = 0;
         if (ReplayASGetField(values, ReplayASPowerFieldForType(powerType), currentPower))
-            SendReplayASCommand(viewer, uiGuid, "CPW", currentPower);
+            SendReplayASCommand(viewer, uiGuid, "CPW", ReplayASDisplayPower(powerType, currentPower));
 
         // UI-only target feed for the addon.
         // This uses the same verified UNIT_FIELD_TARGET pair that v23 rewrites for the default Blizzard UI.
@@ -3395,8 +4150,9 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         SendReplayASCommand(viewer, owner->FakeGuid, "PHP", pct);
     }
 
-    bool SendReplayASStatusFromUpdatePayload(Player* viewer, MatchRecord const& match, std::vector<uint8>& payload)
+    bool SendReplayASStatusFromUpdatePayload(Player* viewer, PlaybackState& state, std::vector<uint8>& payload)
     {
+        MatchRecord const& match = state.Match;
         constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
         constexpr uint8 REPLAY_UPDATETYPE_MOVEMENT = 1;
         constexpr uint8 REPLAY_UPDATETYPE_CREATE_OBJECT = 2;
@@ -3444,7 +4200,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
                         return false;
 
                     if (FindReplayActorByGuid(match, blockGuid))
-                        SendReplayASPlayerStatusFromValues(viewer, match, blockGuid, values);
+                        SendReplayASPlayerStatusFromValues(viewer, state, blockGuid, values);
                     else
                         SendReplayASPetStatusFromValues(viewer, match, values);
 
@@ -3472,7 +4228,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
                         return false;
 
                     if (FindReplayActorByGuid(match, blockGuid))
-                        SendReplayASPlayerStatusFromValues(viewer, match, blockGuid, values);
+                        SendReplayASPlayerStatusFromValues(viewer, state, blockGuid, values);
                     else
                         SendReplayASPetStatusFromValues(viewer, match, values);
 
@@ -3486,7 +4242,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         return true;
     }
 
-    bool SendReplayASStatusFromPlaybackPacket(Player* viewer, WorldPacket const& packet, MatchRecord const& match)
+    bool SendReplayASStatusFromPlaybackPacket(Player* viewer, WorldPacket const& packet, PlaybackState& state)
     {
         if (packet.GetOpcode() == SMSG_UPDATE_OBJECT)
         {
@@ -3494,7 +4250,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             if (!payload.empty())
                 std::memcpy(payload.data(), packet.contents(), payload.size());
 
-            return SendReplayASStatusFromUpdatePayload(viewer, match, payload);
+            return SendReplayASStatusFromUpdatePayload(viewer, state, payload);
         }
 
         if (packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT)
@@ -3521,7 +4277,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             if (zResult != Z_OK || actualSize != uncompressedSize)
                 return false;
 
-            return SendReplayASStatusFromUpdatePayload(viewer, match, decompressed);
+            return SendReplayASStatusFromUpdatePayload(viewer, state, decompressed);
         }
 
         return false;
@@ -3779,11 +4535,13 @@ std::vector<uint8> payload(packet.size());
         return sentAny;
     }
 
-    void SendReplayASForPlaybackPacket(Player* viewer, WorldPacket const& packet, MatchRecord const& match)
+    void SendReplayASForPlaybackPacket(Player* viewer, WorldPacket const& packet, PlaybackState& state)
     {
+        MatchRecord const& match = state.Match;
+
         // Feed real HP / max HP / power / max power / pet HP to the replay addon from the same
         // update-object packets that make replay actors move/render.
-        SendReplayASStatusFromPlaybackPacket(viewer, packet, match);
+        SendReplayASStatusFromPlaybackPacket(viewer, packet, state);
 
         // Feed replay aura packets into WoW-style buff/debuff rows.
         SendReplayASAurasFromPlaybackPacket(viewer, packet, match);
@@ -3854,18 +4612,44 @@ std::vector<uint8> payload(packet.size());
         return value;
     }
 
-    std::string JoinActorGuidList(MatchRecord const& match, uint32 team)
+    // Who won, per actor. Not "the actor's team == the winning team": a Buffle
+    // Shuffle moves people between the teams every round and is won on rounds,
+    // a Four Corners match is won by one squad of the two that share a side.
+    // Battleground::IsWinningParticipant answers both, given the team the
+    // actor finished on (its last roster entry).
+    std::unordered_set<uint64> ReplayWinningActors(Battleground const* bg, MatchRecord const& match, uint32 winner)
     {
+        std::unordered_set<uint64> winners;
+        for (ReplayActor const& actor : match.Actors)
+        {
+            uint64 const raw = actor.OriginalGuid.GetRawValue();
+            uint32 team = actor.Team;
+            if (auto itr = match.LastRoster.find(raw); itr != match.LastRoster.end())
+                team = itr->second.Team;
+
+            if (bg->IsWinningParticipant(actor.OriginalGuid, team, winner))
+                winners.insert(raw);
+        }
+        return winners;
+    }
+
+    std::string JoinActorGuidList(MatchRecord const& match, std::unordered_set<uint64> const& winners, bool winningSide)
+    {
+        constexpr size_t kGuidColumnSize = 255;
+
         std::string out;
         for (ReplayActor const& actor : match.Actors)
         {
-            if (actor.Team != team)
+            if ((winners.count(actor.OriginalGuid.GetRawValue()) != 0) != winningSide)
                 continue;
 
-            if (!out.empty())
-                out += ", ";
+            std::string const guid = std::to_string(actor.OriginalGuid.GetRawValue());
+            std::string_view const separator = out.empty() ? "" : ", ";
+            if (out.size() + separator.size() + guid.size() > kGuidColumnSize)
+                break;
 
-            out += std::to_string(actor.OriginalGuid.GetRawValue());
+            out += separator;
+            out += guid;
         }
 
         return out;
@@ -3874,14 +4658,14 @@ std::vector<uint8> payload(packet.size());
     // A name carries the family name after a space ("Jahzir Frostmask"), so the
     // names are set apart by commas, and the list stops at the last whole name
     // that fits the varchar(255) team-name column of character_arena_replays.
-    std::string JoinActorNameList(MatchRecord const& match, uint32 team)
+    std::string JoinActorNameList(MatchRecord const& match, std::unordered_set<uint64> const& winners, bool winningSide)
     {
         constexpr size_t kTeamNameColumnSize = 255;
 
         std::string out;
         for (ReplayActor const& actor : match.Actors)
         {
-            if (actor.Team != team)
+            if ((winners.count(actor.OriginalGuid.GetRawValue()) != 0) != winningSide)
                 continue;
 
             std::string_view const separator = out.empty() ? "" : ", ";
@@ -3911,7 +4695,8 @@ std::vector<uint8> payload(packet.size());
         return ALLIANCE;
     }
 
-    void GetReplayTeamInfo(Battleground* bg, MatchRecord const& match, uint32 team, std::string& teamName, uint32& rating, uint32& mmr)
+    void GetReplayTeamInfo(Battleground* bg, MatchRecord const& match, uint32 team, std::unordered_set<uint64> const& winners,
+        bool winningSide, std::string& teamName, uint32& rating, uint32& mmr)
     {
         teamName.clear();
         rating = 0;
@@ -3919,17 +4704,29 @@ std::vector<uint8> payload(packet.size());
 
         if (bg && bg->isArena() && bg->isRated())
         {
-            if (ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(bg->GetArenaTeamIdForTeam(team)))
+            // A rated squad match has an arena team per squad: the winner's is
+            // named, the losing side is several teams and goes by its players.
+            uint32 arenaTeamId = 0;
+            if (!bg->IsSquadMatch())
+            {
+                arenaTeamId = bg->GetArenaTeamIdForTeam(team);
+                mmr = bg->GetArenaMatchmakerRating(team);
+            }
+            else if (winningSide && bg->GetWinnerSquad() != BATTLEGROUND_NO_SQUAD)
+            {
+                arenaTeamId = bg->GetSquadArenaTeamId(bg->GetWinnerSquad());
+                mmr = bg->GetSquadMatchmakerRating(bg->GetWinnerSquad());
+            }
+
+            if (ArenaTeam* arenaTeam = arenaTeamId ? sArenaTeamMgr->GetArenaTeamById(arenaTeamId) : nullptr)
             {
                 teamName = arenaTeam->GetName();
                 rating = arenaTeam->GetRating();
             }
-
-            mmr = bg->GetArenaMatchmakerRating(team);
         }
 
         if (teamName.empty())
-            teamName = JoinActorNameList(match, team);
+            teamName = JoinActorNameList(match, winners, winningSide);
     }
 
     uint32 GetNextArenaReplayIdForMessage()
@@ -4013,7 +4810,7 @@ std::vector<uint8> payload(packet.size());
     void SerializeMatchData(MatchRecord const& match, ByteBuffer& buffer)
     {
         buffer << uint32(ARENA_REPLAY_V2_MAGIC);
-        buffer << uint32(ARENA_REPLAY_V2_VERSION);
+        buffer << uint32(ARENA_REPLAY_V3_VERSION);
 
         buffer << uint32(match.Actors.size());
         for (ReplayActor const& actor : match.Actors)
@@ -4024,6 +4821,7 @@ std::vector<uint8> payload(packet.size());
             buffer << uint8(actor.Class);
             buffer << uint8(actor.Gender);
             buffer << uint32(actor.Team);
+            buffer << uint8(actor.Squad);
         }
 
         buffer << uint32(match.Packets.size());
@@ -4036,6 +4834,115 @@ std::vector<uint8> payload(packet.size());
             if (frame.Packet.size() > 0)
                 buffer.append(frame.Packet.contents(), frame.Packet.size());
         }
+
+        buffer << uint32(match.RosterEvents.size());
+        for (ReplayRosterEvent const& event : match.RosterEvents)
+        {
+            buffer << uint32(event.TimestampMs);
+            buffer << uint64(event.Guid);
+            buffer << uint32(event.Team);
+            buffer << uint8(event.Squad);
+            buffer << uint8(event.Race);
+            buffer << uint8(event.Class);
+            buffer << uint8(event.Gender);
+            buffer << event.Name;
+        }
+
+        buffer << uint32(match.BarSnapshots.size());
+        for (ReplayBarSnapshot const& snapshot : match.BarSnapshots)
+        {
+            buffer << uint32(snapshot.TimestampMs);
+            buffer << uint64(snapshot.Guid);
+            buffer << uint16(snapshot.Buttons.size());
+            for (ReplayBarButton const& button : snapshot.Buttons)
+            {
+                buffer << uint8(button.Slot);
+                buffer << uint32(button.Packed);
+                buffer << button.MacroName;
+                buffer << button.MacroIcon;
+                buffer << uint32(button.MacroSpell);
+            }
+        }
+
+        buffer << uint32(match.CooldownEvents.size());
+        for (ReplayCooldownEvent const& event : match.CooldownEvents)
+        {
+            buffer << uint32(event.TimestampMs);
+            buffer << uint64(event.Guid);
+            buffer << uint8(event.Kind);
+            buffer << uint32(event.Id);
+            buffer << uint32(event.RemainingMs);
+        }
+    }
+
+    // The V3 timelines after the packets. A replay whose tail is cut short
+    // keeps its packets and whatever timeline entries read whole.
+    void DeserializeV3Timelines(MatchRecord& record, ByteBuffer& buffer)
+    {
+        try
+        {
+            uint32 rosterCount = 0;
+            buffer >> rosterCount;
+            for (uint32 i = 0; i < rosterCount; ++i)
+            {
+                ReplayRosterEvent event;
+                buffer >> event.TimestampMs;
+                buffer >> event.Guid;
+                buffer >> event.Team;
+                buffer >> event.Squad;
+                buffer >> event.Race;
+                buffer >> event.Class;
+                buffer >> event.Gender;
+                buffer >> event.Name;
+                record.RosterEvents.push_back(std::move(event));
+            }
+
+            uint32 barCount = 0;
+            buffer >> barCount;
+            for (uint32 i = 0; i < barCount; ++i)
+            {
+                ReplayBarSnapshot snapshot;
+                uint16 buttonCount = 0;
+                buffer >> snapshot.TimestampMs;
+                buffer >> snapshot.Guid;
+                buffer >> buttonCount;
+                for (uint16 b = 0; b < buttonCount; ++b)
+                {
+                    ReplayBarButton button;
+                    buffer >> button.Slot;
+                    buffer >> button.Packed;
+                    buffer >> button.MacroName;
+                    buffer >> button.MacroIcon;
+                    buffer >> button.MacroSpell;
+                    snapshot.Buttons.push_back(std::move(button));
+                }
+                record.BarSnapshots.push_back(std::move(snapshot));
+            }
+
+            uint32 cooldownCount = 0;
+            buffer >> cooldownCount;
+            for (uint32 i = 0; i < cooldownCount; ++i)
+            {
+                ReplayCooldownEvent event;
+                buffer >> event.TimestampMs;
+                buffer >> event.Guid;
+                buffer >> event.Kind;
+                buffer >> event.Id;
+                buffer >> event.RemainingMs;
+                record.CooldownEvents.push_back(event);
+            }
+        }
+        catch (ByteBufferException const&)
+        {
+            TC_LOG_ERROR("arena.replay", "Replay V3 timelines cut short: roster={} bars={} cooldowns={}",
+                uint32(record.RosterEvents.size()), uint32(record.BarSnapshots.size()), uint32(record.CooldownEvents.size()));
+        }
+
+        // Recorded in time order, but the playback cursors rely on it.
+        auto byTime = [](auto const& left, auto const& right) { return left.TimestampMs < right.TimestampMs; };
+        std::stable_sort(record.RosterEvents.begin(), record.RosterEvents.end(), byTime);
+        std::stable_sort(record.BarSnapshots.begin(), record.BarSnapshots.end(), byTime);
+        std::stable_sort(record.CooldownEvents.begin(), record.CooldownEvents.end(), byTime);
     }
 
     void DeserializeV1Frames(MatchRecord& record, ByteBuffer& buffer)
@@ -4089,14 +4996,16 @@ std::vector<uint8> payload(packet.size());
         if (magic != ARENA_REPLAY_V2_MAGIC)
         {
             buffer.rpos(0);
+            record.FormatVersion = 1;
             DeserializeV1Frames(record, buffer);
             return !record.Packets.empty();
         }
 
         uint32 version = 0;
         buffer >> version;
+        record.FormatVersion = version;
 
-        if (version != ARENA_REPLAY_V2_VERSION)
+        if (version != ARENA_REPLAY_V2_VERSION && version != ARENA_REPLAY_V3_VERSION)
         {
             TC_LOG_ERROR("arena.replay", "Unsupported arena replay version {}", version);
             return false;
@@ -4117,6 +5026,8 @@ std::vector<uint8> payload(packet.size());
             buffer >> actor.Class;
             buffer >> actor.Gender;
             buffer >> actor.Team;
+            if (version >= ARENA_REPLAY_V3_VERSION)
+                buffer >> actor.Squad;
 
             record.Actors.push_back(actor);
         }
@@ -4124,10 +5035,14 @@ std::vector<uint8> payload(packet.size());
         uint32 packetCount = 0;
         buffer >> packetCount;
 
+        bool packetsWhole = true;
         for (uint32 i = 0; i < packetCount; ++i)
         {
             if (buffer.size() - buffer.rpos() < 10)
+            {
+                packetsWhole = false;
                 break;
+            }
 
             uint32 packetSize = 0;
             uint32 packetTimestamp = 0;
@@ -4141,7 +5056,10 @@ std::vector<uint8> payload(packet.size());
             if (packetSize > 0)
             {
                 if (buffer.size() - buffer.rpos() < packetSize)
+                {
+                    packetsWhole = false;
                     break;
+                }
 
                 std::vector<uint8> tmp(packetSize, 0);
                 buffer.read(tmp.data(), packetSize);
@@ -4150,6 +5068,9 @@ std::vector<uint8> payload(packet.size());
 
             record.Packets.push_back({ packetTimestamp, packet });
         }
+
+        if (version >= ARENA_REPLAY_V3_VERSION && packetsWhole)
+            DeserializeV3Timelines(record, buffer);
 
         return !record.Packets.empty();
     }
@@ -4289,6 +5210,7 @@ std::vector<uint8> payload(packet.size());
 
         PlaybackState state;
         state.Match = std::move(record);
+        state.InitialActors = state.Match.Actors;
         state.ViewerLowGuid = viewerLowGuid;
         state.BgInstanceId = bg->GetInstanceID();
         state.CreatedMs = getMSTime();
@@ -4323,23 +5245,32 @@ std::vector<uint8> payload(packet.size());
         if (!bg)
             return;
 
+        std::lock_guard<std::recursive_mutex> lock(RecordsLock);
+        uint32 const instanceId = bg->GetInstanceID();
+
         // Custom games and bot-filled skirmishes are non-standard matches and
         // must never be persisted as arena replays. IsBotFillMatch is sticky,
         // so it still answers correctly after the transient clones are gone.
         // Discard any record created before either flag was applied.
         if (bg->IsCustomGame() || bg->IsBotFillMatch())
         {
-            Records.erase(bg->GetInstanceID());
+            Records.erase(instanceId);
             return;
         }
 
         if (!sConfigMgr->GetBoolDefault("ArenaReplay.Enable", true))
+        {
+            Records.erase(instanceId);
             return;
+        }
 
         if (!bg->isRated() && !sConfigMgr->GetBoolDefault("ArenaReplay.SaveUnratedArenas", true))
+        {
+            Records.erase(instanceId);
             return;
+        }
 
-        auto recordItr = Records.find(bg->GetInstanceID());
+        auto recordItr = Records.find(instanceId);
         if (recordItr == Records.end())
             return;
 
@@ -4349,14 +5280,14 @@ std::vector<uint8> payload(packet.size());
         if (match.ContainsBotParticipant)
         {
             TC_LOG_INFO("arena.replay", "Skipped arena replay containing bots instance={} map={} arenaType={}",
-                bg->GetInstanceID(), bg->GetMapId(), uint32(match.ArenaTypeId));
-            Records.erase(recordItr);
+                instanceId, bg->GetMapId(), uint32(match.ArenaTypeId));
+            Records.erase(instanceId);
             return;
         }
 
         if (match.Packets.empty())
         {
-            Records.erase(recordItr);
+            Records.erase(instanceId);
             return;
         }
 
@@ -4366,8 +5297,8 @@ std::vector<uint8> payload(packet.size());
         if (validArenaSeconds && durationMs < validArenaSeconds * IN_MILLISECONDS)
         {
             TC_LOG_INFO("arena.replay", "Skipped short arena replay instance={} durationMs={} minMs={}",
-                bg->GetInstanceID(), durationMs, validArenaSeconds * IN_MILLISECONDS);
-            Records.erase(recordItr);
+                instanceId, durationMs, validArenaSeconds * IN_MILLISECONDS);
+            Records.erase(instanceId);
             return;
         }
 
@@ -4378,9 +5309,10 @@ std::vector<uint8> payload(packet.size());
 
         uint32 winnerTeam = NormalizeReplayWinnerTeam(match, winner);
         uint32 loserTeam = bg->GetOtherTeam(winnerTeam);
+        std::unordered_set<uint64> const winners = ReplayWinningActors(bg, match, winner);
 
-        std::string winnerPlayerGuids = JoinActorGuidList(match, winnerTeam);
-        std::string loserPlayerGuids = JoinActorGuidList(match, loserTeam);
+        std::string winnerPlayerGuids = JoinActorGuidList(match, winners, true);
+        std::string loserPlayerGuids = JoinActorGuidList(match, winners, false);
 
         std::string winnerTeamName;
         std::string loserTeamName;
@@ -4389,8 +5321,8 @@ std::vector<uint8> payload(packet.size());
         uint32 winnerTeamMMR = 0;
         uint32 loserTeamMMR = 0;
 
-        GetReplayTeamInfo(bg, match, winnerTeam, winnerTeamName, winnerTeamRating, winnerTeamMMR);
-        GetReplayTeamInfo(bg, match, loserTeam, loserTeamName, loserTeamRating, loserTeamMMR);
+        GetReplayTeamInfo(bg, match, winnerTeam, winners, true, winnerTeamName, winnerTeamRating, winnerTeamMMR);
+        GetReplayTeamInfo(bg, match, loserTeam, winners, false, loserTeamName, loserTeamRating, loserTeamMMR);
 
         uint32 predictedReplayId = GetNextArenaReplayIdForMessage();
 
@@ -4415,6 +5347,15 @@ std::vector<uint8> payload(packet.size());
             EscapeReplaySqlString(winnerPlayerGuids),
             EscapeReplaySqlString(loserPlayerGuids));
 
+        TC_LOG_INFO("arena.replay", "Saved arena replay AC-style instance={} predictedId={} map={} arenaType={} packets={} actors={} preStartPackets={} rosterEvents={} barSnapshots={} cooldownEvents={} rawBytes={} base32Bytes={} winner='{}' loser='{}'",
+            instanceId, predictedReplayId, bg->GetMapId(), uint32(match.ArenaTypeId), uint32(match.Packets.size()),
+            uint32(match.Actors.size()), match.PreStartPacketCount, uint32(match.RosterEvents.size()), uint32(match.BarSnapshots.size()),
+            uint32(match.CooldownEvents.size()), uint32(rawReplay.size()), uint32(encodedReplay.size()), winnerTeamName, loserTeamName);
+
+        // The record goes before the players are told: the chat packets pass
+        // through OnPacketSend on this thread.
+        Records.erase(instanceId);
+
         for (auto const& bgPlayer : bg->GetPlayers())
         {
             Player* player = bg->_GetPlayer(bgPlayer.first, bgPlayer.second.OfflineRemoveTime != 0, "arena replay save message");
@@ -4426,12 +5367,6 @@ std::vector<uint8> payload(packet.size());
                     ChatHandler(player->GetSession()).PSendSysMessage("Replay saved.");
             }
         }
-
-        TC_LOG_INFO("arena.replay", "Saved arena replay AC-style instance={} predictedId={} map={} arenaType={} packets={} actors={} preStartPackets={} rawBytes={} base32Bytes={} winner='{}' loser='{}'",
-            bg->GetInstanceID(), predictedReplayId, bg->GetMapId(), uint32(match.ArenaTypeId), uint32(match.Packets.size()),
-            uint32(match.Actors.size()), match.PreStartPacketCount, uint32(rawReplay.size()), uint32(encodedReplay.size()), winnerTeamName, loserTeamName);
-
-        Records.erase(recordItr);
     }
 }
 
@@ -4588,31 +5523,20 @@ std::vector<uint8> payload(packet.size());
 
     void RecordArenaPacket(Battleground* bg, WorldPacket const& packet)
     {
+        std::lock_guard<std::recursive_mutex> lock(RecordsLock);
+
         MatchRecord& record = GetOrCreateRecord(bg);
         uint32 nowMs = getMSTime();
 
         if (IsDuplicateRecentPacket(record, packet, nowMs))
             return;
 
-        uint32 timestamp = 0;
+        // Pre-start visual packets are needed to create players client-side, but the viewer
+        // should not wait through arena prep: ReplayRecordClock stamps them 0, played at replay start.
         if (bg->GetStatus() == STATUS_WAIT_JOIN)
-        {
-            // Pre-start visual packets are needed to create players client-side, but the viewer
-            // should not wait through arena prep. Send these immediately at replay start.
-            timestamp = 0;
             ++record.PreStartPacketCount;
-        }
-        else
-        {
-            if (!record.InProgressStartMs)
-            {
-                record.InProgressStartMs = nowMs;
-                TC_LOG_INFO("arena.replay", "Arena replay combat clock started instance={} packetsBeforeStart={}",
-                    bg->GetInstanceID(), record.PreStartPacketCount);
-            }
 
-            timestamp = ARENA_REPLAY_PRELOAD_MS + (nowMs - record.InProgressStartMs);
-        }
+        uint32 const timestamp = ReplayRecordClock(bg, record, nowMs);
 
         record.Packets.push_back({ timestamp, WorldPacket(packet) });
 
@@ -4758,6 +5682,12 @@ public:
             && sentThisUpdate < sendCap)
         {
             PacketRecord const& frame = state.Match.Packets[state.Cursor];
+
+            // Who everybody is as of this packet (a round's new teams, a new
+            // All-Star life) before the packet itself, whose name colours and
+            // frame updates read the actor rows.
+            ApplyReplayTimelinesUpTo(viewer, state, frame.TimestampMs);
+
             if (IsReleasedReplayActorMovement(frame, state.ReleasedActors))
             {
                 ++state.Cursor;
@@ -4787,7 +5717,7 @@ public:
 
             LogReplayPacketProbe(viewer, state, frame, out, state.Cursor, elapsedMs);
             viewer->GetSession()->SendPacket(&out);
-            SendReplayASForPlaybackPacket(viewer, out, state.Match);
+            SendReplayASForPlaybackPacket(viewer, out, state);
 
             ++state.Cursor;
             ++sentThisUpdate;
@@ -4827,8 +5757,16 @@ public:
                 viewerLowGuid, elapsedMs, uint32(state.Cursor), uint32(state.Match.Packets.size()));
         }
 
+        // Timeline entries between packets go out on the clock too; while the
+        // packet feed is held (probe pause, the send cap) they wait with it.
+        if (!state.ProbePaused && sentThisUpdate < sendCap)
+            ApplyReplayTimelinesUpTo(viewer, state, elapsedMs);
+
         if (state.Cursor >= state.Match.Packets.size())
+        {
+            ApplyReplayTimelinesUpTo(viewer, state, std::numeric_limits<uint32>::max());
             FinishPlaybackForViewer(viewerLowGuid, state);
+        }
 
         return true;
     }
@@ -4888,6 +5826,17 @@ public:
         state.ReleasedActors.clear();
         state.ProbePaused = false;
         state.ProbeStepBudget = 0;
+
+        // Back to the roster the replay began with (the same fake guids), and
+        // the timelines from their start.
+        if (!state.InitialActors.empty())
+            state.Match.Actors = state.InitialActors;
+        state.RosterCursor = 0;
+        state.BarCursor = 0;
+        state.CooldownCursor = 0;
+        state.SentPowerType.clear();
+        state.SentClass.clear();
+        state.SentForm.clear();
 
         TC_LOG_DEBUG("arena.replay", "Replay restarted viewer={} bg={} packets={}",
             viewerLowGuid, state.BgInstanceId, uint32(state.Match.Packets.size()));
@@ -4955,11 +5904,19 @@ public:
 
     void OnBattlegroundUpdate(Battleground* bg, uint32 /*diff*/) override
     {
+        if (!bg || !bg->isArena())
+            return;
+
+        // A match being recorded: who everybody is, their bars and cooldowns.
+        if (!bg->IsReplay())
+        {
+            ScanRecordingParticipants(bg);
+            return;
+        }
+
         // Playback is intentionally not done here anymore.
         // Do not erase ActiveReplays from this hook. During replay creation the viewer can still be zoning/loading
         // while bg->GetPlayers() is temporarily empty, and erasing here makes the replay start with no packets visible.
-        if (!bg || !bg->isArena() || !bg->IsReplay())
-            return;
 
         // Do not call SkipStartDelay() here. On replay creation this hook can run before the viewer has
         // finished zoning into the map; calling SkipStartDelay() that early can call EndNow() and kick the viewer.
