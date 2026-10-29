@@ -41,9 +41,11 @@ class WorldSession;
 // account's character list, top to bottom (CharacterScreen::GetListPosition,
 // the order the player arranges on the character screen): the character they
 // queued with first, then each level-60 character of a class not in the lineup
-// yet, then - for every class the account has no level-60 of - that class's
-// tournament starter template (Startwarrior and the rest,
-// Centurion.AllStar.TemplateCharacters), in class order.
+// yet, then - for every class the account has no level-60 of - a random
+// level-60 playerbot character of that class (a stand-in), or that class's
+// tournament starter template when there is none (Startwarrior and the rest,
+// Centurion.AllStar.TemplateCharacters). With Centurion.AllStar.ShuffleLives
+// (the default) every life after the first is then put in a random order.
 //
 // A death is a death for two seconds (Centurion.AllStar.RespawnDelay); then the
 // player stands up where they fell as the next character of the lineup. The swap is made IN PLACE, on the live character -
@@ -129,7 +131,8 @@ namespace AllStar
     // false while the answer is on its way.
     bool FindLineup(uint32 accountId, ObjectGuid::LowType playing, Lineup& out);
     void ForgetLineup(uint32 accountId, ObjectGuid::LowType playing);
-    // A bot's: its own class, then the templates in a random order.
+    // A bot's: its own class, then stand-ins/templates for the other eight
+    // (in a random order with Centurion.AllStar.ShuffleLives).
     Lineup BuildBotLineup(uint8 playingClass);
 
     // World::Update: hands finished loads to the waiting matches.

@@ -147,6 +147,7 @@ namespace
         uint32 RespawnDelayMs = 2 * IN_MILLISECONDS;
         uint32 TimeLimitMs = 30 * MINUTE * IN_MILLISECONDS;
         uint8 SourceMinLevel = 60;
+        bool ShuffleLives = true;           // every life after the first in a random order
         std::array<ObjectGuid::LowType, 12> Templates{};
     };
     Settings Config;
@@ -741,6 +742,12 @@ namespace
                 lineup.push_back({ playerClass, source, true });
             used |= ClassBit(playerClass);
         }
+
+        // Life one is always the character that queued; the rest in a random
+        // order unless Centurion.AllStar.ShuffleLives is off (owner: "make it
+        // random order for everyone. make this a config").
+        if (Config.ShuffleLives && lineup.size() > 2)
+            std::shuffle(lineup.begin() + 1, lineup.end(), RandomEngine::Instance());
 
         return lineup;
     }
@@ -1865,6 +1872,7 @@ void LoadConfig()
     loaded.RespawnDelayMs = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.AllStar.RespawnDelay", 2 * IN_MILLISECONDS)));
     loaded.TimeLimitMs = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.AllStar.TimeLimit", 30))) * MINUTE * IN_MILLISECONDS;
     loaded.SourceMinLevel = uint8(std::clamp(sConfigMgr->GetIntDefault("Centurion.AllStar.SourceMinLevel", 60), 1, 255));
+    loaded.ShuffleLives = sConfigMgr->GetBoolDefault("Centurion.AllStar.ShuffleLives", true);
 
     std::string const templates = sConfigMgr->GetStringDefault("Centurion.AllStar.TemplateCharacters",
         "1:13307 2:13308 3:13314 4:13309 5:13310 7:13311 8:13315 9:13312 11:13313");
@@ -2034,10 +2042,6 @@ void ForgetLineup(uint32 accountId, ObjectGuid::LowType playing)
 Lineup BuildBotLineup(uint8 playingClass)
 {
     Lineup lineup = BuildLineup(playingClass, {});
-    // Its own class first - life one is the bot itself - then the other eight
-    // in a random order (owner: "order of bot lives should be random").
-    if (lineup.size() > 2)
-        std::shuffle(lineup.begin() + 1, lineup.end(), RandomEngine::Instance());
     for (LineupEntry const& entry : lineup)
         if (entry.Source)
             RequestKit(entry.Source);

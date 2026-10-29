@@ -3136,6 +3136,16 @@ Centurion.AllStar.TimeLimit = 30
 Centurion.AllStar.SourceMinLevel = 60
 
 #
+#    Centurion.AllStar.ShuffleLives
+#        Description: Put every life after the first (the character that queued) in
+#                     a random order, for players and bots alike.
+#        Default:     1 - (Random order)
+#                     0 - (The character list order, then the stand-ins and
+#                          starter templates in class order)
+
+Centurion.AllStar.ShuffleLives = 1
+
+#
 #    Centurion.AllStar.TemplateCharacters
 #        Description: class:guid pairs - the character whose kit is the default
 #                     loadout of each class (the tournament starter templates).
