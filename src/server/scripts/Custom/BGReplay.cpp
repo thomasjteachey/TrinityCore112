@@ -117,6 +117,51 @@ namespace
         SMSG_AURA_UPDATE,
         SMSG_WORLD_STATE_UI_TIMER_UPDATE,
         SMSG_UPDATE_WORLD_STATE,                // the readout's counters (alive, lives, squads)
+        // What a participant's observers are told about their movement besides
+        // the plain MSG_MOVE_* above - speed changes (snares, sprints), roots,
+        // blinks, knockbacks, swimming, slow fall. Without them the replay
+        // moved everyone but the recorders at their old speed between
+        // heartbeats and snapped them back on the next one.
+        MSG_MOVE_SET_RUN_SPEED,
+        MSG_MOVE_SET_RUN_BACK_SPEED,
+        MSG_MOVE_SET_WALK_SPEED,
+        MSG_MOVE_SET_SWIM_SPEED,
+        MSG_MOVE_SET_SWIM_BACK_SPEED,
+        MSG_MOVE_SET_TURN_RATE,
+        MSG_MOVE_TELEPORT,
+        MSG_MOVE_KNOCK_BACK,
+        MSG_MOVE_ROOT,
+        MSG_MOVE_UNROOT,
+        MSG_MOVE_START_SWIM,
+        MSG_MOVE_STOP_SWIM,
+        MSG_MOVE_SET_PITCH,
+        MSG_MOVE_START_PITCH_UP,
+        MSG_MOVE_START_PITCH_DOWN,
+        MSG_MOVE_STOP_PITCH,
+        MSG_MOVE_SET_RUN_MODE,
+        MSG_MOVE_SET_WALK_MODE,
+        MSG_MOVE_FEATHER_FALL,
+        MSG_MOVE_WATER_WALK,
+        MSG_MOVE_HOVER,
+        SMSG_SPLINE_SET_RUN_SPEED,
+        SMSG_SPLINE_SET_RUN_BACK_SPEED,
+        SMSG_SPLINE_SET_WALK_SPEED,
+        SMSG_SPLINE_SET_SWIM_SPEED,
+        SMSG_SPLINE_SET_SWIM_BACK_SPEED,
+        SMSG_SPLINE_SET_TURN_RATE,
+        SMSG_SPLINE_MOVE_ROOT,
+        SMSG_SPLINE_MOVE_UNROOT,
+        SMSG_SPLINE_MOVE_FEATHER_FALL,
+        SMSG_SPLINE_MOVE_NORMAL_FALL,
+        SMSG_SPLINE_MOVE_WATER_WALK,
+        SMSG_SPLINE_MOVE_LAND_WALK,
+        SMSG_SPLINE_MOVE_SET_HOVER,
+        SMSG_SPLINE_MOVE_UNSET_HOVER,
+        SMSG_SPLINE_MOVE_START_SWIM,
+        SMSG_SPLINE_MOVE_STOP_SWIM,
+        SMSG_SPLINE_MOVE_SET_RUN_MODE,
+        SMSG_SPLINE_MOVE_SET_WALK_MODE,
+        SMSG_FORCE_RUN_BACK_SPEED_CHANGE,
         SMSG_COMPRESSED_UPDATE_OBJECT,
         SMSG_AURA_UPDATE_ALL,
         SMSG_NAME_QUERY_RESPONSE,
@@ -1771,6 +1816,51 @@ namespace
         return replacements;
     }
 
+    // MSG_MOVE_* beyond the plain set carry the mover's MovementInfo; the
+    // SMSG_SPLINE_* ones only a guid (and a speed).
+    bool IsReplayObserverMovementOpcode(uint16 opcode)
+    {
+        switch (opcode)
+        {
+            case MSG_MOVE_SET_RUN_SPEED: case MSG_MOVE_SET_RUN_BACK_SPEED: case MSG_MOVE_SET_WALK_SPEED:
+            case MSG_MOVE_SET_SWIM_SPEED: case MSG_MOVE_SET_SWIM_BACK_SPEED: case MSG_MOVE_SET_TURN_RATE:
+            case MSG_MOVE_TELEPORT: case MSG_MOVE_KNOCK_BACK: case MSG_MOVE_ROOT: case MSG_MOVE_UNROOT:
+            case MSG_MOVE_START_SWIM: case MSG_MOVE_STOP_SWIM: case MSG_MOVE_SET_PITCH:
+            case MSG_MOVE_START_PITCH_UP: case MSG_MOVE_START_PITCH_DOWN: case MSG_MOVE_STOP_PITCH:
+            case MSG_MOVE_SET_RUN_MODE: case MSG_MOVE_SET_WALK_MODE:
+            case MSG_MOVE_FEATHER_FALL: case MSG_MOVE_WATER_WALK: case MSG_MOVE_HOVER:
+            case SMSG_SPLINE_SET_RUN_SPEED: case SMSG_SPLINE_SET_RUN_BACK_SPEED: case SMSG_SPLINE_SET_WALK_SPEED:
+            case SMSG_SPLINE_SET_SWIM_SPEED: case SMSG_SPLINE_SET_SWIM_BACK_SPEED: case SMSG_SPLINE_SET_TURN_RATE:
+            case SMSG_SPLINE_MOVE_ROOT: case SMSG_SPLINE_MOVE_UNROOT:
+            case SMSG_SPLINE_MOVE_FEATHER_FALL: case SMSG_SPLINE_MOVE_NORMAL_FALL:
+            case SMSG_SPLINE_MOVE_WATER_WALK: case SMSG_SPLINE_MOVE_LAND_WALK:
+            case SMSG_SPLINE_MOVE_SET_HOVER: case SMSG_SPLINE_MOVE_UNSET_HOVER:
+            case SMSG_SPLINE_MOVE_START_SWIM: case SMSG_SPLINE_MOVE_STOP_SWIM:
+            case SMSG_SPLINE_MOVE_SET_RUN_MODE: case SMSG_SPLINE_MOVE_SET_WALK_MODE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool IsReplaySplineStateOpcode(uint16 opcode)
+    {
+        switch (opcode)
+        {
+            case SMSG_SPLINE_SET_RUN_SPEED: case SMSG_SPLINE_SET_RUN_BACK_SPEED: case SMSG_SPLINE_SET_WALK_SPEED:
+            case SMSG_SPLINE_SET_SWIM_SPEED: case SMSG_SPLINE_SET_SWIM_BACK_SPEED: case SMSG_SPLINE_SET_TURN_RATE:
+            case SMSG_SPLINE_MOVE_ROOT: case SMSG_SPLINE_MOVE_UNROOT:
+            case SMSG_SPLINE_MOVE_FEATHER_FALL: case SMSG_SPLINE_MOVE_NORMAL_FALL:
+            case SMSG_SPLINE_MOVE_WATER_WALK: case SMSG_SPLINE_MOVE_LAND_WALK:
+            case SMSG_SPLINE_MOVE_SET_HOVER: case SMSG_SPLINE_MOVE_UNSET_HOVER:
+            case SMSG_SPLINE_MOVE_START_SWIM: case SMSG_SPLINE_MOVE_STOP_SWIM:
+            case SMSG_SPLINE_MOVE_SET_RUN_MODE: case SMSG_SPLINE_MOVE_SET_WALK_MODE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     bool IsMovementLikeOpcode(uint16 opcode)
     {
         switch (opcode)
@@ -1791,10 +1881,13 @@ namespace
             case SMSG_FORCE_RUN_SPEED_CHANGE:
             case SMSG_FORCE_FLIGHT_SPEED_CHANGE:
             case SMSG_FORCE_SWIM_SPEED_CHANGE:
+            case SMSG_FORCE_RUN_BACK_SPEED_CHANGE:
             case SMSG_MONSTER_MOVE:
                 return true;
             default:
-                return false;
+                // the observers' movement state (WatchList): all start with
+                // the mover's packed guid
+                return IsReplayObserverMovementOpcode(opcode);
         }
     }
 
@@ -4686,9 +4779,11 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
     void TrackReplayActorPosition(PlaybackState& state, WorldPacket const& packet)
     {
         uint16 const opcode = packet.GetOpcode();
-        if (!IsMovementLikeOpcode(opcode) && opcode != MSG_MOVE_TELEPORT && opcode != MSG_MOVE_KNOCK_BACK)
+        if (!IsMovementLikeOpcode(opcode))
             return;
-        if (opcode == SMSG_FORCE_RUN_SPEED_CHANGE || opcode == SMSG_FORCE_FLIGHT_SPEED_CHANGE || opcode == SMSG_FORCE_SWIM_SPEED_CHANGE)
+        // no MovementInfo in these: a guid and a speed or a state
+        if (opcode == SMSG_FORCE_RUN_SPEED_CHANGE || opcode == SMSG_FORCE_FLIGHT_SPEED_CHANGE || opcode == SMSG_FORCE_SWIM_SPEED_CHANGE
+            || opcode == SMSG_FORCE_RUN_BACK_SPEED_CHANGE || IsReplaySplineStateOpcode(opcode))
             return;
 
         std::vector<uint8> payload(packet.size());
