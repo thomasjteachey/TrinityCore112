@@ -2083,7 +2083,14 @@ bool KeepsAccountData(WorldSession* session, uint32 type, uint32 clientTime)
 
 void SendLives(Player* player, uint32 left, uint32 total)
 {
-    SendAddonLine(player, Trinity::StringFormat("LIVES:{}:{}", left, total));
+    if (!player)
+        return;
+    // The life being played: the borrowed character's name, or the player's
+    // own (life one, a starter template), and its class for the colour.
+    std::string name = GetPersonaName(player);
+    if (name.empty())
+        name = player->GetName();
+    SendAddonLine(player, Trinity::StringFormat("LIVES:{}:{}:{}:{}", left, total, uint32(player->GetClass()), name));
 }
 
 bool IgnoresClientButtons(Player const* player)

@@ -180,7 +180,8 @@ namespace AllStar
     // character's slots - they are not stored, and the real ones are kept a
     // second newer than the client's copy so its next login downloads them.
     bool KeepsAccountData(WorldSession* session, uint32 type, uint32 clientTime);
-    // CENTURION_AllStar's own lives counter: ALLSTAR:LIVES:<left>:<total>.
+    // CENTURION_AllStar's own lives counter:
+    // ALLSTAR:LIVES:<left>:<total>:<class>:<name of the life being played>.
     void SendLives(Player* player, uint32 left, uint32 total);
     // A persona's hunter pet arrives a moment after the persona (LoadPetFromDB
     // answers asynchronously): its trained spells are taught then. Called from
