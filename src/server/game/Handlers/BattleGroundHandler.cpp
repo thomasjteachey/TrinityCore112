@@ -115,6 +115,15 @@ namespace
         SendCCGameLine(player, Trinity::StringFormat("AM:MODES:{}:{}:{}:{}:{}:1:{}",
             arenas ? 1 : 0, arenas ? 1 : 0, open(BATTLEGROUND_BHF) ? 1 : 0, open(BATTLEGROUND_SSH) ? 1 : 0,
             open(BATTLEGROUND_ASA) ? 1 : 0, squads && squads->IsSquadMatch() ? squads->GetSquadCount() : 0));
+
+        // AM:POOL:<mapId>,... - the arenas a skirmish can roll (All Arenas'
+        // pool, the members that can run), for the Skirmish page.
+        std::string pool;
+        for (BattlegroundTypeId member : sBattlegroundMgr->GetRandomPoolMembers(BATTLEGROUND_AA))
+            if (Battleground* arena = sBattlegroundMgr->GetBattlegroundTemplate(member))
+                pool += (pool.empty() ? "" : ",") + std::to_string(arena->GetMapId());
+        if (!pool.empty())
+            SendCCGameLine(player, "AM:POOL:" + pool);
     }
 
     // ARENAMASTER:JOIN:<mode>:<size>:<group> - the page and bracket the window
