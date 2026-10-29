@@ -277,11 +277,13 @@ namespace
 
     uint32 ClassBit(uint8 playerClass) { return playerClass ? 1u << (playerClass - 1) : 0; }
 
-    // Level-60 characters of the realm's playerbot accounts, by class. A class
-    // the lineup has nobody for is played as one of them at random rather than
-    // as its one starter template every time (owner: "the lives should be a
-    // little more random ... take from other specs"). Read once at startup
-    // (Update); like a template, a stand-in is worn under the player's name.
+    // Level-60 characters of the realm's playerbot accounts, by class. A bot's
+    // lineup plays a class it has nobody for as one of them at random rather
+    // than as its one starter template every time (owner: "the lives should be
+    // a little more random ... take from other specs"). A player's lineup
+    // never does: a player gets the class's starter template (BuildLineup).
+    // Read once at startup (Update); like a template, a stand-in is worn under
+    // the player's name.
     std::mutex StandInMutex;
     std::array<std::vector<ObjectGuid::LowType>, MAX_CLASSES> StandIns;
     std::unordered_set<ObjectGuid::LowType> StandInGuids;
@@ -759,7 +761,11 @@ namespace
         uint32 Position;
     };
 
-    Lineup BuildLineup(uint8 playingClass, std::vector<ListedCharacter> characters)
+    // standIns: a bot's lineup, whose missing classes are random playerbot
+    // characters. A player's are the class's starter template - the standard
+    // spec and gear (owner 2026-10-29: "for PLAYERS, they need to transform
+    // into the standard class kit"; "how bots work rn is perfect").
+    Lineup BuildLineup(uint8 playingClass, std::vector<ListedCharacter> characters, bool standIns)
     {
         std::sort(characters.begin(), characters.end(), [](ListedCharacter const& a, ListedCharacter const& b)
         {
@@ -783,7 +789,7 @@ namespace
         {
             if (used & ClassBit(playerClass))
                 continue;
-            ObjectGuid::LowType source = PickStandIn(playerClass);
+            ObjectGuid::LowType source = standIns ? PickStandIn(playerClass) : 0;
             if (!source)
                 source = GetTemplateCharacter(playerClass);
             if (source)
@@ -2166,7 +2172,7 @@ namespace
             } while (result->NextRow());
         }
 
-        Lineup lineup = BuildLineup(playingClass, std::move(characters));
+        Lineup lineup = BuildLineup(playingClass, std::move(characters), false);
         for (LineupEntry const& entry : lineup)
             if (entry.Source)
                 RequestKit(entry.Source);
@@ -2207,7 +2213,7 @@ void ForgetLineup(uint32 accountId, ObjectGuid::LowType playing)
 
 Lineup BuildBotLineup(uint8 playingClass)
 {
-    Lineup lineup = BuildLineup(playingClass, {});
+    Lineup lineup = BuildLineup(playingClass, {}, true);
     for (LineupEntry const& entry : lineup)
         if (entry.Source)
             RequestKit(entry.Source);
