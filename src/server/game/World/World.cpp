@@ -1711,6 +1711,8 @@ void World::LoadConfigSettings(bool reload)
     // challenge modes chosen at creation (Miscellaneous/CharacterScreen.h).
     CharacterScreen::LoadConfig();
     AllStar::LoadConfig();
+    // The Arena Master window's joins (CENTURION_ArenaMaster).
+    WorldSession::RegisterArenaMasterRequests();
 
     // Family names, picked on the create screen (Miscellaneous/Surnames.h).
     Surnames::LoadConfig();

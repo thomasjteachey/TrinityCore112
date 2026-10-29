@@ -134,6 +134,10 @@ namespace AllStar
     // A bot's: its own class, then stand-ins/templates for the other eight
     // (in a random order with Centurion.AllStar.ShuffleLives).
     Lineup BuildBotLineup(uint8 playingClass);
+    // The Arena Master's All-Star page: "AM:LINEUP:<shuffled>:<class>,<name>;..."
+    // - the lives this character would play, in order, a standard kit with an
+    // empty name. Any thread; answered from Update.
+    void SendMasterLineup(Player* player);
 
     // World::Update: hands finished loads to the waiting matches.
     void Update();

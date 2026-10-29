@@ -37,6 +37,11 @@
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "GameEventMgr.h"
+#include "GameTime.h"
+#include "Miscellaneous/AddonRequestRoutes.h"
+#include "StringConvert.h"
+#include "StringFormat.h"
+#include "Util.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
@@ -4818,6 +4823,188 @@ enum ReplayGossipActions : uint32
     REPLAY_GOSSIP_BACK = 900000004
 };
 
+namespace
+{
+    // ------------------------------------------- the Arena Master's replays
+    // CENTURION_ArenaMaster's Replays page asks here what the replay NPC's
+    // gossip offered (owner 2026-10-29: "in thee same arena battlemaster, have
+    // arena replay functionality"):
+    //   REPLAYS:LIST:RECENT|FAV, REPLAYS:WATCH:<id>, REPLAYS:FAV:<id>:<0|1>
+    // answered with RPL:... lines (scratchpad arenamaster/PROTOCOL.md).
+    void SendReplayLine(Player* player, std::string const& body)
+    {
+        WorldSession* session = player ? player->GetSession() : nullptr;
+        if (!session || session->IsVirtualSession())
+            return;
+
+        std::string const message = "CCGAME\tRPL:" + body;
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
+            message, 0, player->GetName(), player->GetName());
+        player->SendDirectMessage(&data);
+    }
+
+    // Free text in a line loses the separators the lines use.
+    std::string CleanReplayText(std::string text)
+    {
+        text.erase(std::remove_if(text.begin(), text.end(), [](char c)
+        {
+            return c == ':' || c == '|' || c == ';' || c == ',';
+        }), text.end());
+        return text;
+    }
+
+    // A stored guid list ("100249, 100448") as "<class>.<name>,...", from the
+    // character cache; a character since deleted is left out.
+    std::string ReplayPlayerList(std::string const& guids)
+    {
+        std::string out;
+        for (std::string_view token : Trinity::Tokenize(guids, ',', false))
+        {
+            while (!token.empty() && token.front() == ' ')
+                token.remove_prefix(1);
+            Optional<uint64> const raw = Trinity::StringTo<uint64>(token);
+            if (!raw)
+                continue;
+            CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByGuid(
+                ObjectGuid::Create<HighGuid::Player>(ObjectGuid::LowType(*raw)));
+            if (!entry)
+                continue;
+            if (!out.empty())
+                out += ',';
+            out += Trinity::StringFormat("{}.{}", uint32(entry->Class), CleanReplayText(entry->Name));
+        }
+        return out;
+    }
+
+    void SendReplayList(Player* player, bool favorites)
+    {
+        uint32 const characterId = player->GetGUID().GetCounter();
+        std::vector<uint32> const ids = favorites ? LoadSavedReplayIds(characterId) : LoadLast10Replays();
+        std::vector<uint32> const saved = favorites ? ids : LoadSavedReplayIds(characterId);
+        std::unordered_set<uint32> const starred(saved.begin(), saved.end());
+        char const* const list = favorites ? "FAV" : "RECENT";
+
+        SendReplayLine(player, Trinity::StringFormat("BEGIN:{}", list));
+        uint32 sent = 0;
+        if (!ids.empty())
+        {
+            std::string idList;
+            for (uint32 id : ids)
+                idList += (idList.empty() ? "" : ",") + std::to_string(id);
+
+            //                                                0     1           2       3      4               5
+            QueryResult result = CharacterDatabase.PQuery("SELECT `id`, `arenaTypeId`, `typeId`, `mapId`, `winnerTeamName`, `winnerTeamRating`, "
+            //   6               7              8                 9              10                   11
+                "`winnerTeamMMR`, `loserTeamName`, `loserTeamRating`, `loserTeamMMR`, `winnerPlayerGuids`, `loserPlayerGuids`, "
+            //   12              13
+                "`timesWatched`, CAST(UNIX_TIMESTAMP(`timestamp`) AS SIGNED) "
+                "FROM `character_arena_replays` WHERE `id` IN ({})", idList);
+
+            std::unordered_map<uint32, std::vector<std::string>> lines;
+            if (result)
+            {
+                int64 const now = int64(GameTime::GetGameTime());
+                do
+                {
+                    Field* f = result->Fetch();
+                    uint32 const id = uint32(f[0].GetInt32());
+                    // Rated when a matchmaking rating was kept: a rated team can sit at 0.
+                    bool const rated = f[6].GetInt32() > 0 || f[9].GetInt32() > 0;
+                    int64 const age = std::max<int64>(0, now - f[13].GetInt64());
+                    std::vector<std::string>& out = lines[id];
+                    out.push_back(Trinity::StringFormat("R:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}", id, f[1].GetInt32(), f[2].GetInt32(),
+                        f[3].GetInt32(), age, f[12].GetInt32(), starred.count(id) ? 1 : 0, rated ? 1 : 0,
+                        std::max(0, f[5].GetInt32()), std::max(0, f[8].GetInt32())));
+                    out.push_back(Trinity::StringFormat("T:{}:W:{}", id, rated ? CleanReplayText(f[4].GetString()) : ""));
+                    out.push_back(Trinity::StringFormat("T:{}:L:{}", id, rated ? CleanReplayText(f[7].GetString()) : ""));
+                    out.push_back(Trinity::StringFormat("P:{}:W:{}", id, ReplayPlayerList(f[10].GetString())));
+                    out.push_back(Trinity::StringFormat("P:{}:L:{}", id, ReplayPlayerList(f[11].GetString())));
+                } while (result->NextRow());
+            }
+
+            // In the order asked for: newest first, favorites as saved.
+            for (uint32 id : ids)
+            {
+                auto const itr = lines.find(id);
+                if (itr == lines.end())
+                    continue;
+                for (std::string const& line : itr->second)
+                    SendReplayLine(player, line);
+                ++sent;
+            }
+        }
+        SendReplayLine(player, Trinity::StringFormat("END:{}:{}", list, sent));
+    }
+
+    void WatchReplayFromMaster(Player* player, uint32 replayId)
+    {
+        // As the replay NPC was: the Arena Master is the one to ask.
+        if (!player->GetNPCIfCanInteractWith(player->GetSession()->GetArenaMasterGuid(), UNIT_NPC_FLAG_BATTLEMASTER))
+        {
+            SendReplayLine(player, "ERR:Speak to an Arena Master first.");
+            return;
+        }
+        if (player->InBattleground())
+        {
+            SendReplayLine(player, "ERR:You cannot watch a replay from a battleground.");
+            return;
+        }
+        if (!ReplayExistsInAcTable(replayId))
+        {
+            SendReplayLine(player, Trinity::StringFormat("ERR:There is no replay {}.", replayId));
+            return;
+        }
+        if (!StartReplay(player, replayId))
+            SendReplayLine(player, Trinity::StringFormat("ERR:Replay {} could not be started.", replayId));
+    }
+
+    void SetReplayFavorite(Player* player, uint32 replayId, bool on)
+    {
+        uint32 const characterId = player->GetGUID().GetCounter();
+        if (on)
+        {
+            if (!ReplayExistsInAcTable(replayId))
+            {
+                SendReplayLine(player, Trinity::StringFormat("ERR:There is no replay {}.", replayId));
+                return;
+            }
+            // Direct, so the list asked for next already has it.
+            CharacterDatabase.DirectExecute(Trinity::StringFormat(
+                "INSERT IGNORE INTO `character_saved_replays` (`character_id`, `replay_id`) VALUES ({}, {})",
+                characterId, replayId).c_str());
+        }
+        else
+            CharacterDatabase.DirectExecute(Trinity::StringFormat(
+                "DELETE FROM `character_saved_replays` WHERE `character_id` = {} AND `replay_id` = {}",
+                characterId, replayId).c_str());
+
+        SendReplayLine(player, Trinity::StringFormat("FAV:{}:{}", replayId, on ? 1 : 0));
+    }
+
+    void HandleReplaysRequest(Player* player, std::string_view argument)
+    {
+        if (!player || !player->GetSession())
+            return;
+
+        std::vector<std::string_view> const parts = Trinity::Tokenize(argument, ':', true);
+        if (parts.size() == 2 && parts[0] == "LIST")
+        {
+            SendReplayList(player, parts[1] == "FAV");
+            return;
+        }
+
+        Optional<uint32> const replayId = parts.size() >= 2 ? Trinity::StringTo<uint32>(parts[1]) : Optional<uint32>();
+        if (!replayId || !*replayId)
+            return;
+
+        if (parts.size() == 2 && parts[0] == "WATCH")
+            WatchReplayFromMaster(player, *replayId);
+        else if (parts.size() == 3 && parts[0] == "FAV")
+            SetReplayFavorite(player, *replayId, parts[2] == "1");
+    }
+}
+
 class ReplayGossip : public CreatureScript
 {
 public:
@@ -4938,4 +5125,6 @@ void AddBGReplayScripts()
     new BGReplayPlayerScript();
     new BGReplayBGScript();
     new ReplayGossip();
+
+    AddonRequestRoutes::Register("REPLAYS", &HandleReplaysRequest);
 }

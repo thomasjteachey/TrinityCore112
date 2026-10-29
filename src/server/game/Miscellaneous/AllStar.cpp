@@ -31,6 +31,7 @@
 #include "Item.h"
 #include "Log.h"
 #include "Map.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Pet.h"
 #include "Player.h"
@@ -197,6 +198,8 @@ namespace
     std::mutex PendingMutex;
     std::vector<ObjectGuid::LowType> PendingKits;
     std::vector<PendingLineup> PendingLineups;
+    // The Arena Master's lineups to tell (character, account).
+    std::vector<std::pair<ObjectGuid, uint32>> PendingMasterLineups;
     bool TemplatesAsked = false;
 
     // ----------------------------------------------------------- name answers
@@ -2185,6 +2188,84 @@ namespace
     }
 }
 
+namespace
+{
+    // World thread (Update): the lives the Arena Master's All-Star page shows
+    // - this character, the account's level-60 characters in list order, one
+    // a class, then the classes nobody has, in their standard kit (a player's
+    // lineup, BuildLineup with no stand-ins), before any shuffle.
+    void QueryMasterLineup(ObjectGuid playing, uint32 account)
+    {
+        std::string const sql = Trinity::StringFormat(
+            "SELECT guid, class, level, name FROM characters WHERE account = {} AND guid <> {} AND deleteDate IS NULL",
+            account, playing.GetCounter());
+        QueryCallbacks.AddCallback(CharacterDatabase.AsyncQuery(sql.c_str()).WithCallback(
+            [playing](QueryResult result)
+        {
+            Player* player = ObjectAccessor::FindConnectedPlayer(playing);
+            if (!player || !player->GetSession() || player->HasAllStarPersona())
+                return;
+
+            struct Listed
+            {
+                ObjectGuid::LowType Guid;
+                uint8 Class;
+                uint8 Level;
+                uint32 Position;
+                std::string Name;
+            };
+            std::vector<Listed> characters;
+            if (result)
+            {
+                do
+                {
+                    Field* fields = result->Fetch();
+                    ObjectGuid::LowType const guid = fields[0].GetUInt32();
+                    characters.push_back({ guid, fields[1].GetUInt8(), fields[2].GetUInt8(),
+                        CharacterScreen::GetListPosition(guid), fields[3].GetString() });
+                } while (result->NextRow());
+            }
+            std::sort(characters.begin(), characters.end(), [](Listed const& l, Listed const& r)
+            {
+                return l.Position != r.Position ? l.Position < r.Position : l.Guid < r.Guid;
+            });
+
+            std::string lives = Trinity::StringFormat("{},{}", uint32(player->GetClass()), player->GetName());
+            uint32 used = ClassBit(player->GetClass());
+            for (Listed const& character : characters)
+            {
+                if (character.Level < Config.SourceMinLevel || !IsPlayableClass(character.Class) || (used & ClassBit(character.Class)))
+                    continue;
+                lives += Trinity::StringFormat(";{},{}", uint32(character.Class), character.Name);
+                used |= ClassBit(character.Class);
+            }
+            for (uint8 playerClass : CLASS_ORDER)
+            {
+                if (used & ClassBit(playerClass))
+                    continue;
+                lives += Trinity::StringFormat(";{},", uint32(playerClass));
+                used |= ClassBit(playerClass);
+            }
+
+            std::string const message = Trinity::StringFormat("CCGAME\tAM:LINEUP:{}:{}", Config.ShuffleLives ? 1 : 0, lives);
+            WorldPacket data;
+            ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
+                message, 0, player->GetName(), player->GetName());
+            player->SendDirectMessage(&data);
+        }));
+    }
+}
+
+void SendMasterLineup(Player* player)
+{
+    WorldSession* session = player ? player->GetSession() : nullptr;
+    if (!session || session->IsVirtualSession())
+        return;
+
+    std::lock_guard<std::mutex> lock(PendingMutex);
+    PendingMasterLineups.emplace_back(player->GetGUID(), session->GetAccountId());
+}
+
 bool FindLineup(uint32 accountId, ObjectGuid::LowType playing, Lineup& out)
 {
     std::lock_guard<std::mutex> lock(LineupMutex);
@@ -2280,15 +2361,19 @@ void Update()
     // (a hunter's pet spells, a lineup's kits) without any lock.
     std::vector<ObjectGuid::LowType> kits;
     std::vector<PendingLineup> lineups;
+    std::vector<std::pair<ObjectGuid, uint32>> masterLineups;
     {
         std::lock_guard<std::mutex> lock(PendingMutex);
         kits.swap(PendingKits);
         lineups.swap(PendingLineups);
+        masterLineups.swap(PendingMasterLineups);
     }
     for (ObjectGuid::LowType source : kits)
         LoadKit(source);
     for (PendingLineup const& lineup : lineups)
         QueryLineup(lineup.Key, lineup.PlayingClass);
+    for (auto const& [playing, account] : masterLineups)
+        QueryMasterLineup(playing, account);
 
     HolderCallbacks.ProcessReadyCallbacks();
     QueryCallbacks.ProcessReadyCallbacks();

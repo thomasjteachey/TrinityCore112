@@ -586,6 +586,14 @@ class TC_GAME_API WorldSession
 
         void SendBattleGroundList(ObjectGuid guid, BattlegroundTypeId bgTypeId = BATTLEGROUND_RB);
 
+        // The Arena Master (CENTURION_ArenaMaster): the arena battlemaster this
+        // player last opened the window at, and a join its window asks for by
+        // addon line - the ordinary arena join, for the queue the window chose.
+        ObjectGuid GetArenaMasterGuid() const { return _arenaMasterGuid; }
+        void JoinArenaFromMaster(BattlegroundTypeId queueBgTypeId, uint8 arenaslot, bool asGroup, bool isRated);
+        // ARENAMASTER:... addon requests (World::LoadConfigSettings, once).
+        static void RegisterArenaMasterRequests();
+
         void SendTradeStatus(TradeStatusInfo const& status);
         void SendUpdateTrade(bool trader_data = true);
         void SendCancelTrade();
@@ -1061,6 +1069,8 @@ class TC_GAME_API WorldSession
         void HandleBattlefieldListOpcode(WorldPacket& recvData);
         void HandleBattlefieldLeaveOpcode(WorldPacket& recvData);
         void HandleBattlemasterJoinArena(WorldPacket& recvData);
+        // queueOverride BATTLEGROUND_TYPE_NONE: the battlemaster's own queue.
+        void JoinArenaQueue(ObjectGuid guid, uint8 arenaslot, uint8 asGroup, uint8 isRated, BattlegroundTypeId queueOverride);
         void HandleReportPvPAFK(WorldPacket& recvData);
 
         // Battlefield
@@ -1330,6 +1340,7 @@ class TC_GAME_API WorldSession
         uint32 expireTime;
         bool forceExit;
         ObjectGuid m_currentBankerGUID;
+        ObjectGuid _arenaMasterGuid;
 
         std::unique_ptr<boost::circular_buffer<std::pair<int64, uint32>>> _timeSyncClockDeltaQueue; // first member: clockDelta. Second member: latency of the packet exchange that was used to compute that clockDelta.
         int64 _timeSyncClockDelta;

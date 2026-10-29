@@ -40,6 +40,11 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "CharacterCache.h"
+#include "Miscellaneous/AddonRequestRoutes.h"
+#include "Miscellaneous/AllStar.h"
+#include "StringConvert.h"
+#include "StringFormat.h"
+#include "Util.h"
 
 #include <string>
 
@@ -71,17 +76,91 @@ namespace
     //   CCGAME ARENAQUEUE:ALLSTAR All-Star: five practice rows, the 1v1 to
     //                             5v5 skirmishes
     //
+    //   CCGAME ARENAQUEUE:MASTER  after ARENAQUEUE:0 at a plain arena
+    //                             battlemaster: CENTURION_ArenaMaster takes
+    //                             the window over (one window for every
+    //                             queue and the replays)
+    //
     // Sent before every arena window so a client never keeps the last mode.
-    void SendArenaQueueMode(Player* player, std::string const& mode)
+    void SendCCGameLine(Player* player, std::string const& body)
     {
         if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
             return;
 
-        std::string const message = "CCGAME\tARENAQUEUE:" + mode;
+        std::string const message = "CCGAME\t" + body;
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player->GetGUID(), player->GetGUID(),
             message, 0, player->GetName(), player->GetName());
         player->SendDirectMessage(&data);
+    }
+
+    void SendArenaQueueMode(Player* player, std::string const& mode)
+    {
+        SendCCGameLine(player, "ARENAQUEUE:" + mode);
+    }
+
+    // AM:MODES:<rated>:<skirmish>:<multi>:<shuffle>:<allstar>:<replays>:<squads>
+    // - which of the Arena Master's pages can queue (a queue switched off with
+    // disables, or without a template, is greyed out) and how many teams Four
+    // Corners takes.
+    void SendArenaMasterModes(Player* player)
+    {
+        auto const open = [](BattlegroundTypeId bgTypeId)
+        {
+            return sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId)
+                && !DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, bgTypeId, nullptr);
+        };
+        Battleground const* squads = sBattlegroundMgr->GetBattlegroundTemplate(BATTLEGROUND_BHF);
+        bool const arenas = open(BATTLEGROUND_AA);
+        SendCCGameLine(player, Trinity::StringFormat("AM:MODES:{}:{}:{}:{}:{}:1:{}",
+            arenas ? 1 : 0, arenas ? 1 : 0, open(BATTLEGROUND_BHF) ? 1 : 0, open(BATTLEGROUND_SSH) ? 1 : 0,
+            open(BATTLEGROUND_ASA) ? 1 : 0, squads && squads->IsSquadMatch() ? squads->GetSquadCount() : 0));
+    }
+
+    // ARENAMASTER:JOIN:<mode>:<size>:<group> - the page and bracket the window
+    // joins: R rated, S skirmish, MR/MS Four Corners rated/skirmish, B Buffle
+    // Shuffle, A All-Star. The slot is the row the old window would have sent
+    // for that bracket, which is what the join reads (2v2 = 0 ... 5v5 = 3;
+    // All-Star 1v1 = 0 ... 5v5 = 4). A rated queue is always a group's.
+    void HandleArenaMasterRequest(Player* player, std::string_view argument)
+    {
+        std::vector<std::string_view> const parts = Trinity::Tokenize(argument, ':', true);
+        if (!player || !player->GetSession() || parts.size() != 4 || parts[0] != "JOIN")
+            return;
+
+        Optional<uint32> const size = Trinity::StringTo<uint32>(parts[2]);
+        if (!size)
+            return;
+        std::string_view const mode = parts[1];
+        bool const group = parts[3] == "1";
+
+        BattlegroundTypeId queue = BATTLEGROUND_TYPE_NONE;
+        bool rated = false;
+        uint8 slot = 0;
+        if (mode == "A")
+        {
+            if (*size < 1 || *size > 5)
+                return;
+            queue = BATTLEGROUND_ASA;
+            slot = uint8(*size - 1);
+        }
+        else
+        {
+            if (*size < 2 || *size > 5)
+                return;
+            slot = uint8(*size - 2);
+            if (mode == "R" || mode == "S")
+                queue = BATTLEGROUND_AA;
+            else if (mode == "MR" || mode == "MS")
+                queue = BATTLEGROUND_BHF;
+            else if (mode == "B" && *size <= 3)
+                queue = BATTLEGROUND_SSH;
+            else
+                return;
+            rated = mode == "R" || mode == "MR";
+        }
+
+        player->GetSession()->JoinArenaFromMaster(queue, slot, group || rated, rated);
     }
 
     bool RejectNormalBattlegroundQueueFromCustomLobby(WorldSession* session)
@@ -185,6 +264,18 @@ void WorldSession::SendBattleGroundList(ObjectGuid guid, BattlegroundTypeId bgTy
             SendArenaQueueMode(_player, "ALLSTAR");
         else
             SendArenaQueueMode(_player, std::to_string(bgTemplate && bgTemplate->IsSquadMatch() ? bgTemplate->GetSquadCount() : 0));
+
+        // A plain arena battlemaster is the Arena Master: one window for every
+        // arena queue and the replays (CENTURION_ArenaMaster, which hides the
+        // stock window this still opens - a client without the addon queues
+        // from that as ever). Its joins run against this battlemaster.
+        if (bgTypeId == BATTLEGROUND_AA)
+        {
+            _arenaMasterGuid = guid;
+            SendArenaQueueMode(_player, "MASTER");
+            SendArenaMasterModes(_player);
+            AllStar::SendMasterLineup(_player);
+        }
         bgTypeId = BATTLEGROUND_AA;
     }
 
@@ -839,9 +930,37 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
     uint8 arenaslot;                                        // 2v2, 3v3, 4v4 or 5v5
     uint8 asGroup;                                          // asGroup
     uint8 isRated;                                          // isRated
-    Group* grp = nullptr;
 
     recvData >> guid >> arenaslot >> asGroup >> isRated;
+
+    JoinArenaQueue(guid, arenaslot, asGroup, isRated, BATTLEGROUND_TYPE_NONE);
+}
+
+void WorldSession::RegisterArenaMasterRequests()
+{
+    static bool routed = false;
+    if (routed)
+        return;
+    AddonRequestRoutes::Register("ARENAMASTER", &HandleArenaMasterRequest);
+    routed = true;
+}
+
+void WorldSession::JoinArenaFromMaster(BattlegroundTypeId queueBgTypeId, uint8 arenaslot, bool asGroup, bool isRated)
+{
+    // The battlemaster the window was opened at, still in reach: the check the
+    // stock window's join makes against the guid it sends.
+    if (!_arenaMasterGuid || !_player->GetNPCIfCanInteractWith(_arenaMasterGuid, UNIT_NPC_FLAG_BATTLEMASTER))
+    {
+        SendNotification("Speak to an Arena Master first.");
+        return;
+    }
+
+    JoinArenaQueue(_arenaMasterGuid, arenaslot, asGroup ? 1 : 0, isRated ? 1 : 0, queueBgTypeId);
+}
+
+void WorldSession::JoinArenaQueue(ObjectGuid guid, uint8 arenaslot, uint8 asGroup, uint8 isRated, BattlegroundTypeId queueOverride)
+{
+    Group* grp = nullptr;
 
     if (RejectNormalBattlegroundQueueFromCustomLobby(this))
         return;
@@ -890,8 +1009,12 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
     // match (Baradin Hold: Four Corners) queues for that, rated or skirmish,
     // each row of the window being a squad size - an arena team of that size
     // is one squad.
+    //
+    // The Arena Master's window names the queue itself (queueOverride).
     BattlegroundTypeId queueBgTypeId = BATTLEGROUND_AA;
-    if (BattlegroundTypeId const masterBgTypeId = sBattlegroundMgr->GetBattleMasterBG(unit->GetEntry());
+    if (queueOverride != BATTLEGROUND_TYPE_NONE)
+        queueBgTypeId = queueOverride;
+    else if (BattlegroundTypeId const masterBgTypeId = sBattlegroundMgr->GetBattleMasterBG(unit->GetEntry());
         sBattlegroundMgr->IsSquadBattleground(masterBgTypeId) || masterBgTypeId == BATTLEGROUND_SSH
         || masterBgTypeId == BATTLEGROUND_ASA)
         queueBgTypeId = masterBgTypeId;
