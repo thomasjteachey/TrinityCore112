@@ -114,6 +114,9 @@ struct Kit
     std::vector<KitButton> Buttons;         // the source's active talent group
     std::array<uint32, MAX_GLYPH_SLOT_INDEX> Glyphs{};
     std::vector<KitItem> Items;             // equipment slots only
+    // Food, drink and bandages the source carries (backpack and worn bags,
+    // not the bank), by entry: a life gets copies of them (GiveConsumables).
+    std::vector<std::pair<uint32, uint32>> Consumables;
     bool TournamentMode = false;            // extra_flags PLAYER_EXTRA_TOURNAMENT_MODE
     // The source's own keybindings (character_account_data type 3, the
     // client's bindings-cache: "bind KEY COMMAND" over the defaults), when it
@@ -481,19 +484,25 @@ namespace
         return best;
     }
 
-    // A tournament kit's eat, drink or bandage: an aura that regenerates
-    // health or power (Eat 29073, Drink 22734), or a First Aid ability.
-    bool IsInnateRefreshment(uint32 spellId)
+    // Food, drink or a bandage, by what it does - the test the tournament's
+    // free match consumables use (TournamentLoadout.cpp): a bandage by its
+    // mechanic, food and drink as a health or power regen you sit for.
+    bool IsRefreshment(uint32 entry)
     {
-        SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
-        if (!info || info->IsPassive())
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+        if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
             return false;
-        if (info->HasAura(SPELL_AURA_MOD_REGEN) || info->HasAura(SPELL_AURA_MOD_POWER_REGEN))
-            return true;
-        SkillLineAbilityMapBounds const bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
-        for (auto itr = bounds.first; itr != bounds.second; ++itr)
-            if (itr->second->SkillLine == SKILL_FIRST_AID)
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        {
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(proto->Spells[i].SpellId);
+            if (!info)
+                continue;
+            if (info->Mechanic == MECHANIC_BANDAGE)
                 return true;
+            if ((info->HasAura(SPELL_AURA_MOD_REGEN) || info->HasAura(SPELL_AURA_MOD_POWER_REGEN)) &&
+                (info->AuraInterruptFlags & AURA_INTERRUPT_FLAG_NOT_SEATED))
+                return true;
+        }
         return false;
     }
 
@@ -617,12 +626,25 @@ namespace
         // item, itemEntry
         if (PreparedQueryResult result = holder.GetPreparedResult(KIT_QUERY_INVENTORY))
         {
+            // ORDER BY bag, slot: everything on the character itself (bag 0),
+            // the bags among it, comes before what is inside the bags.
+            std::unordered_set<uint32> carriedBags;
+            std::map<uint32, uint32> consumables;
             do
             {
                 Field* row = result->Fetch();
-                if (row[11].GetUInt32() != 0)           // in a bag, not worn
-                    continue;
+                uint32 const bag = row[11].GetUInt32();
                 uint8 const slot = row[12].GetUInt8();
+                uint32 const entry = row[14].GetUInt32();
+                bool const carried = bag ? carriedBags.count(bag) != 0
+                    : (slot >= INVENTORY_SLOT_ITEM_START && slot < INVENTORY_SLOT_ITEM_END);
+                if (!bag && slot >= INVENTORY_SLOT_BAG_START && slot < INVENTORY_SLOT_BAG_END)
+                    carriedBags.insert(row[13].GetUInt32());
+                if (carried && IsRefreshment(entry))
+                    consumables[entry] += std::max<uint32>(1, row[2].GetUInt32());
+
+                if (bag != 0)                           // in a bag, not worn
+                    continue;
                 if (slot >= EQUIPMENT_SLOT_END)
                     continue;
 
@@ -635,6 +657,7 @@ namespace
                     item.Enchants[i] = Trinity::StringTo<uint32>(tokens[i]).value_or(0);
                 kit->Items.push_back(item);
             } while (result->NextRow());
+            kit->Consumables.assign(consumables.begin(), consumables.end());
         }
 
         //   0   1      2        3      4    5           6     7     8        9          10       11            12      13        14              15
@@ -1135,6 +1158,7 @@ private:
     static void LoadSkills(Player* player, Kit const& kit);
     static void EquipKit(Player* player, PersonaStash& stash, Kit const& kit);
     static void GiveAmmo(Player* player, PersonaStash& stash, uint32 ammo);
+    static void GiveConsumables(Player* player, PersonaStash& stash, Kit const& kit);
     static void SummonPet(Player* player, PersonaStash& stash, Kit const& kit);
     static void PutBack(Player* player, uint8 slot, Item* item);
     static void RecastPassives(Player* player);
@@ -1412,6 +1436,56 @@ void PersonaAccess::GiveAmmo(Player* player, PersonaStash& stash, uint32 ammo)
     }
 }
 
+void PersonaAccess::GiveConsumables(Player* player, PersonaStash& stash, Kit const& kit)
+{
+    // The empty slots the bags have, backpack first. Each copy goes into one
+    // of them as a stack of its own - never merged into a stack the character
+    // owns, or taking the copy back would take theirs too.
+    std::vector<std::pair<uint8, uint8>> free;
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        if (!player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            free.emplace_back(uint8(INVENTORY_SLOT_BAG_0), slot);
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+    {
+        Item* bagItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, bagSlot);
+        Bag* bag = bagItem ? bagItem->ToBag() : nullptr;
+        if (!bag)
+            continue;
+        for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+            if (!bag->GetItemByPos(uint8(slot)))
+                free.emplace_back(bagSlot, uint8(slot));
+    }
+
+    size_t next = 0;
+    uint32 given = 0, left = 0;
+    for (auto const& [entry, total] : kit.Consumables)
+    {
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+        if (!proto)
+            continue;
+        uint32 const stackSize = std::max<uint32>(1, proto->GetMaxStackSize());
+        uint32 remaining = total;
+        while (remaining && next < free.size())
+        {
+            auto const [bag, slot] = free[next++];
+            uint32 const count = std::min(remaining, stackSize);
+            ItemPosCountVec dest;
+            if (player->CanStoreNewItem(bag, slot, dest, entry, count) != EQUIP_ERR_OK)
+                continue;
+            if (Item* item = player->StoreNewItem(dest, entry, true))
+            {
+                stash.Issued.push_back(item->GetGUID());
+                remaining -= count;
+                given += count;
+            }
+        }
+        left += remaining;
+    }
+    if (left)
+        TC_LOG_INFO("bg.battleground", "All-Star: {} ({}) had no room for {} of {}'s food, drink and bandages ({} given).",
+            player->GetName(), player->GetGUID().GetCounter(), left, kit.Name, given);
+}
+
 void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit)
 {
     // A match fought under the tournament's rules dresses everyone the same
@@ -1468,6 +1542,7 @@ void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit
 
     if (kit.Class == CLASS_HUNTER && kit.Ammo)
         GiveAmmo(player, stash, kit.Ammo);
+    GiveConsumables(player, stash, kit);
 }
 
 void PersonaAccess::SummonPet(Player* player, PersonaStash& stash, Kit const& kit)
@@ -1588,18 +1663,6 @@ void PersonaAccess::Build(Player* player, PersonaStash& stash, Kit const& kit)
             for (uint32 spell : *custom)
                 player->AddSpell(spell, true, false, true, false, true);
     }
-
-    // All-Star is a tournament arena: every life eats, drinks and bandages the
-    // way a tournament character does, out of nothing - its race and class's
-    // tournament kit's eat and drink (the regen auras) and First Aid. A world
-    // alt or a playerbot stand-in has none of them, and a persona carries
-    // nothing from the bags but what the player had there already.
-    if (Tournament::IsEnabled())
-        if (Tournament::CreateInfo const* info = Tournament::GetCreateInfo(kit.Race, kit.Class))
-            if (info->HasCustomSpells)
-                for (uint32 spell : info->CustomSpells)
-                    if (!player->HasSpell(spell) && IsInnateRefreshment(spell))
-                        player->AddSpell(spell, true, false, true, false, true);
 
     for (uint8 i = 0; i < MAX_GLYPH_SLOT_INDEX; ++i)
         if (kit.Glyphs[i])
