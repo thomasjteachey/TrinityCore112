@@ -4649,6 +4649,11 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
                 mutableActor->Team = team;
                 SendReplayASCommand(viewer, uiGuid, "TEM", team);
                 SendReplayGreenNameValueUpdate(viewer, *mutableActor);
+
+                // A Buffle Shuffle round's new teams: the watched player's
+                // party follows (it only sends when the list changed).
+                if (state.SpectatedOriginal)
+                    SendSpectateParty(viewer, state);
             }
         }
 
