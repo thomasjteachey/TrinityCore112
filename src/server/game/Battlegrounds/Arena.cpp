@@ -2121,7 +2121,7 @@ uint32 Arena::GetAllStarLivesLeft(uint32 team) const
 
 std::string Arena::GetAllStarScore() const
 {
-    return Trinity::StringFormat("Gold {} - Green {} lives.", GetAllStarLivesLeft(ALLIANCE), GetAllStarLivesLeft(HORDE));
+    return Trinity::StringFormat("Gold {} - Green {} stocks.", GetAllStarLivesLeft(ALLIANCE), GetAllStarLivesLeft(HORDE));
 }
 
 void Arena::HandleAllStarDeath(Player* player, Player* killer)
@@ -2404,7 +2404,7 @@ void Arena::EndAllStarAtTimeLimit()
     if (!winner)
         AnnounceToArena(this, Trinity::StringFormat("Time is up and neither team is ahead. The match is a draw. {}", GetAllStarScore()));
     else
-        AnnounceToArena(this, Trinity::StringFormat("Time is up. {} has the most lives left and wins! {}",
+        AnnounceToArena(this, Trinity::StringFormat("Time is up. {} has the most stocks left and wins! {}",
             winner == ALLIANCE ? "Gold" : "Green", GetAllStarScore()));
     EndBattleground(winner);
 }
