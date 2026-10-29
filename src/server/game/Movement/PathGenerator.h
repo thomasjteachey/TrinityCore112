@@ -152,6 +152,9 @@ class TC_GAME_API PathGenerator
         bool HaveTile(G3D::Vector3 const& p) const;
 
         void BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos);
+        // Raises a destination (Detour order: y, z, x) that lies under the
+        // floor its nearest navmesh polygon stands for onto that floor.
+        bool LiftEndOntoNavMeshFloor(float* endPoint) const;
         void BuildPointPath(float const* startPoint, float const* endPoint);
         void BuildShortcut();
 

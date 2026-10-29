@@ -26,6 +26,16 @@
 #include "DetourNavMeshQuery.h"
 #include "Metric.h"
 
+namespace
+{
+    // A destination this close to the navmesh is on it.
+    constexpr float NAVMESH_FLOOR_LIFT_MIN = 0.5f;
+    // The navmesh follows its floor to within this (99% of arena ramps and
+    // floors within 0.9 yards); a floor further off the polygon's height is
+    // not the one the polygon stands for.
+    constexpr float NAVMESH_FLOOR_LIFT_MAX_SNAP = 1.0f;
+}
+
 ////////////////// PathGenerator //////////////////
 PathGenerator::PathGenerator(WorldObject const* owner) :
     _polyLength(0), _type(PATHFIND_BLANK), _useStraightPath(false),
@@ -212,6 +222,15 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
 
     dtPolyRef startPoly = GetPolyByLocation(startPoint, &distToStartPoly);
     dtPolyRef endPoly = GetPolyByLocation(endPoint, &distToEndPoly);
+
+    // A destination this far off its polygon can be under the floor; see
+    // LiftEndOntoNavMeshFloor. The route ends on the destination itself, so it
+    // is raised before the route is built and its polygon found again.
+    if (endPoly != INVALID_POLYREF && distToEndPoly > NAVMESH_FLOOR_LIFT_MIN && LiftEndOntoNavMeshFloor(endPoint))
+    {
+        SetEndPosition(G3D::Vector3(endPoint[2], endPoint[0], endPoint[1]));
+        endPoly = GetPolyByLocation(endPoint, &distToEndPoly);
+    }
 
     _type = PathType(PATHFIND_NORMAL);
 
@@ -584,6 +603,73 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
 
     // generate the point-path out of our up-to-date poly-path
     BuildPointPath(startPoint, endPoint);
+}
+
+// A destination is often a point beside something, given that thing's height
+// and dropped onto the floor below: GetNearPoint starts from the target's own
+// z, and the floor search (GetMapHeight) looks down from only 1.5 yards over
+// it. Where the floor rises more than that between the target and the point
+// (a 32 degree ramp does in 2.4 yards), the search starts inside the ramp and
+// finds the terrain under it. The route's last point is the destination itself
+// (FindSmoothPath copies it, and a forced destination puts it back), and
+// NormalizePath climbs no more than the same 1.5 yards, so the route ended
+// under the floor. Units ran into the ramp, and the bot spline wall guard held
+// that last leg, so bots and their pets stood still. On Thakraj, pets following
+// an owner at the foot of a mound were sent to z 26.0, the terrain 2.1 yards
+// under the arena's ramp. In ten days of live logs this was 579 of the 1,058
+// arena holds on a route's last leg.
+//
+// So when the navmesh's nearest polygon lies over the destination, more than
+// half a yard above it, and the floor search from the polygon's height finds a
+// floor there that is above the destination and at the polygon's height, the
+// destination moves up onto that floor. X and y do not change. A destination
+// with a navmesh floor of its own keeps it: Detour scores a polygon the point
+// is under by how far it is past the climb height (1.6 yards), so a floor
+// beside the point at its own height wins unless what is over the point is too
+// low to stand under.
+bool PathGenerator::LiftEndOntoNavMeshFloor(float* endPoint) const
+{
+    // A flying unit goes where it is sent, as UpdateAllowedPositionZ lets it;
+    // a transport's deck is not on the navmesh.
+    Unit const* unit = _source->ToUnit();
+    if (!unit || unit->CanFly() || _source->GetTransport())
+        return false;
+
+    // GetPolyByLocation's first search box.
+    float const extents[VERTEX_SIZE] = { 3.0f, 5.0f, 3.0f };
+    float nearest[VERTEX_SIZE];
+    dtPolyRef poly = INVALID_POLYREF;
+    if (dtStatusFailed(_navMeshQuery->findNearestPoly(endPoint, extents, &_filter, &poly, nearest)) || poly == INVALID_POLYREF)
+        return false;
+
+    // Only a polygon right over the destination. Beside the edge of one, the
+    // floor over the destination is off the navmesh: the top of a wall or a
+    // parapet as often as floor along a wall, and an arena keeps bots off the
+    // first by keeping them on the navmesh.
+    float navMeshZ;
+    if (dtStatusFailed(_navMeshQuery->getPolyHeight(poly, endPoint, &navMeshZ)))
+        return false;
+
+    float const x = endPoint[2];
+    float const y = endPoint[0];
+    float const destZ = endPoint[1];
+    if (navMeshZ - destZ <= NAVMESH_FLOOR_LIFT_MIN)
+        return false;
+
+    float const floorZ = _source->GetMapHeight(x, y, navMeshZ);
+    if (floorZ <= destZ + NAVMESH_FLOOR_LIFT_MIN || std::fabs(floorZ - navMeshZ) > NAVMESH_FLOOR_LIFT_MAX_SNAP)
+        return false;
+
+    // A swimmer can be sent under water, below whatever floats over it.
+    ZLiquidStatus const liquid = _source->GetMap()->GetLiquidStatus(_source->GetPhaseMask(), x, y, destZ, MAP_ALL_LIQUIDS,
+        nullptr, _source->GetCollisionHeight());
+    if (liquid & (LIQUID_MAP_IN_WATER | LIQUID_MAP_UNDER_WATER))
+        return false;
+
+    TC_LOG_DEBUG("maps.mmaps", "++ LiftEndOntoNavMeshFloor :: {} destination ({}, {}, {}) lifted to {} (navmesh {})",
+        _source->GetGUID().ToString(), x, y, destZ, floorZ, navMeshZ);
+    endPoint[1] = floorZ;
+    return true;
 }
 
 void PathGenerator::BuildPointPath(const float *startPoint, const float *endPoint)
