@@ -115,9 +115,19 @@ struct Kit
     std::vector<KitButton> Buttons;         // the source's active talent group
     std::array<uint32, MAX_GLYPH_SLOT_INDEX> Glyphs{};
     std::vector<KitItem> Items;             // equipment slots only
-    // Food, drink and bandages the source carries (backpack and worn bags,
-    // not the bank), by entry: a life gets copies of them (GiveConsumables).
-    std::vector<std::pair<uint32, uint32>> Consumables;
+    // Everything the source carries, where it carries it: the bags in its bag
+    // slots, and what is in the backpack and in each bag (not the bank). A life
+    // carries copies of all of it - food, drink, reagents, ammunition, the
+    // gear and weapons its swap macros name (CarryKit).
+    struct CarriedItem
+    {
+        uint8 Bag = 0;                      // INVENTORY_SLOT_BAG_0, or the bag slot it is in
+        uint8 Slot = 0;
+        uint32 Count = 1;
+        KitItem Item;
+    };
+    std::array<KitItem, INVENTORY_SLOT_BAG_END - INVENTORY_SLOT_BAG_START> Bags{};    // Entry 0: none
+    std::vector<CarriedItem> Carried;
     bool TournamentMode = false;            // extra_flags PLAYER_EXTRA_TOURNAMENT_MODE
     // The source's own keybindings (character_account_data type 3, the
     // client's bindings-cache: "bind KEY COMMAND" over the defaults), when it
@@ -489,28 +499,6 @@ namespace
         return best;
     }
 
-    // Food, drink or a bandage, by what it does - the test the tournament's
-    // free match consumables use (TournamentLoadout.cpp): a bandage by its
-    // mechanic, food and drink as a health or power regen you sit for.
-    bool IsRefreshment(uint32 entry)
-    {
-        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
-        if (!proto || proto->Class != ITEM_CLASS_CONSUMABLE)
-            return false;
-        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
-        {
-            SpellInfo const* info = sSpellMgr->GetSpellInfo(proto->Spells[i].SpellId);
-            if (!info)
-                continue;
-            if (info->Mechanic == MECHANIC_BANDAGE)
-                return true;
-            if ((info->HasAura(SPELL_AURA_MOD_REGEN) || info->HasAura(SPELL_AURA_MOD_POWER_REGEN)) &&
-                (info->AuraInterruptFlags & AURA_INTERRUPT_FLAG_NOT_SEATED))
-                return true;
-        }
-        return false;
-    }
-
     std::shared_ptr<Kit> ParseKit(KitQueryHolder const& holder)
     {
         PreparedQueryResult character = holder.GetPreparedResult(KIT_QUERY_CHARACTER);
@@ -633,26 +621,11 @@ namespace
         {
             // ORDER BY bag, slot: everything on the character itself (bag 0),
             // the bags among it, comes before what is inside the bags.
-            std::unordered_set<uint32> carriedBags;
-            std::map<uint32, uint32> consumables;
-            do
+            // ORDER BY bag, slot: everything on the character itself (bag 0)
+            // - its bags among it - comes before what is inside the bags.
+            std::unordered_map<uint32, uint8> bagSlots;     // a worn bag's item guid -> its bag slot
+            auto const readItem = [](Field* row, uint8 slot)
             {
-                Field* row = result->Fetch();
-                uint32 const bag = row[11].GetUInt32();
-                uint8 const slot = row[12].GetUInt8();
-                uint32 const entry = row[14].GetUInt32();
-                bool const carried = bag ? carriedBags.count(bag) != 0
-                    : (slot >= INVENTORY_SLOT_ITEM_START && slot < INVENTORY_SLOT_ITEM_END);
-                if (!bag && slot >= INVENTORY_SLOT_BAG_START && slot < INVENTORY_SLOT_BAG_END)
-                    carriedBags.insert(row[13].GetUInt32());
-                if (carried && IsRefreshment(entry))
-                    consumables[entry] += std::max<uint32>(1, row[2].GetUInt32());
-
-                if (bag != 0)                           // in a bag, not worn
-                    continue;
-                if (slot >= EQUIPMENT_SLOT_END)
-                    continue;
-
                 KitItem item;
                 item.Slot = slot;
                 item.Entry = row[14].GetUInt32();
@@ -660,9 +633,31 @@ namespace
                 std::vector<std::string_view> const tokens = Trinity::Tokenize(row[6].GetStringView(), ' ', false);
                 for (size_t i = 0; i < tokens.size() && i < item.Enchants.size(); ++i)
                     item.Enchants[i] = Trinity::StringTo<uint32>(tokens[i]).value_or(0);
-                kit->Items.push_back(item);
+                return item;
+            };
+            do
+            {
+                Field* row = result->Fetch();
+                uint32 const bag = row[11].GetUInt32();
+                uint8 const slot = row[12].GetUInt8();
+                uint32 const count = std::max<uint32>(1, row[2].GetUInt32());
+                if (bag == 0)
+                {
+                    if (slot < EQUIPMENT_SLOT_END)
+                        kit->Items.push_back(readItem(row, slot));
+                    else if (slot >= INVENTORY_SLOT_BAG_START && slot < INVENTORY_SLOT_BAG_END)
+                    {
+                        kit->Bags[slot - INVENTORY_SLOT_BAG_START] = readItem(row, slot);
+                        bagSlots[row[13].GetUInt32()] = slot;
+                    }
+                    else if (slot >= INVENTORY_SLOT_ITEM_START && slot < INVENTORY_SLOT_ITEM_END)
+                        kit->Carried.push_back({ INVENTORY_SLOT_BAG_0, slot, count, readItem(row, slot) });
+                    continue;
+                }
+                // In one of the worn bags - not the bank's, which nothing lists here.
+                if (auto const in = bagSlots.find(bag); in != bagSlots.end())
+                    kit->Carried.push_back({ in->second, slot, count, readItem(row, slot) });
             } while (result->NextRow());
-            kit->Consumables.assign(consumables.begin(), consumables.end());
         }
 
         //   0   1      2        3      4    5           6     7     8        9          10       11            12      13        14              15
@@ -1119,6 +1114,10 @@ struct PersonaStash
     uint32 FreeTalentPoints = 0;
     uint32 Ammo = 0;
     std::array<Item*, EQUIPMENT_SLOT_END> Equipment{};
+    // And its bags (with what is in them) and backpack: a life carries the
+    // borrowed character's instead (CarryKit).
+    std::array<Item*, INVENTORY_SLOT_BAG_END - INVENTORY_SLOT_BAG_START> Bags{};
+    std::array<Item*, INVENTORY_SLOT_ITEM_END - INVENTORY_SLOT_ITEM_START> Backpack{};
     std::unique_ptr<PetStable> Stable;
     uint32 TemporaryUnsummonedPetNumber = 0;
     uint32 LastPetNumber = 0;
@@ -1154,6 +1153,16 @@ struct PersonaStash
             delete item;
             item = nullptr;
         }
+        for (Item*& item : Bags)                // a bag deletes what is in it
+        {
+            delete item;
+            item = nullptr;
+        }
+        for (Item*& item : Backpack)
+        {
+            delete item;
+            item = nullptr;
+        }
     }
 };
 
@@ -1182,7 +1191,8 @@ private:
     static void LoadSkills(Player* player, Kit const& kit);
     static void EquipKit(Player* player, PersonaStash& stash, Kit const& kit);
     static void GiveAmmo(Player* player, PersonaStash& stash, uint32 ammo);
-    static void GiveConsumables(Player* player, PersonaStash& stash, Kit const& kit);
+    static void CarryKit(Player* player, PersonaStash& stash, Kit const& kit);
+    static void PutBackCarried(Player* player, uint8 slot, Item* item);
     static void GiveConjured(Player* player, PersonaStash& stash);
     static void SummonPet(Player* player, PersonaStash& stash, Kit const& kit);
     static void PutBack(Player* player, uint8 slot, Item* item);
@@ -1272,6 +1282,26 @@ void PersonaAccess::TakeAside(Player* player, PersonaStash& stash)
     stash.Ammo = player->GetUInt32Value(PLAYER_AMMO_ID);
     if (stash.Ammo)
         player->RemoveAmmo();
+
+    // So do the backpack and the bags, a bag with what is in it: a life
+    // carries the borrowed character's (owner: "a virtual bag with all the
+    // swapped players stuff").
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+    {
+        if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+        {
+            player->RemoveItem(INVENTORY_SLOT_BAG_0, slot, true);
+            stash.Backpack[slot - INVENTORY_SLOT_ITEM_START] = item;
+        }
+    }
+    for (uint8 slot = INVENTORY_SLOT_BAG_START; slot < INVENTORY_SLOT_BAG_END; ++slot)
+    {
+        if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+        {
+            player->RemoveItem(INVENTORY_SLOT_BAG_0, slot, true);
+            stash.Bags[slot - INVENTORY_SLOT_BAG_START] = item;
+        }
+    }
 
     stash.Spells.swap(player->m_spells);
     for (uint8 spec = 0; spec < MAX_TALENT_SPECS; ++spec)
@@ -1465,118 +1495,124 @@ void PersonaAccess::GiveAmmo(Player* player, PersonaStash& stash, uint32 ammo)
     }
 }
 
-void PersonaAccess::GiveConsumables(Player* player, PersonaStash& stash, Kit const& kit)
+// A copy of one carried or worn item: the same piece - suffix, every enchant
+// and gem, the poison or oil on it - or, for a tournament twin, the twin with
+// the permanent enchant and the poison or oil.
+static Item* CopyKitItem(Player* player, KitItem const& source, uint32 entry, uint32 count)
 {
-    // The empty slots the bags have, backpack first. Each copy goes into one
-    // of them as a stack of its own - never merged into a stack the character
-    // owns, or taking the copy back would take theirs too.
-    std::vector<std::pair<uint8, uint8>> free;
-    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
-        if (!player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
-            free.emplace_back(uint8(INVENTORY_SLOT_BAG_0), slot);
-    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+    Item* item = Item::CreateItem(entry, count, player);
+    if (!item)
+        return nullptr;
+    bool const same = entry == source.Entry;
+    if (same && source.RandomPropertyId)
+        item->SetItemRandomProperties(source.RandomPropertyId);
+    for (uint8 e = 0; e < MAX_ENCHANTMENT_SLOT; ++e)
     {
-        Item* bagItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, bagSlot);
-        Bag* bag = bagItem ? bagItem->ToBag() : nullptr;
-        if (!bag)
+        if (!same && e != PERM_ENCHANTMENT_SLOT && e != TEMP_ENCHANTMENT_SLOT)
             continue;
-        for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
-            if (!bag->GetItemByPos(uint8(slot)))
-                free.emplace_back(bagSlot, uint8(slot));
+        uint32 const id = source.Enchants[e * MAX_ENCHANTMENT_OFFSET + ENCHANTMENT_ID_OFFSET];
+        if (!id || !sSpellItemEnchantmentStore.LookupEntry(id))
+            continue;
+        item->SetEnchantment(EnchantmentSlot(e), id,
+            source.Enchants[e * MAX_ENCHANTMENT_OFFSET + ENCHANTMENT_DURATION_OFFSET],
+            source.Enchants[e * MAX_ENCHANTMENT_OFFSET + ENCHANTMENT_CHARGES_OFFSET]);
     }
+    return item;
+}
 
-    size_t next = 0;
-    uint32 given = 0, left = 0;
-    for (auto const& [entry, total] : kit.Consumables)
+void PersonaAccess::CarryKit(Player* player, PersonaStash& stash, Kit const& kit)
+{
+    // The borrowed character's bags, each in its own bag slot, then everything
+    // it carries in the backpack and the bags, where it carries it: food,
+    // drink, reagents, ammunition, the weapons its swap macros name (owner:
+    // "a virtual bag with all the swapped players stuff"). Copies, issued like
+    // the gear and destroyed at the next swap; the player's own bags wait in
+    // the stash (TakeAside). A match under the tournament's rules carries the
+    // tournament twin of a piece of gear, as the worn gear does, and nothing
+    // where a piece has none.
+    bool const tournament = Tournament::IsInTournamentMatch(player);
+    auto const entryFor = [tournament](uint32 entry)
     {
         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
         if (!proto)
-            continue;
-        uint32 const stackSize = std::max<uint32>(1, proto->GetMaxStackSize());
-        uint32 remaining = total;
-        while (remaining && next < free.size())
-        {
-            auto const [bag, slot] = free[next++];
-            uint32 const count = std::min(remaining, stackSize);
-            ItemPosCountVec dest;
-            if (player->CanStoreNewItem(bag, slot, dest, entry, count) != EQUIP_ERR_OK)
-                continue;
-            if (Item* item = player->StoreNewItem(dest, entry, true))
-            {
-                stash.Issued.push_back(item->GetGUID());
-                remaining -= count;
-                given += count;
-            }
-        }
-        left += remaining;
-    }
-    if (left)
-        TC_LOG_INFO("bg.battleground", "All-Star: {} ({}) had no room for {} of {}'s food, drink and bandages ({} given).",
-            player->GetName(), player->GetGUID().GetCounter(), left, kit.Name, given);
-}
-
-void PersonaAccess::GiveConjured(Player* player, PersonaStash& stash)
-{
-    // A warlock life comes in with its Healthstone and a mage's with its mana
-    // gems (owner: "when you switch to a warlock or mage, grant them their
-    // mana gem and health stone"): the life's own top Create Healthstone and
-    // every Conjure Mana gem it knows, cast for free the way the character
-    // would cast them - a talent such as Improved Healthstone still picks the
-    // stronger stone, its script does. What they make is issued like the gear.
-    if (player->GetClass() != CLASS_WARLOCK && player->GetClass() != CLASS_MAGE)
-        return;
-
-    uint32 healthstone = 0;
-    uint32 healthstoneLevel = 0;
-    std::vector<uint32> manaGems;
-    for (auto const& [spell, known] : player->m_spells)
-    {
-        if (known.state == PLAYERSPELL_REMOVED || known.disabled || !known.active)
-            continue;
-        SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
-        if (!info || info->IsPassive() || !info->SpellName[LOCALE_enUS])
-            continue;
-        if (uint32 const next = sSpellMgr->GetNextSpellInChain(spell))
-            if (player->HasSpell(next))
-                continue;
-        std::string const name = info->SpellName[LOCALE_enUS];
-        if (info->SpellFamilyName == SPELLFAMILY_WARLOCK && name.rfind("Create Healthstone", 0) == 0)
-        {
-            if (!healthstone || info->SpellLevel > healthstoneLevel)
-            {
-                healthstone = spell;
-                healthstoneLevel = info->SpellLevel;
-            }
-        }
-        else if (info->SpellFamilyName == SPELLFAMILY_MAGE && name.rfind("Conjure Mana", 0) == 0)
-            manaGems.push_back(spell);
-    }
-    if (healthstone)
-        manaGems.push_back(healthstone);
-    if (manaGems.empty())
-        return;
-
-    auto const carried = [player]()
-    {
-        std::unordered_set<ObjectGuid> items;
-        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
-            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
-                items.insert(item->GetGUID());
-        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
-            if (Item* bagItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, bagSlot))
-                if (Bag* bag = bagItem->ToBag())
-                    for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
-                        if (Item* item = bag->GetItemByPos(uint8(slot)))
-                            items.insert(item->GetGUID());
-        return items;
+            return 0u;
+        if (tournament && proto->InventoryType != INVTYPE_NON_EQUIP && proto->InventoryType != INVTYPE_BAG
+            && proto->InventoryType != INVTYPE_QUIVER && proto->InventoryType != INVTYPE_AMMO)
+            return Tournament::GetItemForMode(entry, true);
+        return entry;
     };
 
-    std::unordered_set<ObjectGuid> const before = carried();
-    for (uint32 spell : manaGems)
-        player->CastSpell(player, spell, true);
-    for (ObjectGuid const& guid : carried())
-        if (!before.count(guid))
-            stash.Issued.push_back(guid);
+    for (uint8 i = 0; i < kit.Bags.size(); ++i)
+    {
+        KitItem const& source = kit.Bags[i];
+        uint8 const slot = INVENTORY_SLOT_BAG_START + i;
+        if (!source.Entry || player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            continue;
+        Item* bag = CopyKitItem(player, source, source.Entry, 1);
+        if (!bag || !bag->IsBag())
+        {
+            delete bag;
+            continue;
+        }
+        player->EquipItem((uint16(INVENTORY_SLOT_BAG_0) << 8) | slot, bag, true);
+        stash.Issued.push_back(bag->GetGUID());
+    }
+
+    uint32 placed = 0, moved = 0, left = 0;
+    for (Kit::CarriedItem const& carried : kit.Carried)
+    {
+        uint32 const entry = entryFor(carried.Item.Entry);
+        if (!entry)
+            continue;
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+        uint32 const count = std::min(carried.Count, std::max<uint32>(1, proto->GetMaxStackSize()));
+        Item* item = CopyKitItem(player, carried.Item, entry, count);
+        if (!item)
+            continue;
+
+        // Where the source had it; anywhere free if that place is not there.
+        ItemPosCountVec dest;
+        bool exact = player->CanStoreItem(carried.Bag, carried.Slot, dest, item, false) == EQUIP_ERR_OK;
+        if (!exact)
+        {
+            dest.clear();
+            if (player->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false) != EQUIP_ERR_OK)
+            {
+                delete item;
+                ++left;
+                continue;
+            }
+            ++moved;
+        }
+        Item* stored = player->StoreItem(dest, item, true);
+        stash.Issued.push_back(stored->GetGUID());
+        ++placed;
+    }
+    if (left || moved)
+        TC_LOG_INFO("bg.battleground", "All-Star: {} ({}) carries {} of {}'s items ({} not where they were, {} without room).",
+            player->GetName(), player->GetGUID().GetCounter(), placed, kit.Name, moved, left);
+}
+
+void PersonaAccess::PutBackCarried(Player* player, uint8 slot, Item* item)
+{
+    // The character's own backpack item, back in its slot - or, should that be
+    // taken, anywhere free; never lost (PutBack does the same for the gear).
+    ItemPosCountVec dest;
+    if (player->CanStoreItem(INVENTORY_SLOT_BAG_0, slot, dest, item, false) == EQUIP_ERR_OK)
+    {
+        player->StoreItem(dest, item, true);
+        return;
+    }
+    dest.clear();
+    if (player->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false) == EQUIP_ERR_OK)
+    {
+        player->StoreItem(dest, item, true);
+        return;
+    }
+    TC_LOG_ERROR("bg.battleground", "All-Star: {} ({}) had no room for its own item {} (guid {}) from backpack slot {}; it stays where the database has it.",
+        player->GetName(), player->GetGUID().GetCounter(), item->GetEntry(), item->GetGUID().GetCounter(), uint32(slot));
+    RemoveItemFromUpdateQueueOf(item, player);
+    delete item;
 }
 
 void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit)
@@ -1633,9 +1669,16 @@ void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit
         stash.Issued.push_back(item->GetGUID());
     }
 
+    // Everything it carries, then its ammunition - from what it carries when
+    // it carries some - and its healthstone and mana gems.
+    CarryKit(player, stash, kit);
     if (kit.Class == CLASS_HUNTER && kit.Ammo)
-        GiveAmmo(player, stash, kit.Ammo);
-    GiveConsumables(player, stash, kit);
+    {
+        if (player->HasItemCount(kit.Ammo, 1))
+            player->SetAmmo(kit.Ammo);
+        else
+            GiveAmmo(player, stash, kit.Ammo);
+    }
     GiveConjured(player, stash);
 }
 
@@ -1993,6 +2036,23 @@ void PersonaAccess::Restore(Player* player)
             {
                 stash.Equipment[slot] = nullptr;
                 PutBack(player, slot, item);
+            }
+        }
+        // The bags (with what is in them), then the backpack, where they were.
+        for (uint8 i = 0; i < stash.Bags.size(); ++i)
+        {
+            if (Item* item = stash.Bags[i])
+            {
+                stash.Bags[i] = nullptr;
+                PutBack(player, INVENTORY_SLOT_BAG_START + i, item);
+            }
+        }
+        for (uint8 i = 0; i < stash.Backpack.size(); ++i)
+        {
+            if (Item* item = stash.Backpack[i])
+            {
+                stash.Backpack[i] = nullptr;
+                PutBackCarried(player, INVENTORY_SLOT_ITEM_START + i, item);
             }
         }
         if (stash.Ammo)
