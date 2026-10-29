@@ -1223,8 +1223,11 @@ void PersonaAccess::DropPersona(Player* player, PersonaStash& stash)
 void PersonaAccess::LoadSkills(Player* player, Kit const& kit)
 {
     // Player::_LoadSkills, without its two writes: a value-0 skill is simply
-    // not taken (the login deletes the row), and the skill-reward spells are
-    // already among the kit's spells.
+    // not taken (the login deletes the row). Its skill-reward spells are taught
+    // after, as the login does: they are "dependent" and never saved, so the
+    // kit's spell rows do not have them - a troll's Berserking, among others,
+    // was missing from every borrowed character.
+    std::vector<std::pair<uint16, uint16>> loaded;
     uint32 count = 0;
     for (KitSkill const& skill : kit.Skills)
     {
@@ -1268,10 +1271,14 @@ void PersonaAccess::LoadSkills(Player* player, Kit const& kit)
         player->SetUInt32Value(PLAYER_SKILL_INFO_1_1 + count * 3 + 1, MAKE_PAIR32(value, max));
         player->SetUInt32Value(PLAYER_SKILL_INFO_1_1 + count * 3 + 2, 0);
         player->mSkillStatus.insert(SkillStatusMap::value_type(skill.Id, SkillStatusData(count, SKILL_UNCHANGED)));
+        loaded.emplace_back(skill.Id, value);
 
         if (++count >= PLAYER_MAX_SKILLS)
             break;
     }
+
+    for (auto const& [skill, value] : loaded)
+        player->LearnSkillRewardedSpells(skill, value);
 
     if (player->HasSkill(SKILL_FIST_WEAPONS))
         player->SetSkill(SKILL_FIST_WEAPONS, 0, player->GetSkillValue(SKILL_UNARMED), player->GetMaxSkillValueForLevel());
