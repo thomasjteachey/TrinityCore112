@@ -71,6 +71,18 @@ namespace
 {
 struct SpellDecision;
 bool HasHostileTarget(Player const* player, Unit const* target);
+
+// The person this bot is dueling, once blows may land; null otherwise. While
+// there is one, nobody else is an enemy: see SelectCombatTargetGuid,
+// SelectHighestPriorityCastableDecision and the lifecycle's AcquireCombatTarget.
+Player const* GetInProgressDuelOpponent(Player const* player)
+{
+    if (!player || !player->duel || player->duel->State != DUEL_STATE_IN_PROGRESS)
+        return nullptr;
+
+    Player const* opponent = player->duel->Opponent;
+    return opponent && opponent->IsInWorld() && opponent->GetMapId() == player->GetMapId() ? opponent : nullptr;
+}
 void SetWarriorGapCloserDiagnostic(Player const* player, std::string const& diagnostic);
 void SetEveryManForHimselfDiagnostic(Player const* player, std::string const& diagnostic);
 uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId);
@@ -1641,6 +1653,28 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
     SpellDecision SelectHighestPriorityCastableDecision(std::vector<PrioritizedSpellDecision>& candidates, Player const* player,
         Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget)
     {
+        if (candidates.empty())
+            return {};
+
+        // Dueling, an enemy spell aimed at anybody but the opponent (or what
+        // the opponent controls) is not on offer. Every class picks some of
+        // those by itself - a rogue's Blind ALWAYS goes to a secondary target,
+        // Kick to whoever is casting within reach - and the cast hands its
+        // target the bot's victim and selection. Erased rather than merely
+        // failed: the fallback below returns the top candidate even when
+        // nothing is castable, so a failed Blind would be chosen every tick.
+        if (Player const* duelOpponent = GetInProgressDuelOpponent(player))
+            candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                [player, duelOpponent](PrioritizedSpellDecision const& candidate)
+                {
+                    SpellDecision const& decision = candidate.decision;
+                    if (decision.targetMode != playerbot::PvpClassSpellContext::TargetMode::Enemy || decision.targetGuid.IsEmpty())
+                        return false;
+
+                    Unit const* aimedAt = ObjectAccessor::GetUnit(*player, decision.targetGuid);
+                    return !aimedAt || aimedAt->GetCharmerOrOwnerPlayerOrPlayerItself() != duelOpponent;
+                }), candidates.end());
+
         if (candidates.empty())
             return {};
 
@@ -5753,6 +5787,13 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
     if (!player)
         return ObjectGuid::Empty;
 
+    // Dueling, the opponent is the only enemy there is, whatever the selection
+    // says - the lifecycle's AcquireCombatTarget gives the same answer. An
+    // opponent who cannot be hit right now leaves nothing to aim at.
+    if (Player const* duelOpponent = GetInProgressDuelOpponent(player))
+        return HasHostileTarget(player, duelOpponent) && !IsTargetInvalidByImmunity(player, duelOpponent)
+            ? duelOpponent->GetGUID() : ObjectGuid::Empty;
+
     if (ObjectGuid const selectedGuid = player->GetTarget(); !selectedGuid.IsEmpty())
         if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid); HasHostileTarget(player, selectedTarget) && !IsTargetInvalidByImmunity(player, selectedTarget))
             return selectedGuid;
@@ -9601,14 +9642,18 @@ PvpValues PvpCore::CollectValues(Player const* player)
         IsTargetEffectivelyImmune(player, combatVictim);
     ObjectGuid const selectedTargetGuid = SelectCombatTargetGuid(player);
     ObjectGuid activeTargetGuid = selectedTargetGuid;
-    if (activeTargetGuid.IsEmpty())
+    // Neither fallback while dueling: SelectCombatTargetGuid has already
+    // answered with the opponent, and empty means the opponent cannot be hit
+    // this moment - not that the victim of a side cast, or the nearest
+    // passer-by, should be fought instead.
+    if (activeTargetGuid.IsEmpty() && !inActiveDuel)
         if (HasHostileTarget(player, combatVictim) && !hasEffectivelyImmuneCombatVictim)
             activeTargetGuid = combatVictim->GetGUID();
     // In PvE engagement the manager owns target acquisition through the bot's
     // selected target; the fallback below scans the map player list and would
     // make an open-world bot acquire hostile-faction players on its own.
     // Battleground orders own acquisition the same way (above).
-    if (activeTargetGuid.IsEmpty() && !inPveEngagement && !battlegroundOrdersTarget)
+    if (activeTargetGuid.IsEmpty() && !inPveEngagement && !battlegroundOrdersTarget && !inActiveDuel)
     {
         bool const allowLongAcquire =
             UsesRangedSpacingProfile(player, profileSelection) ||

@@ -5199,6 +5199,40 @@ namespace playerbot
                 !playerbot::PvpCore::IsEffectivelyImmuneTarget(player, candidate);
         };
 
+        // A duel is fought with the duel opponent and nobody else.
+        //
+        // The opponent used to be the LAST resort here, taken only when the bot
+        // had no victim and no selection at all - and an enemy spell cast at a
+        // bystander hands that bystander both (CastDirectSpell's Attack and
+        // SetSelection). So a rogue that Blinded a passing druid, or Kicked a
+        // warlock casting at the person it was dueling, fought that bot from
+        // then on and never came back. The duel could not end, and the person
+        // could not leave the ring without fleeing it - in a Mok'gora, the one
+        // thing they are punished for (Suc and Braenia, 2026-10-28). An
+        // opponent who cannot be hit right now - Ice Block, Divine Shield - is
+        // waited out, not traded for whoever is standing closest.
+        if (player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS)
+        {
+            Unit* duelOpponent = player->duel->Opponent;
+            if (!duelOpponent || duelOpponent->GetMapId() != player->GetMapId())
+                return nullptr;
+
+            if (!isAttackableTarget(duelOpponent))
+            {
+                if (playerbot::PvpCore::IsEffectivelyImmuneTarget(player, duelOpponent))
+                    StopDamageAgainstEffectivelyImmuneTarget(player, duelOpponent);
+                if (Unit* victim = player->GetVictim(); victim && victim != duelOpponent)
+                    player->AttackStop();
+                return nullptr;
+            }
+
+            player->SetSelection(duelOpponent->GetGUID());
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP chosen combat target: bot={} target={} (duel opponent) distance={}.",
+                player->GetGUID().ToString(), duelOpponent->GetGUID().ToString(), player->GetDistance(duelOpponent));
+            return duelOpponent;
+        }
+
         Unit* target = player->GetVictim();
         if (target && playerbot::PvpCore::IsEffectivelyImmuneTarget(player, target))
         {
@@ -5215,12 +5249,6 @@ namespace playerbot
         if (Pet* pet = player->GetPet())
             if (Unit* petVictim = pet->GetVictim(); petVictim && playerbot::PvpCore::IsEffectivelyImmuneTarget(player, petVictim))
                 StopDamageAgainstEffectivelyImmuneTarget(player, petVictim);
-        if ((!target || !target->IsAlive()) && player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS)
-        {
-            Unit* duelOpponent = player->duel->Opponent;
-            if (isAttackableTarget(duelOpponent) && duelOpponent->GetMapId() == player->GetMapId())
-                target = duelOpponent;
-        }
         if (!isAttackableTarget(target) && player->InBattleground())
             target = FindNearestEnemyBattlegroundPlayer(player, scanDistance, nullptr, nullptr);
         if (!isAttackableTarget(target))

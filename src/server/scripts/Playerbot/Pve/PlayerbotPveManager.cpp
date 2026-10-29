@@ -56,6 +56,7 @@
 #include "Log.h"
 #include "Loot.h"
 #include "Miscellaneous/PairStance.h"
+#include "Miscellaneous/Mokgora.h"
 #include "MapManager.h"
 #include "Map.h"
 #include "ModelIgnoreFlags.h"
@@ -13932,6 +13933,10 @@ namespace
                 human->InBattleground() || human->InArena())
                 continue;
 
+            // No rescuers into a Mok'gora either - see HuntTheBountied.
+            if (Mokgora::IsMokgoraDuel(human))
+                continue;
+
             Map* map = human->FindMap();
             if (!map)
                 continue;
@@ -14518,6 +14523,13 @@ namespace
             Player* human = ObjectAccessor::FindConnectedPlayer(spot.Guid);
             if (!human || !human->IsInWorld() || !human->IsAlive() ||
                 human->InBattleground() || human->InArena())
+                continue;
+
+            // Nor at somebody in a Mok'gora. They cannot leave the ring without
+            // fleeing it, so a wave sent now is a crowd they can neither fight
+            // their way out of nor walk away from - Suc had six sent at him in
+            // one (2026-10-28). The hunt resumes the moment it is settled.
+            if (Mokgora::IsMokgoraDuel(human))
                 continue;
 
             if (!BarracksHardcore::IsOpenWorldPvpZone(human->GetZoneId()))
@@ -20312,6 +20324,15 @@ namespace playerbot
         if (bot->duel && bot->duel->Opponent == human &&
             bot->duel->State == DUEL_STATE_IN_PROGRESS)
             return true;
+
+        // And the other way round: a bot dueling fights nobody else, and
+        // nobody else starts on a person in a Mok'gora. A hunter that was
+        // already walking in when it began would otherwise arrive and join a
+        // fight its quarry cannot leave without fleeing.
+        if (bot->duel && bot->duel->State == DUEL_STATE_IN_PROGRESS)
+            return false;
+        if (Mokgora::IsMokgoraDuel(human))
+            return false;
 
         // A bounty-board notice's pair (PairStance). A truce is a promise of no
         // first blow while a Mok'gora challenger walks up; a feud is consent the
