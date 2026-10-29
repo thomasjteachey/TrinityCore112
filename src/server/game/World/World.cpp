@@ -3733,6 +3733,10 @@ namespace
             if (previousName && previousName->empty())
                 *previousName = creatureTemplate->Name;
 
+        // The NPC wears the whole name, family name included. The bare first name
+        // stays what is recorded and announced.
+        std::string const npcName = Surnames::Decorated(winnerGuid, winnerName);
+
         bool useOnlineAppearance = true;
         if (Player* player = ObjectAccessor::FindConnectedPlayer(winnerGuid))
             if (player->GetShapeshiftForm() == FORM_MOONKIN)
@@ -3774,14 +3778,14 @@ namespace
             {
                 CreatureTemplate* mutableTemplate = const_cast<CreatureTemplate*>(creatureTemplate);
 
-                if (mutableTemplate->Name != winnerName)
+                if (mutableTemplate->Name != npcName)
                 {
-                    mutableTemplate->Name = winnerName;
+                    mutableTemplate->Name = npcName;
                     mutableTemplate->InitializeQueryData();
 
                     if (WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_UPD_CREATURE_TEMPLATE_NAME))
                     {
-                        stmt->setString(0, winnerName);
+                        stmt->setString(0, npcName);
                         stmt->setUInt32(1, mutableTemplate->Entry);
                         WorldDatabase.Execute(stmt);
                     }

@@ -32,6 +32,7 @@ EndScriptData */
 #include "Language.h"
 #include "Log.h"
 #include "Map.h"
+#include "Miscellaneous/Surnames.h"
 #include "MotionMaster.h"
 #include "MovementDefines.h"
 #include "ObjectAccessor.h"
@@ -700,7 +701,8 @@ public:
         creature->SetObjectScale(originalScale);
         creature->SetStandState(originalStandState);
 
-        std::string const newName = player.GetName();
+        // First and family name, as the weekly boards dress their NPCs.
+        std::string const newName = Surnames::Decorated(player.GetGUID(), player.GetName());
 
         creature->SetName(newName);
         creature->SetPetNameTimestamp(uint32(GameTime::GetGameTime()));
