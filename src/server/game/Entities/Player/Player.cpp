@@ -26461,6 +26461,11 @@ void Player::ApplyEquipCooldown(Item* pItem)
     if (pItem->GetTemplate()->HasFlag(ITEM_FLAG_NO_EQUIP_COOLDOWN))
         return;
 
+    // An All-Star life's gear is worn, not swapped in (owner: "the 30 sec
+    // trink cooldown shouldn't be active when you switch").
+    if (AllStar::IsSwapInProgress(this))
+        return;
+
     TimePoint now = GameTime::Now();
     for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
     {

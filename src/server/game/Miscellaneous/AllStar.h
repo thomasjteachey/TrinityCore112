@@ -27,6 +27,7 @@
 #include <vector>
 
 class Player;
+class WorldSession;
 
 // All-Star arena (BATTLEGROUND_ASA, owner 2026-10-28): "when you die, you will
 // switch to a random other class on your account, until you die with all 9
@@ -170,6 +171,11 @@ namespace AllStar
     // and a button moved up a rank for each SMSG_LEARNED_SPELL - and taken as
     // the player's they rewrote bars, the real ones included.
     bool IgnoresClientButtons(Player const* player);
+    // MiscHandler, CMSG_UPDATE_ACCOUNT_DATA: true when the upload is the
+    // client's macros while it holds a borrowed character's in this
+    // character's slots - they are not stored, and the real ones are kept a
+    // second newer than the client's copy so its next login downloads them.
+    bool KeepsAccountData(WorldSession* session, uint32 type, uint32 clientTime);
     // CENTURION_AllStar's own lives counter: ALLSTAR:LIVES:<left>:<total>.
     void SendLives(Player* player, uint32 left, uint32 total);
     // A persona's hunter pet arrives a moment after the persona (LoadPetFromDB

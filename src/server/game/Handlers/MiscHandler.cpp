@@ -970,6 +970,18 @@ void WorldSession::HandleUpdateAccountData(WorldPacket& recvData)
     if (type >= NUM_ACCOUNT_DATA_TYPES)
         return;
 
+    // An All-Star match has a borrowed character's macros in this
+    // character's slots: what the client uploads is not this character's.
+    if (AllStar::KeepsAccountData(this, type, timestamp))
+    {
+        recvData.rfinish();
+        WorldPacket data(SMSG_UPDATE_ACCOUNT_DATA_COMPLETE, 4+4);
+        data << uint32(type);
+        data << uint32(0);
+        SendPacket(&data);
+        return;
+    }
+
     if (decompressedSize == 0)                               // erase
     {
         SetAccountData(AccountDataType(type), 0, "");

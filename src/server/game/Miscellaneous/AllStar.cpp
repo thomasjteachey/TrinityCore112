@@ -16,6 +16,7 @@
  */
 
 #include "AllStar.h"
+#include "AddonRequestRoutes.h"
 #include "AsyncCallbackProcessor.h"
 #include "Bag.h"
 #include "CharacterCache.h"
@@ -795,7 +796,7 @@ namespace
     // LEARNED first, then ONE bars packet, then REMOVED: the client clears a
     // button (and tells the server) for any spell it does not know when the
     // bars arrive, and for every spell taken away while a button holds it.
-    void SyncClient(Player* player, std::unordered_set<uint32> const& before)
+    void SyncClient(Player* player, std::unordered_set<uint32> const& before, std::unordered_set<uint32>& shown)
     {
         BroadcastName(player);
 
@@ -823,12 +824,14 @@ namespace
         player->SendActionButtons(1);
 
         uint32 removed = 0;
-        for (uint32 spell : before)
+        shown.insert(before.begin(), before.end());
+        for (uint32 spell : shown)
             if (!after.count(spell))
             {
                 SendSpellbookChange(player, spell, false);
                 ++removed;
             }
+        shown.insert(after.begin(), after.end());
 
         // What the client was told, for the reports of bars and spellbooks
         // it did not show (2026-10-28: a shaman's bars bare, a druid still
@@ -854,9 +857,58 @@ namespace
             player->PetSpellInitialize();
     }
 
-    // CENTURION_AllStar makes the persona's character macros as the player's
-    // own for the life, puts each on the buttons it sat on, and deletes them on
-    // the next MAC:RESET (every swap and the restore start with one):
+    // A warrior comes into a life in Battle Stance, as from a login (owner:
+    // "warriors should start in battle stance").
+    void EnterDefaultStance(Player* player)
+    {
+        uint32 constexpr BATTLE_STANCE = 2457;
+        if (player->GetClass() == CLASS_WARRIOR && player->IsAlive() && player->HasSpell(BATTLE_STANCE) &&
+            player->GetShapeshiftForm() == FORM_NONE)
+            player->CastSpell(player, BATTLE_STANCE, true);
+    }
+
+    // Characters whose client holds a borrowed character's macros in the
+    // character's own macro slots (CENTURION_AllStar), from the first macro
+    // sent until the addon says they are back (ALLSTAR:MACROS:RESTORED).
+    std::mutex BorrowedMutex;
+    std::unordered_set<ObjectGuid::LowType> MacrosBorrowed;
+
+    // The stored macros are the character's own: they are kept, and stored a
+    // second newer than anything the client can hold, so a client that goes
+    // away still holding the borrowed ones takes these back at its next login
+    // (SMSG_ACCOUNT_DATA_TIMES: a newer server copy is downloaded).
+    void KeepRealMacros(WorldSession* session, time_t clientTime)
+    {
+        AccountData const* data = session->GetAccountData(PER_CHARACTER_MACROS_CACHE);
+        if (data && !data->Data.empty())
+            session->SetAccountData(PER_CHARACTER_MACROS_CACHE,
+                std::max<time_t>({ data->Time, clientTime, time_t(GameTime::GetGameTime()) }) + 1, data->Data);
+    }
+
+    void NoteMacrosBorrowed(Player* player)
+    {
+        {
+            std::lock_guard<std::mutex> lock(BorrowedMutex);
+            if (!MacrosBorrowed.insert(player->GetGUID().GetCounter()).second)
+                return;
+        }
+        KeepRealMacros(player->GetSession(), 0);
+    }
+
+    void HandleAddonRequest(Player* player, std::string_view argument)
+    {
+        if (argument == "MACROS:RESTORED")
+        {
+            std::lock_guard<std::mutex> lock(BorrowedMutex);
+            MacrosBorrowed.erase(player->GetGUID().GetCounter());
+        }
+    }
+
+    // CENTURION_AllStar writes the persona's character macros over the
+    // player's own macro slots for the life (new ones past them, up to the
+    // game's 18), puts each on the buttons it sat on, and puts every slot back
+    // at the next MAC:RESET or MAC:SWAP (every swap and the restore start with
+    // one):
     //   MAC:B:<buttons>:<icon>:<name>, MAC:L:<line> and MAC:C:<more of that
     //   line>, MAC:E per macro, MAC:DONE after the last.
     void SendMacros(Player* player, Kit const* kit)
@@ -865,19 +917,27 @@ namespace
         if (!session || session->IsVirtualSession())
             return;
 
-        SendAddonLine(player, "MAC:RESET");
-        if (!kit)
-            return;
-
         std::map<uint32, std::string> buttons;
-        for (KitButton const& button : kit->Buttons)
-            if (button.Type == ACTION_BUTTON_CMACRO && button.Button < MAX_ACTION_BUTTONS && kit->CharacterMacros.count(button.Action))
-            {
-                std::string& list = buttons[button.Action];
-                list += (list.empty() ? "" : ",") + std::to_string(uint32(button.Button));
-            }
+        if (kit)
+            for (KitButton const& button : kit->Buttons)
+                if (button.Type == ACTION_BUTTON_CMACRO && button.Button < MAX_ACTION_BUTTONS && kit->CharacterMacros.count(button.Action))
+                {
+                    std::string& list = buttons[button.Action];
+                    list += (list.empty() ? "" : ",") + std::to_string(uint32(button.Button));
+                }
+
+        // A bare RESET puts the player's own macros back with nothing borrowed
+        // after it, and the addon confirms it (ALLSTAR:MACROS:RESTORED). SWAP
+        // puts them back too, before the next character's: no confirmation,
+        // which would arrive after the borrow below and undo it.
         if (buttons.empty())
+        {
+            SendAddonLine(player, "MAC:RESET");
             return;
+        }
+
+        NoteMacrosBorrowed(player);
+        SendAddonLine(player, "MAC:SWAP");
 
         // An addon line is a whisper: 255 bytes with its prefix.
         size_t constexpr CHUNK = 200;
@@ -962,6 +1022,11 @@ struct PersonaStash
     uint32 LastPetNumber = 0;
     uint32 OldPetSpell = 0;
 
+    // Every spell this client has been told it knows since the first swap: a
+    // swap unlearns all of them the next character lacks, not only the last
+    // life's (a druid was still offered Execute and Overpower).
+    std::unordered_set<uint32> ClientSpells;
+
     // The persona being worn.
     KitPtr Persona;
     std::vector<ObjectGuid> Issued;         // its gear and ammo, never saved
@@ -1035,12 +1100,23 @@ void PersonaAccess::Strip(Player* player)
         if (unit && unit != pet && unit->GetTypeId() == TYPEID_UNIT && unit->IsSummon() && !unit->IsTotem())
             unit->ToTempSummon()->UnSummon();
 
-    // Everything but what lasts through a death (the World/Tournament/Bot
-    // markers, the lobby flags) and what the gear put on, which comes off with
-    // the gear: the class passives, forms, the fight's buffs and debuffs.
-    auto const strip = [](Aura const* aura)
+    // Everything but what the gear put on, which comes off with the gear, and
+    // what lasts through a death that is not the class's (the World/Tournament/
+    // Bot markers, the lobby flags): the class passives, the fight's buffs and
+    // debuffs, and every stance, form and lasting aura of the player's own
+    // class spells - Battle Stance and the other stances are death-persistent,
+    // and one left on rode into the next life (a shaman whose main bar was the
+    // warrior's stance page) and was saved on the real character at the end.
+    ObjectGuid const self = player->GetGUID();
+    auto const strip = [self](Aura const* aura)
     {
-        return !aura->IsDeathPersistent() && !aura->GetCastItemGUID();
+        if (aura->GetCastItemGUID())
+            return false;
+        if (!aura->IsDeathPersistent())
+            return true;
+        SpellInfo const* info = aura->GetSpellInfo();
+        return info->HasAura(SPELL_AURA_MOD_SHAPESHIFT) ||
+            (aura->GetCasterGUID() == self && info->SpellFamilyName != SPELLFAMILY_GENERIC);
     };
     player->RemoveOwnedAuras(strip);
     player->RemoveAppliedAuras([&strip](AuraApplication const* application) { return strip(application->GetBase()); });
@@ -1554,9 +1630,10 @@ bool PersonaAccess::Apply(Player* player, KitPtr const& kit)
 
     Build(player, stash, *kit);
     NoteSwap(player);
-    SyncClient(player, before);
+    SyncClient(player, before, stash.ClientSpells);
     SendBindings(player, kit.get());
     SendMacros(player, kit.get());
+    EnterDefaultStance(player);
 
     TC_LOG_DEBUG("bg.battleground", "All-Star: {} ({}) now wears {} ({}, class {}{}): {} spells, {} talents, {} pieces.",
         player->GetName(), player->GetGUID().GetCounter(), kit->Name, kit->Source, uint32(kit->Class),
@@ -1571,6 +1648,7 @@ void PersonaAccess::Restore(Player* player)
 
     std::unordered_set<uint32> const before = VisibleSpells(player);
     PersonaStash& stash = *player->m_allStarPersona;
+    std::unordered_set<uint32> shown = std::move(stash.ClientSpells);
     if (player->IsInWorld())
         SendAddonLine(player, "QUIET");
     {
@@ -1657,9 +1735,10 @@ void PersonaAccess::Restore(Player* player)
     NoteSwap(player);
     if (player->IsInWorld())
     {
-        SyncClient(player, before);
+        SyncClient(player, before, shown);
         SendBindings(player, nullptr);
         SendMacros(player, nullptr);
+        EnterDefaultStance(player);
     }
 }
 
@@ -1684,6 +1763,15 @@ void PersonaAccess::Maintain(Player* player)
 
 void LoadConfig()
 {
+    // CENTURION_AllStar's requests (ALLSTAR:MACROS:RESTORED). Once: a
+    // .reload config runs this again.
+    static bool routed = false;
+    if (!routed)
+    {
+        AddonRequestRoutes::Register("ALLSTAR", &HandleAddonRequest);
+        routed = true;
+    }
+
     Settings loaded;
     loaded.Enabled = sConfigMgr->GetBoolDefault("Centurion.AllStar.Enable", true);
     loaded.RespawnDelayMs = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.AllStar.RespawnDelay", 2 * IN_MILLISECONDS)));
@@ -1961,6 +2049,21 @@ bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& 
 bool IsSwapInProgress(Player const* player)
 {
     return player && Swapping == player;
+}
+
+bool KeepsAccountData(WorldSession* session, uint32 type, uint32 clientTime)
+{
+    if (type != PER_CHARACTER_MACROS_CACHE || !session || !session->GetPlayer())
+        return false;
+    {
+        std::lock_guard<std::mutex> lock(BorrowedMutex);
+        if (!MacrosBorrowed.count(session->GetPlayer()->GetGUID().GetCounter()))
+            return false;
+    }
+    KeepRealMacros(session, time_t(clientTime));
+    TC_LOG_INFO("bg.battleground", "All-Star: {} ({}) uploaded its macros while holding borrowed ones - its own are kept.",
+        session->GetPlayer()->GetName(), session->GetPlayer()->GetGUID().GetCounter());
+    return true;
 }
 
 void SendLives(Player* player, uint32 left, uint32 total)
