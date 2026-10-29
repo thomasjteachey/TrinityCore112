@@ -30,6 +30,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "Random.h"
+#include "SpellAuras.h"
 #include "StringFormat.h"
 #include "Surnames.h"
 #include "TemporarySummon.h"
@@ -153,6 +154,9 @@ void Arena::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)
 {
     if (IsCustomGame())
         _customGameEliminatedPlayers.erase(guid);
+
+    if (player && IsAllStar())
+        player->RemoveAurasDueToSpell(AllStar::LIVES_AURA);
 
     // SpellInfo::CheckLocation would drop a squad flag once the player is
     // out of the arena; take it off on the way out so it never lingers.
@@ -2249,6 +2253,18 @@ void Arena::ShowAllStarLives(Player* player, AllStarSeat& seat)
     uint32 const lives = GetAllStarLives(seat);
     uint32 const left = seat.Out || seat.Deaths >= lives ? 0 : lives - seat.Deaths;
     AllStar::SendLives(player, left, lives);
+    // Everyone's name tag shows it (owner: "show the lives they have next to
+    // their BOT/WORLD/TOURNAMENT subname").
+    if (left)
+    {
+        Aura* aura = player->GetAura(AllStar::LIVES_AURA);
+        if (!aura)
+            aura = player->AddAura(AllStar::LIVES_AURA, player);
+        if (aura)
+            aura->SetStackAmount(uint8(std::min<uint32>(left, 255)));
+    }
+    else
+        player->RemoveAurasDueToSpell(AllStar::LIVES_AURA);
     seat.LivesShown = true;
 }
 

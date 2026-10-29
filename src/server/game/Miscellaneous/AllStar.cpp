@@ -1987,6 +1987,9 @@ bool ApplyPersona(Player* player, KitPtr const& kit)
 
 void RestorePersona(Player* player)
 {
+    // The match is over for them, persona or not (a leave, a logout).
+    if (player)
+        player->RemoveAurasDueToSpell(LIVES_AURA);
     PersonaAccess::Restore(player);
 }
 

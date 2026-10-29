@@ -86,6 +86,10 @@ namespace AllStar
     // fill the end of a lineup.
     std::array<uint8, 9> constexpr CLASS_ORDER = { 1, 2, 3, 4, 5, 7, 8, 9, 11 };
     uint8 constexpr LIVES = 9;
+    // Hidden, on every seat for its match: its stack count is the lives left,
+    // which the name tag shows beside the World/Tournament/Bot marker. A
+    // spell_dbc row (stackable clone of the 92011 Tournament Character marker).
+    uint32 constexpr LIVES_AURA = 92013;
     bool IsPlayableClass(uint8 playerClass);
     char const* ClassName(uint8 playerClass);
 
