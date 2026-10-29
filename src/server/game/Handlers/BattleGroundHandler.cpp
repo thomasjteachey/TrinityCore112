@@ -131,7 +131,7 @@ namespace
     // side; their joins go through her queue (npc_scarlet_chapel_queue.cpp).
     //   BGQUEUE:MASTER:<battlemaster guid>:<its battleground>
     //   BG:BEGIN
-    //   BG:B:<bgTypeId>:<mapId>:<per team>:<min level>:<max level>:<sides 0|1>:<name>
+    //   BG:B:<bgTypeId>:<mapId>:<per team>:<min level>:<max level>:<sides 0|1>:<party cap>:<name>
     //   BG:END:<count>
     void SendBattlemasterList(Player* player, ObjectGuid master, BattlegroundTypeId preselect)
     {
@@ -152,8 +152,14 @@ namespace
             std::string name = entry->Name[locale] && *entry->Name[locale] ? entry->Name[locale] : entry->Name[LOCALE_enUS];
             name.erase(std::remove(name.begin(), name.end(), ':'), name.end());
             bool const sides = id == BATTLEGROUND_SCM || id == BATTLEGROUND_BRT || id == BATTLEGROUND_OBC;
-            SendCCGameLine(player, Trinity::StringFormat("BG:B:{}:{}:{}:{}:{}:{}:{}", uint32(id), entry->MapID[0],
-                bg->GetMaxPlayersPerTeam(), bg->GetMinLevel(), bg->GetMaxLevel(), sides ? 1 : 0, name));
+            // The biggest party the join takes: a side, and BattlemasterList's
+            // MaxGroupSize as Group::CanJoinBattlegroundQueue (and Whitemane's
+            // queue) apply it.
+            uint32 partyCap = bg->GetMaxPlayersPerTeam();
+            if (entry->MaxGroupSize)
+                partyCap = std::min(partyCap, entry->MaxGroupSize);
+            SendCCGameLine(player, Trinity::StringFormat("BG:B:{}:{}:{}:{}:{}:{}:{}:{}", uint32(id), entry->MapID[0],
+                bg->GetMaxPlayersPerTeam(), bg->GetMinLevel(), bg->GetMaxLevel(), sides ? 1 : 0, partyCap, name));
             ++count;
         }
         SendCCGameLine(player, Trinity::StringFormat("BG:END:{}", count));
