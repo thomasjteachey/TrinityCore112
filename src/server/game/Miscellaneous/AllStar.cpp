@@ -1221,6 +1221,10 @@ void PersonaAccess::Strip(Player* player)
 
     player->RemoveArenaSpellCooldowns(true);
     player->ClearComboPoints();
+    // A new life starts with no diminishing returns on it (owner 2026-10-29:
+    // "ensure when you switch, all diminishing returns on your character are
+    // cleared") - the stuns, fears and roots the last life took count no more.
+    player->ClearDiminishings();
 }
 
 void PersonaAccess::RemovePersonaPet(Player* player)
