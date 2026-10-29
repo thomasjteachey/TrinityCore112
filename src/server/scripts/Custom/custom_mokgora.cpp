@@ -35,6 +35,7 @@
 
 #include <cmath>
 
+#include "ChallengeModes.h"
 #include "custom_barracks_hardcore.h"
 
 using namespace Trinity::ChatCommands;
@@ -47,6 +48,16 @@ namespace
     bool IsPlayerbotForMokgora(Player const* player)
     {
         return BarracksHardcore::IsPlayerbot(player);
+    }
+
+    // Coward! is for a character that staked something on the fight: the
+    // challenge modes Hardcore and Semi-Hardcore. Read from the modes the
+    // character has loaded - Mok'gora defers its login check a tick so the
+    // challenge-mode login hook has run by then.
+    bool WearsCowardForMokgora(Player const* player)
+    {
+        return sChallengeModes->IsEnabledForPlayer(SETTING_HARDCORE, player) ||
+            sChallengeModes->IsEnabledForPlayer(SETTING_SEMI_HARDCORE, player);
     }
 }
 
@@ -108,6 +119,7 @@ public:
     void OnStartup() override
     {
         Mokgora::SetBotPredicate(&IsPlayerbotForMokgora);
+        Mokgora::SetCowardPredicate(&WearsCowardForMokgora);
     }
 
     // Challenges lapse on a clock, and a clock needs a tick. A second's

@@ -92,7 +92,8 @@ namespace Mokgora
     uint32 BoundsGraceSeconds();
 
     // Coward! - three days of -20% attributes, damage, armour and resistance,
-    // worn by anyone who leaves the ring or logs out of it. 0 disables it.
+    // worn by a Hardcore or Semi-Hardcore character who leaves the ring or logs
+    // out of it. 0 disables it.
     uint32 CowardSpell();
 
     // A bot never issues a Mok'gora, and takes up any a person throws at it on
@@ -102,6 +103,15 @@ namespace Mokgora
     // virtual sessions count as bots.
     using PlayerPredicate = bool(*)(Player const*);
     void SetBotPredicate(PlayerPredicate predicate);
+
+    // Who wears Coward! for fleeing: a character whose own ruleset already
+    // stakes something on a fight - Hardcore and Semi-Hardcore. Everybody else
+    // who runs is named for it and that is all (owner, 2026-10-28), and a brand
+    // anybody else still wears comes off at their next login. The challenge
+    // modes live in scripts/, so the Mok'gora script installs the answer at
+    // startup; until it does, nobody wears it.
+    TC_GAME_API void SetCowardPredicate(PlayerPredicate predicate);
+    bool WearsCoward(Player const* player);
 
     // --- state ------------------------------------------------------------
 

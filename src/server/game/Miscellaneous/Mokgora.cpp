@@ -71,8 +71,9 @@ namespace
         float BoundsYards = 150.0f;
         uint32 BoundsGraceSeconds = 10;
 
-        // Coward!, worn for three days by anyone who runs. -20% to attributes,
-        // damage done, armour and resistances.
+        // Coward!, worn for three days by a Hardcore or Semi-Hardcore character
+        // who runs (CowardPredicate). -20% to attributes, damage done, armour
+        // and resistances.
         //
         // THREE spell ids, not one. Five stats plus damage plus resistance is
         // seven effects and a 3.3.5 spell has three slots, so it is split: the
@@ -121,6 +122,16 @@ namespace
         if (player->GetSession() && player->GetSession()->IsVirtualSession())
             return true;
         return BotPredicate && BotPredicate(player);
+    }
+
+    // Set by the Mok'gora script: Hardcore or Semi-Hardcore. See the header.
+    Mokgora::PlayerPredicate CowardPredicate = nullptr;
+
+    // Whether running from a Mok'gora brands this character. Nobody, until the
+    // script has said who - a brand nobody can explain is worse than none.
+    bool EarnsCoward(Player const* player)
+    {
+        return player && !Config.CowardSpells.empty() && CowardPredicate && CowardPredicate(player);
     }
 
     // ---------------------------------------------------------------------
@@ -249,11 +260,24 @@ namespace
         return "|cffff2020[Mok'gora]|r " + text;
     }
 
+    // The coward-days field is this player's own: 0 for anyone who would not
+    // be branded, so the box does not promise them a debuff they never get.
     void SendRules(Player* player)
     {
         SendAddonLine(player, Trinity::StringFormat("CCGAME\tMOKGORA:RULES:{}:{}:{}:{}:{}",
             Config.Enabled ? 1 : 0, uint32(Config.ChallengeRange), Config.OfferSeconds,
-            uint32(Config.BoundsYards), Config.CowardDays));
+            uint32(Config.BoundsYards), EarnsCoward(player) ? Config.CowardDays : 0u));
+    }
+
+    // The second line of the warning a challenged player reads in chat - the
+    // box's text for anybody without the addon. What fleeing costs depends on
+    // who is reading it.
+    std::string StakesLine(Player const* target)
+    {
+        if (EarnsCoward(target))
+            return Trinity::StringFormat("Your opponent will be able to kill you. Fleeing, or logging out, "
+                "earns you Coward! for {} days.", std::max<uint32>(Config.CowardDays, 1));
+        return "Your opponent will be able to kill you. There is no forfeit.";
     }
 
     void CloseBox(Player* player, char const* reason)
@@ -468,6 +492,12 @@ namespace
     //
     // (Some private Hardcore realms DO execute you for fleeing. This is not
     // that; this is Blizzard's.)
+    //
+    // And only for a Hardcore or Semi-Hardcore character (owner, 2026-10-28).
+    // Anybody else who runs is announced as having fled, and nothing more:
+    // three days at -20% was a far heavier price for a world character than
+    // the death they walked away from, and it landed on people who left
+    // through a battleground queue rather than out of cowardice.
     // Coward! carries its duration from the config rather than from the DBC.
     //
     // Three days is 259,200,000 ms and SpellDuration.dbc has no such row; adding
@@ -483,7 +513,7 @@ namespace
     void WearCoward(ObjectGuid loserGuid)
     {
         Player* coward = ObjectAccessor::FindPlayer(loserGuid);
-        if (!coward || Config.CowardSpells.empty())
+        if (!EarnsCoward(coward))
             return;
 
         int32 const ms = int32(std::max<uint32>(Config.CowardDays, 1)) * DAY * IN_MILLISECONDS;
@@ -512,7 +542,7 @@ namespace
                 winner->GetName()), nullptr, true);
         }
 
-        if (Config.CowardSpells.empty())
+        if (!EarnsCoward(loser))
             return;
 
         // Deferred by a tick: this is reached from inside Player::DuelComplete,
@@ -521,6 +551,29 @@ namespace
         // iterator to be invalidated under its feet.
         ObjectGuid const loserGuid = loser->GetGUID();
         loser->m_Events.AddEventAtOffset([loserGuid]() { WearCoward(loserGuid); }, Milliseconds(1));
+    }
+
+    // A brand this character is no longer meant to wear - put on before only
+    // Hardcore and Semi-Hardcore earned one, or by a mode it has since left -
+    // comes off. Coward! is death-persistent and saved, so short of its own
+    // three days running out, nothing else takes it.
+    void ShedUnearnedCoward(Player* player)
+    {
+        if (!player || Config.CowardSpells.empty() || EarnsCoward(player))
+            return;
+
+        bool shed = false;
+        for (uint32 spellId : Config.CowardSpells)
+        {
+            if (!player->HasAura(spellId))
+                continue;
+            player->RemoveAurasDueToSpell(spellId);
+            shed = true;
+        }
+
+        if (shed)
+            TC_LOG_INFO("misc", "Mok'gora: took Coward! off {} ({}) - not Hardcore or Semi-Hardcore.",
+                player->GetName(), player->GetGUID().ToString());
     }
 
     char const* HowItEnded(DuelCompleteType type)
@@ -608,6 +661,16 @@ uint32 CowardSpell()        { return Config.CowardSpells.empty() ? 0 : Config.Co
 void SetBotPredicate(PlayerPredicate predicate)
 {
     BotPredicate = predicate;
+}
+
+void SetCowardPredicate(PlayerPredicate predicate)
+{
+    CowardPredicate = predicate;
+}
+
+bool WearsCoward(Player const* player)
+{
+    return EarnsCoward(player);
 }
 
 bool IsMokgoraDuel(Player const* player)
@@ -734,8 +797,7 @@ bool Challenge(Player* challenger, std::string const& targetName)
     Say(target, Banner(Trinity::StringFormat(
         "{} (level {}) has challenged you to MOK'GORA - a duel to the death.",
         challenger->GetName(), challenger->GetLevel())));
-    Say(target, Banner("Your opponent will be able to kill you. Fleeing, or logging out, "
-        "earns you Coward! for three days."));
+    Say(target, Banner(StakesLine(target)));
     Say(target, Banner(Trinity::StringFormat(
         "Type |cff20ff20/mokgora accept|r to fight, or |cffff2020/mokgora decline|r to refuse. {} seconds.",
         Config.OfferSeconds)));
@@ -865,8 +927,7 @@ bool ChallengeFromBot(Player* bot, Player* target, std::string& why)
     Say(target, Banner(Trinity::StringFormat(
         "{} (level {}) has challenged you to MOK'GORA - a duel to the death.",
         bot->GetName(), bot->GetLevel())));
-    Say(target, Banner("Your opponent will be able to kill you. Fleeing, or logging out, "
-        "earns you Coward! for three days."));
+    Say(target, Banner(StakesLine(target)));
     Say(target, Banner(Trinity::StringFormat(
         "Type |cff20ff20/mokgora accept|r to fight, or |cffff2020/mokgora decline|r to refuse. {} seconds.",
         Config.OfferSeconds)));
@@ -980,8 +1041,10 @@ void OnDuelEnd(Player* winner, Player* loser, DuelCompleteType type)
 
     if (type == DUEL_FLED)
     {
-        // They ran, and they live. Three days of wearing what that was worth.
-        Say(loser, Banner("You fled a Duel to the Death. Coward."));
+        // They ran, and they live - and a Hardcore or Semi-Hardcore character
+        // wears three days of what that was worth.
+        Say(loser, Banner(EarnsCoward(loser) ? "You fled a Duel to the Death. Coward."
+            : "You fled a Duel to the Death."));
         Say(winner, Banner(Trinity::StringFormat("{} fled. No ear for your string.", loser->GetName())));
         BrandTheCoward(loser, winner);
     }
@@ -1040,7 +1103,8 @@ void OnLogout(Player* player)
     // from the consequence - but the consequence is Coward!, not a corpse.
     Player* opponent = player->duel->Opponent;
 
-    Say(player, Banner("You logged out of a Duel to the Death. Coward."));
+    Say(player, Banner(EarnsCoward(player) ? "You logged out of a Duel to the Death. Coward."
+        : "You logged out of a Duel to the Death."));
     if (opponent)
     {
         Say(opponent, Banner(Trinity::StringFormat("{} logged out of the Mok'gora rather than face you.",
@@ -1054,19 +1118,34 @@ void OnLogout(Player* player)
     // nothing (Coward! does not stack).
     player->DuelComplete(DUEL_FLED);
 
-    if (!Config.CowardSpells.empty() && !player->HasAura(Config.CowardSpells.front()))
+    if (EarnsCoward(player) && !player->HasAura(Config.CowardSpells.front()))
         WearCoward(player->GetGUID());
 }
 
 void OnLogin(Player* player)
 {
-    if (!player || !Config.Enabled)
+    if (!player)
         return;
 
-    // Only the rules, so the warning box can word itself. Nothing is said to
-    // the player and nothing is read from the database: logging in is not an
-    // occasion for being told how you have done.
-    SendRules(player);
+    // A tick late, both of these. Script hooks run newest-registered first, so
+    // this login hook runs BEFORE the challenge modes load the character's
+    // modes - asked now, every Hardcore character would read as an ordinary
+    // one, lose a brand it earned and be sent the wrong rules.
+    ObjectGuid const guid = player->GetGUID();
+    player->m_Events.AddEventAtOffset([guid]()
+    {
+        Player* who = ObjectAccessor::FindPlayer(guid);
+        if (!who)
+            return;
+
+        ShedUnearnedCoward(who);
+
+        // Only the rules, so the warning box can word itself. Nothing is said
+        // to the player and nothing is read from the database: logging in is
+        // not an occasion for being told how you have done.
+        if (Config.Enabled)
+            SendRules(who);
+    }, Milliseconds(1));
 }
 
 void Update()
