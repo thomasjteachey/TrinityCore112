@@ -4324,9 +4324,11 @@ namespace
     // Doradan, a level 56 rogue, lost his second dagger and ended up holding a
     // Red Rose.
     //
-    // Mirrors FindEquipSlot's two conditions exactly. Callers skip the probe
-    // when this is true; the bag pass already never equips a two-hander over a
-    // held off hand, so skipping it changes no decision.
+    // Mirrors FindEquipSlot's two conditions exactly. The sell and auction
+    // probes skip the probe when this is true. The bag pass does equip a
+    // two-hander over a held off hand for the specs that swing one, so it asks
+    // CouldWieldWeapon first instead: the off hand is only benched for a weapon
+    // that is then going on.
     bool EquipProbeWouldBenchOffhand(Player const* bot, ItemTemplate const* proto)
     {
         if (!proto || proto->InventoryType != INVTYPE_2HWEAPON)
@@ -4345,6 +4347,17 @@ namespace
         Item const* mainHand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
         ItemTemplate const* mainProto = mainHand ? mainHand->GetTemplate() : nullptr;
         return mainProto && isLongWeapon(mainProto);
+    }
+
+    // Could the bot wield this weapon at all: its level, class and race, and the
+    // weapon skill, which CanUseItem(ItemTemplate const*) leaves to equipping.
+    // What a caller asks before a probe that has side effects.
+    bool CouldWieldWeapon(Player const* bot, ItemTemplate const* proto)
+    {
+        if (!proto || bot->CanUseItem(proto) != EQUIP_ERR_OK)
+            return false;
+        uint32 const skill = proto->GetSkill();
+        return !skill || bot->GetSkillValue(skill) > 0;
     }
 
     uint32 CountFreeBagSlots(Player* bot)
@@ -7262,61 +7275,100 @@ namespace
         return hash % buckets;
     }
 
-    // The same deterministic profile index that drives talent donors decides
-    // weapon policy, so gear and spec always agree. Both go through
-    // BotSpreadIndex for that reason: change one and you must change the other.
+    // The deterministic roll that drives the talent donors: where a bot's NEXT
+    // talent points go. The gear rules do not read it any more - they read
+    // SpecTreeIndex below, which is the build the bot actually has. The two only
+    // agree for a bot that has spent every point under today's roll.
     uint32 EquipProfileIndex(Player const* bot)
     {
         return BotSpreadIndex(bot, 3);
     }
 
-    // The rogue tree a bot actually fights from: the one holding most of its
-    // talent points, numbered 0/1/2 in the client's tab order (Assassination,
-    // Combat, Subtlety) - the numbering EquipProfileIndex and the talent
-    // recipes use.
+    // The tree a bot actually fights from: the one holding most of its talent
+    // points, numbered 0/1/2 in the client's tab order - the numbering
+    // EquipProfileIndex and the talent recipes use (Warrior Arms/Fury/
+    // Protection, Paladin Holy/Protection/Retribution, Rogue Assassination/
+    // Combat/Subtlety, Shaman Elemental/Enhancement/Restoration, ...). Every
+    // gear rule that depends on the spec asks this.
     //
     // NOT EquipProfileIndex itself. That is only the roll the talent spender
     // reads today, and a bot that levelled before BotSpreadIndex replaced the
     // raw guid modulo spent its points under the old roll and kept them - so for
-    // much of the older fleet the roll and the build disagree, and the weapon
+    // much of the older fleet the roll and the build disagree, and the gear
     // rules used to read the roll. Measured live 2026-10-28: the 46 world rogues
     // split 21 Assassination / 8 Combat / 2 Subtlety by their talents, and every
-    // one of them held a dagger in each hand. The roll still answers for a bot
-    // with nothing spent, and breaks a tie: it is where the next points go.
-    uint32 RogueTreeIndex(Player const* bot)
+    // one of them held a dagger in each hand. That fix was rogues only; measured
+    // again 2026-10-29 for the rest: 28 warriors with most of their points in
+    // Arms read as Fury or Protection - fifteen dual wielding, eleven behind a
+    // shield - and ten Enhancement shamans read as Elemental or Restoration.
+    // The roll still answers for a bot with nothing spent, and breaks a tie: it
+    // is where the next points go.
+    uint32 SpecTreeIndex(Player const* bot)
     {
-        // Every rogue talent's ranks, highest first, with the tree they sit in.
-        // Built once: the talent store is loaded before the first bot exists.
+        // Every talent's ranks, highest first, with the tree they sit in, per
+        // class. Built once: the talent store is loaded before the first bot
+        // exists.
         struct TalentRank
         {
             uint32 spellId;
             uint8 tree;
             uint8 points;
         };
-        static std::vector<std::vector<TalentRank>> const rogueTalents = []
+        using ClassTalents = std::vector<std::vector<TalentRank>>;
+        static std::array<ClassTalents, MAX_CLASSES> const talentsByClass = []
         {
-            std::vector<std::vector<TalentRank>> talents;
+            std::array<ClassTalents, MAX_CLASSES> talents;
             for (TalentEntry const* talent : sTalentStore)
             {
                 if (!talent)
                     continue;
                 TalentTabEntry const* tab = sTalentTabStore.LookupEntry(talent->TabID);
-                if (!tab || !(tab->ClassMask & (1u << (CLASS_ROGUE - 1))) || tab->PetTalentMask || tab->OrderIndex > 2)
+                if (!tab || tab->PetTalentMask || tab->OrderIndex > 2)
                     continue;
 
                 std::vector<TalentRank> ranks;
                 for (int8 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
                     if (talent->SpellRank[rank])
                         ranks.push_back({ talent->SpellRank[rank], uint8(tab->OrderIndex), uint8(rank + 1) });
-                if (!ranks.empty())
-                    talents.push_back(std::move(ranks));
+                if (ranks.empty())
+                    continue;
+
+                for (uint8 classId = 1; classId < MAX_CLASSES; ++classId)
+                    if (tab->ClassMask & (1u << (classId - 1)))
+                        talents[classId].push_back(ranks);
             }
             return talents;
         }();
 
-        std::array<uint32, 3> points = { };
+        uint32 const roll = EquipProfileIndex(bot);
+        uint8 const classId = bot->GetClass();
+        if (classId >= MAX_CLASSES)
+            return roll;
+
+        // The gear scorer asks this once per rule per item it weighs, and the
+        // shopping pass weighs every affordable auction. Remember the last answer
+        // per thread, keyed on everything a talent change moves: spending,
+        // refunding, levelling or switching spec all change the level, the spec
+        // or the free point count.
+        struct CachedTree
+        {
+            uint64 guid = 0;
+            uint8 level = 0;
+            uint8 spec = 0;
+            uint32 freePoints = 0;
+            uint32 tree = 0;
+        };
+        thread_local CachedTree cached;
+
+        uint64 const guid = bot->GetGUID().GetRawValue();
+        uint8 const level = bot->GetLevel();
         uint8 const spec = bot->GetActiveSpec();
-        for (std::vector<TalentRank> const& ranks : rogueTalents)
+        uint32 const freePoints = bot->GetFreeTalentPoints();
+        if (cached.guid == guid && cached.level == level && cached.spec == spec && cached.freePoints == freePoints)
+            return cached.tree;
+
+        std::array<uint32, 3> points = { };
+        for (std::vector<TalentRank> const& ranks : talentsByClass[classId])
             for (TalentRank const& rank : ranks)
                 if (bot->HasTalent(rank.spellId, spec))
                 {
@@ -7324,11 +7376,19 @@ namespace
                     break;
                 }
 
-        uint32 tree = EquipProfileIndex(bot);
+        uint32 tree = roll;
         for (uint32 i = 0; i < points.size(); ++i)
             if (points[i] > points[tree])
                 tree = i;
+
+        cached = { guid, level, spec, freePoints, tree };
         return tree;
+    }
+
+    // The rogue tree, for the rogue weapon-type rules below.
+    uint32 RogueTreeIndex(Player const* bot)
+    {
+        return SpecTreeIndex(bot);
     }
 
     // How well a weapon type suits a rogue tree, in either hand: 2 is the
@@ -7392,7 +7452,7 @@ namespace
         {
             // Beast mastery. The pet carries the damage, so the hunter's own two
             // hands are stat sticks and two of them beat one.
-            case CLASS_HUNTER:  return EquipProfileIndex(bot) == 0;
+            case CLASS_HUNTER:  return SpecTreeIndex(bot) == 0;
 
             // FURY. The warrior tree built entirely around holding two weapons:
             // Bloodthirst and Whirlwind swing whatever is in each hand, and Dual
@@ -7405,7 +7465,7 @@ namespace
             // realm before this line existed: of twenty fury warriors, nineteen
             // were carrying a SHIELD and not one carried a second weapon.
             //
-            case CLASS_WARRIOR: return EquipProfileIndex(bot) == 1;
+            case CLASS_WARRIOR: return SpecTreeIndex(bot) == 1;
 
             // ROGUES, every spec. They were left out on the grounds that they can
             // hold neither a two-hander nor a shield, so the rules this predicate
@@ -7439,12 +7499,13 @@ namespace
     // these three ended up in sword and board for their entire lives. Deciding
     // it before any score is the same shape as the hunter rule above.
     //
-    // Profiles are EquipProfileIndex (guid % 3), named client-side in the order
-    // the armory uses: Warrior Arms/Fury/Protection, Paladin Holy/Protection/
-    // Retribution, Shaman Elemental/Enhancement/Restoration.
+    // The spec is SpecTreeIndex - the tree holding most of the bot's talent
+    // points, in the order the armory uses: Warrior Arms/Fury/Protection,
+    // Paladin Holy/Protection/Retribution, Shaman Elemental/Enhancement/
+    // Restoration.
     bool PrefersTwoHandedMainhand(Player const* bot)
     {
-        uint32 const profile = EquipProfileIndex(bot);
+        uint32 const profile = SpecTreeIndex(bot);
         switch (bot->GetClass())
         {
             case CLASS_WARRIOR: return profile == 0;   // Arms
@@ -7479,7 +7540,7 @@ namespace
     GearScoreWeights GetGearWeights(Player const* bot)
     {
         enum Archetype { MeleeStr, MeleeAgi, RangedAgi, Tank, CasterDps, Healer };
-        uint32 const profileIndex = EquipProfileIndex(bot);
+        uint32 const profileIndex = SpecTreeIndex(bot);
         Archetype archetype;
         switch (bot->GetClass())
         {
@@ -7599,9 +7660,9 @@ namespace
         case CLASS_DRUID: // feral weapons are stat sticks too
             return true;
         case CLASS_PALADIN:
-            return EquipProfileIndex(bot) == 0;  // holy
+            return SpecTreeIndex(bot) == 0;  // holy
         case CLASS_SHAMAN:
-            return EquipProfileIndex(bot) != 1;  // elemental / resto
+            return SpecTreeIndex(bot) != 1;  // elemental / resto
         default:
             return false;
         }
@@ -7676,10 +7737,10 @@ namespace
         case CLASS_PRIEST:
             return true;
         case CLASS_PALADIN:                         // holy only; prot wants a shield
-            return EquipProfileIndex(bot) == 0;
+            return SpecTreeIndex(bot) == 0;
         case CLASS_SHAMAN:                          // elemental and restoration
         case CLASS_DRUID:                           // balance and restoration
-            return EquipProfileIndex(bot) == 0 || EquipProfileIndex(bot) == 2;
+            return SpecTreeIndex(bot) != 1;
         default:                                    // warrior, rogue, hunter
             return false;
         }
@@ -8087,10 +8148,27 @@ namespace
                 proto->Class != ITEM_CLASS_CONTAINER && proto->Class != ITEM_CLASS_QUIVER))
                 continue;
 
-            // Never bench an equipped off hand (shield!) for a two-hander: the
-            // "upgrade" silently disarms shield-dependent rotations.
-            if (proto->InventoryType == INVTYPE_2HWEAPON &&
-                bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+            // A two-hander over a worn off hand is refused for the specs that
+            // fight behind a shield - the "upgrade" silently disarms Shield Slam
+            // and Holy Shield - and ONLY for them.
+            //
+            // This was the third copy of that rule, inlined here, and the one the
+            // 2026-09-12 fix missed when it taught EquipPassWouldRefuseTwoHander
+            // and the auction pass to ask the spec first. This copy asked nothing,
+            // so a retribution paladin holding any shield at all - usually the
+            // field kit's, issued after a death - never even considered the
+            // two-hander sitting in its bags. Measured live 2026-10-29: seven of
+            // twenty retribution paladins in sword and board, five of them
+            // carrying a two-hander they had the skill to wear.
+            if (EquipPassWouldRefuseTwoHander(bot, proto))
+                continue;
+
+            // For the specs that do want it, the CanEquipItem probe below must not
+            // be what takes the off hand off: for a staff or a polearm it benches
+            // the off hand before checking anything else
+            // (EquipProbeWouldBenchOffhand). So ask first whether this weapon can
+            // be wielded at all.
+            if (EquipProbeWouldBenchOffhand(bot, proto) && !CouldWieldWeapon(bot, proto))
                 continue;
 
             bool const isContainer = proto->Class == ITEM_CLASS_CONTAINER || proto->Class == ITEM_CLASS_QUIVER;
@@ -20493,7 +20571,9 @@ namespace playerbot
             if (bot->GetMaxPower(POWER_MANA) > 0)
                 row.PowerPct = uint8(std::min(100.0f, std::max(0.0f, bot->GetPowerPct(POWER_MANA))));
 
-            row.Spec = uint8(EquipProfileIndex(bot));
+            // The build it has, which is what its gear follows - not the roll,
+            // which for an older bot names a spec it never spent a point in.
+            row.Spec = uint8(SpecTreeIndex(bot));
             row.DisplayId = bot->GetNativeDisplayId();
 
             // What is actually worn. Mean item level says whether a bot is
@@ -22622,6 +22702,12 @@ namespace playerbot
     bool SpecPrefersDualWield(Player const* bot)
     {
         return bot && PrefersDualWield(bot);
+    }
+
+    // And again for the two-hander rule.
+    bool SpecPrefersTwoHandedMainhand(Player const* bot)
+    {
+        return bot && PrefersTwoHandedMainhand(bot);
     }
 
     // Same arrangement: a forwarder, so the kit and IsEquipUpgrade read one rule.

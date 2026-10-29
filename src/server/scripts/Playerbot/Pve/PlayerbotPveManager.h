@@ -566,7 +566,7 @@ public:
         uint8 Level = 0;
         uint8 Class = 0;
         uint8 Aggression = 0;
-        uint8 Spec = 0;            // EquipProfileIndex: 0/1/2, named client-side
+        uint8 Spec = 0;            // SpecTreeIndex (most talent points): 0/1/2, named client-side
         uint8 HealthPct = 0;
         uint8 PowerPct = 0;        // mana, when the class has any
         uint16 ItemLevel = 0;      // mean of equipped, 0 when naked
@@ -620,6 +620,13 @@ bool SpecPrefersDualWield(Player const* bot);
 // SpecPrefersDualWield's reason: it is the rule the gear scorer applies, and a
 // kit with its own copy would keep issuing weapons the scorer takes back off.
 std::vector<uint32> SpecWeaponSubclasses(Player const* bot);
+
+// Whether this character's SPEC swings one two-handed weapon: Arms,
+// Retribution, Enhancement - read off the talent points it has spent. For the
+// field kit, which refills an empty main hand and would otherwise rank one-
+// and two-handers together by level and follow a one-hander with a shield.
+// Exported for SpecPrefersDualWield's reason.
+bool SpecPrefersTwoHandedMainhand(Player const* bot);
 }
 
 #endif

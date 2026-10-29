@@ -1924,6 +1924,17 @@ namespace BarracksHardcore
                 std::find(specWeaponTypes.begin(), specWeaponTypes.end(), subClass) != specWeaponTypes.end();
         };
 
+        // And the SHAPE the spec fights with: Arms, Retribution and Enhancement
+        // swing one two-hander. The search below otherwise ranks one-handers and
+        // two-handers together by required level, and the off-hand pass after it
+        // fills the hand a one-hander leaves free with a shield - so a ret
+        // paladin that died came back in sword and board, and the gear scorer
+        // then refused every two-hander in its bags because a shield was on.
+        // Measured live 2026-10-29: the ret paladins and enhancement shamans in
+        // sword and board were holding kit maces and hammers. Bots only, for the
+        // reason specWeaponTypes is.
+        bool const specWantsTwoHander = IsPlayerbot(rules) && playerbot::SpecPrefersTwoHandedMainhand(rules);
+
         uint32 granted = 0;
 
         for (uint8 slot : kKitSlots)
@@ -1964,8 +1975,13 @@ namespace BarracksHardcore
                 bool const tooGood = wornProto->RequiredLevel > kitLevel;
                 bool const fallenBehind = int32(kitLevel) - int32(wornProto->RequiredLevel) >
                     int32(s_kitStaleLevels);
+                // A kit one-hander in a two-hander spec's main hand is the wrong
+                // shape the same way: replaced by a kit two-hander once the
+                // search finds one, and left on until it does.
                 bool const wrongType = handSlot && wornProto->Class == ITEM_CLASS_WEAPON &&
-                    !fitsSpec(wornProto->SubClass);
+                    (!fitsSpec(wornProto->SubClass) ||
+                     (slot == EQUIPMENT_SLOT_MAINHAND && specWantsTwoHander &&
+                      wornProto->InventoryType != INVTYPE_2HWEAPON));
                 if (!tooGood && !fallenBehind && !wrongType)
                     continue;
 
@@ -2064,24 +2080,36 @@ namespace BarracksHardcore
             // which is the level-up case: the off hand it is about to swallow is
             // not empty, and everything the comment above describes happens just
             // the same when nobody died to record it.
+            //
+            // Except for a spec that swings a two-hander, for whom one big weapon
+            // and an empty off hand is exactly the answer (an arms warrior that
+            // was dual wielding off-spec, say).
+            bool const wantsTwoHander = slot == EQUIPMENT_SLOT_MAINHAND && specWantsTwoHander;
             bool const diedDualWielding = diedHolding.hadWeapon && diedHolding.hadOffHandWeapon;
             bool const dualWieldingNow = wornOffHandWeapon && !wornMainTwoHanded;
             bool const excludeTwoHanded = (diedDualWielding || dualWieldingNow) &&
-                slot == EQUIPMENT_SLOT_MAINHAND;
+                slot == EQUIPMENT_SLOT_MAINHAND && !wantsTwoHander;
 
-            for (uint8 pass = 0; pass < 3 && !bestItemId; ++pass)
+            for (uint8 pass = 0; pass < 4 && !bestItemId; ++pass)
             {
                 // Pass 0 is the shape-restricted search, pass 1 the spec's weapon
                 // types, pass 2 the search this function has always done. A pass
                 // with nothing to restrict to has no work and is skipped outright.
+                // For a two-hander spec's main hand the first three look at
+                // two-handers only, and pass 3 is pass 2 again without that - for
+                // a level the pool has no two-hander at.
                 bool const restrictToShape = (pass == 0) && preferShape;
                 bool const restrictToSpec = (pass == 1) && preferSpecTypes;
+                bool const twoHandersOnly = wantsTwoHander && pass < 3;
                 if (pass == 0 && !restrictToShape)
                     continue;
                 if (pass == 1 && !restrictToSpec)
                     continue;
-                // A wrong-type weapon is only ever replaced by a right-type one.
-                if (pass == 2 && wrongTypeWeapon)
+                if (pass == 3 && !wantsTwoHander)
+                    continue;
+                // A wrong-type weapon is only ever replaced by a right-type one -
+                // for a two-hander spec, pass 2 is still that.
+                if ((pass == 2 && wrongTypeWeapon && !wantsTwoHander) || (pass == 3 && wrongTypeWeapon))
                     continue;
 
             for (uint32 invType : InventoryTypesForSlot(slot, player))
@@ -2090,6 +2118,8 @@ namespace BarracksHardcore
                 // courtesy that the pool may not be able to honour; this is a
                 // rule, and falling back is not a reason to break it.
                 if (excludeTwoHanded && invType == INVTYPE_2HWEAPON)
+                    continue;
+                if (twoHandersOnly && invType != INVTYPE_2HWEAPON)
                     continue;
 
                 // Greys below the threshold, whites from there on, and white
@@ -2222,8 +2252,17 @@ namespace BarracksHardcore
             uint16 equipDest = 0;
             if (player->CanEquipNewItem(probeSlot, equipDest, bestItemId, false) != EQUIP_ERR_OK)
                 continue;
-            if (player->EquipNewItem(equipDest, bestItemId, true))
+            if (Item* issued = player->EquipNewItem(equipDest, bestItemId, true))
+            {
                 ++granted;
+
+                // EquipItem leaves the off hand where it is. CanEquipItem only
+                // checked that it COULD come off; a two-hander needs it to.
+                // A kit off hand is destroyed rather than bagged (equipping=true),
+                // anything earned goes to the bags.
+                if (issued->GetTemplate()->InventoryType == INVTYPE_2HWEAPON)
+                    player->AutoUnequipOffhandIfNeed(false, true);
+            }
         }
 
         // A ranged weapon with nothing to fire is a stick: whoever ends up
