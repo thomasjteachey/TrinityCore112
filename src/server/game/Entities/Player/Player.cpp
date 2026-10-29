@@ -29,6 +29,7 @@
 #include "Miscellaneous/AllStar.h"
 #include "Miscellaneous/CooldownStash.h"
 #include "Miscellaneous/Mokgora.h"
+#include "Miscellaneous/VioletHoldBars.h"
 #include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "VanillaRaids/VanillaRaids.h"
@@ -20644,6 +20645,13 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         VioletHoldBoons::RestoreTaughtSpells(this);
 
     _LoadActions(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACTIONS));
+
+    // A character carried out of a Violet Hold run it did not walk out of - a
+    // logout timed out of it, a crash, a restart - gets the bars it walked in
+    // with, in time to go out with the initial packets. Before
+    // VioletHoldBoons::OnLogin strips the run's spells, so the client is handed
+    // the bars while it still knows every spell on them.
+    VioletHoldBars::RestoreAtLogin(this);
 
     // unread mails and next delivery time, actual mails not loaded
     _LoadMail(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_MAILS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_MAIL_ITEMS));

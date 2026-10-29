@@ -18,6 +18,7 @@
 #include "Random.h"
 #include "StringFormat.h"
 #include "VioletHoldBoons.h"
+#include "Miscellaneous/VioletHoldBars.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -195,6 +196,11 @@ void BattlegroundVHR::AddPlayer(Player* player)
 {
     bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
 
+    // The bars it walks in with, written down before the run can change them;
+    // RemovePlayer gives them back (Miscellaneous/VioletHoldBars.h).
+    if (!isInBattleground)
+        VioletHoldBars::Stash(player);
+
     Battleground::AddPlayer(player);
 
     if (!isInBattleground)
@@ -236,11 +242,21 @@ void BattlegroundVHR::RemovePlayer(Player* player, ObjectGuid guid, uint32 team)
     // design pointless. So a logout keeps everything, and
     // VioletHoldBoons::OnLogin decides at the next login: back into this
     // run - restore; anywhere else (run over, timed out) - strip then.
-    if (player && team == _humanTeam)
+    //
+    // The action bars go back first, the same way: every exit but a logout,
+    // whose next login gives them back instead. First, because the client
+    // drops any button whose spell it does not know and tells the server so;
+    // handed the real bars while it still knows every spell the run gave, it
+    // has nothing on them to drop when StripAll then takes those spells away.
+    if (player)
     {
         WorldSession const* session = player->GetSession();
         if (!session || !session->PlayerLogout())
-            VioletHoldBoons::StripAll(player);
+        {
+            VioletHoldBars::Restore(player);
+            if (team == _humanTeam)
+                VioletHoldBoons::StripAll(player);
+        }
     }
 }
 

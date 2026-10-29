@@ -27,6 +27,7 @@
 #include "Miscellaneous/AllStar.h"
 #include "Miscellaneous/CharacterScreen.h"
 #include "Miscellaneous/CooldownStash.h"
+#include "Miscellaneous/VioletHoldBars.h"
 #include "Miscellaneous/DepletedMarks.h"
 #include "Miscellaneous/GoodieBags.h"
 #include "Miscellaneous/Mokgora.h"
@@ -2229,6 +2230,9 @@ void World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Checking Battleground Cooldown Stash...");
     CooldownStash::ProbeStorage();
+
+    TC_LOG_INFO("server.loading", "Checking Violet Hold bar stash...");
+    VioletHoldBars::ProbeStorage();
 
     TC_LOG_INFO("server.loading", "Checking Summoner's Rift progression stash...");
     RiftProgression::ProbeStorage();

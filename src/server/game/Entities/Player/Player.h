@@ -1582,6 +1582,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SaveToDB(CharacterDatabaseTransaction trans, bool create = false);
         void SaveInventoryAndGoldToDB(CharacterDatabaseTransaction trans);                    // fast save function for item/money cheating preventing
         void SaveGoldToDB(CharacterDatabaseTransaction trans) const;
+        // The action bars into `trans` now, not at the next save: bars put back
+        // from a stash commit in one transaction with the stash's deletion
+        // (Miscellaneous/VioletHoldBars.cpp), so no crash can land between them.
+        void SaveActionButtonsToDB(CharacterDatabaseTransaction trans) { _SaveActions(trans); }
 
         static void Customize(CharacterCustomizeInfo const* customizeInfo, CharacterDatabaseTransaction trans);
         static void SavePositionInDB(WorldLocation const& loc, uint16 zoneId, ObjectGuid guid, CharacterDatabaseTransaction trans);
