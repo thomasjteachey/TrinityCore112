@@ -957,6 +957,11 @@ class TC_GAME_API ObjectMgr
         uint32 LoadReferenceVendor(int32 vendor, int32 item_id, std::set<uint32>* skip_vendors);
 
         void LoadGameObjectTemplate();
+        // One gameobject_template row (the columns LoadGameObjectTemplate reads).
+        void LoadGameObjectTemplate(Field* fields);
+        // Loads - or reloads - one entry from the database, query data included
+        // (.reload gameobject_template). False when the database has no row.
+        bool ReloadGameObjectTemplate(uint32 entry);
         void LoadGameObjectTemplateAddons();
         void LoadGameObjectOverrides();
 

@@ -80,6 +80,7 @@ void AddSC_custom_name_markers();
 void AddSC_custom_absorb_feed();
 void AddSC_blood_beneath_arena();
 void AddSC_custom_always_known_flight_paths();
+void AddSC_custom_spawn_commands();
 
 void AddCustomScripts()
 {
@@ -143,4 +144,5 @@ void AddCustomScripts()
     AddSC_violet_hold_boons();
     AddSC_blood_beneath_arena();
     AddSC_custom_always_known_flight_paths();
+    AddSC_custom_spawn_commands();
 }

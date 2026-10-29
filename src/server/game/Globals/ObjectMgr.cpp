@@ -7926,17 +7926,22 @@ inline void CheckGOConsumable(GameObjectTemplate const* goInfo, uint32 dataN, ui
         goInfo->entry, goInfo->type, N, dataN);
 }
 
+namespace
+{
+    //                                          0      1      2        3       4             5          6     7
+    char const* const GameObjectTemplateColumns = "SELECT entry, type, displayId, name, IconName, castBarCaption, unk1, size, "
+    //                                          8      9      10     11     12     13     14     15     16     17     18      19      20
+                                                "Data0, Data1, Data2, Data3, Data4, Data5, Data6, Data7, Data8, Data9, Data10, Data11, Data12, "
+    //                                          21      22      23      24      25      26      27      28      29      30      31      32      33
+                                                "Data13, Data14, Data15, Data16, Data17, Data18, Data19, Data20, Data21, Data22, Data23, AIName, ScriptName "
+                                                "FROM gameobject_template";
+}
+
 void ObjectMgr::LoadGameObjectTemplate()
 {
     uint32 oldMSTime = getMSTime();
 
-    //                                                 0      1      2        3       4             5          6     7
-    QueryResult result = WorldDatabase.Query("SELECT entry, type, displayId, name, IconName, castBarCaption, unk1, size, "
-    //                                         8      9      10     11     12     13     14     15     16     17     18      19      20
-                                             "Data0, Data1, Data2, Data3, Data4, Data5, Data6, Data7, Data8, Data9, Data10, Data11, Data12, "
-    //                                         21      22      23      24      25      26      27      28      29      30      31      32      33
-                                             "Data13, Data14, Data15, Data16, Data17, Data18, Data19, Data20, Data21, Data22, Data23, AIName, ScriptName "
-                                             "FROM gameobject_template");
+    QueryResult result = WorldDatabase.Query(GameObjectTemplateColumns);
 
     if (!result)
     {
@@ -7946,9 +7951,26 @@ void ObjectMgr::LoadGameObjectTemplate()
 
     _gameObjectTemplateStore.reserve(result->GetRowCount());
     do
-    {
-        Field* fields = result->Fetch();
+        LoadGameObjectTemplate(result->Fetch());
+    while (result->NextRow());
 
+    TC_LOG_INFO("server.loading", ">> Loaded {} game object templates in {} ms", _gameObjectTemplateStore.size(), GetMSTimeDiffToNow(oldMSTime));
+}
+
+bool ObjectMgr::ReloadGameObjectTemplate(uint32 entry)
+{
+    QueryResult result = WorldDatabase.Query(Trinity::StringFormat("{} WHERE entry = {}", GameObjectTemplateColumns, entry).c_str());
+    if (!result)
+        return false;
+
+    LoadGameObjectTemplate(result->Fetch());
+    _gameObjectTemplateStore[entry].InitializeQueryData();
+    return true;
+}
+
+void ObjectMgr::LoadGameObjectTemplate(Field* fields)
+{
+    {
         uint32 entry = fields[0].GetUInt32();
 
         GameObjectTemplate& got = _gameObjectTemplateStore[entry];
@@ -8104,9 +8126,7 @@ void ObjectMgr::LoadGameObjectTemplate()
                 CheckAndFixGOChairHeightId(&got, got.barberChair.chairheight, 0);
                 break;
         }
-    } while (result->NextRow());
-
-    TC_LOG_INFO("server.loading", ">> Loaded {} game object templates in {} ms", _gameObjectTemplateStore.size(), GetMSTimeDiffToNow(oldMSTime));
+    }
 }
 
 void ObjectMgr::LoadGameObjectTemplateAddons()

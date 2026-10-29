@@ -133,6 +133,7 @@ public:
             { "achievement_reward_locale",     rbac::RBAC_PERM_COMMAND_RELOAD_ACHIEVEMENT_REWARD_LOCALE,        true,  &HandleReloadLocalesAchievementRewardCommand,   "" },
             { "creature_template_locale",      rbac::RBAC_PERM_COMMAND_RELOAD_CRETURE_TEMPLATE_LOCALE,          true,  &HandleReloadLocalesCreatureCommand,            "" },
             { "creature_text_locale",          rbac::RBAC_PERM_COMMAND_RELOAD_CRETURE_TEXT_LOCALE,              true,  &HandleReloadLocalesCreatureTextCommand,        "" },
+            { "gameobject_template",           rbac::RBAC_PERM_COMMAND_RELOAD_GAMEOBJECT_TEMPLATE_LOCALE,       true,  &HandleReloadGameObjectTemplateCommand,         "" },
             { "gameobject_template_locale",    rbac::RBAC_PERM_COMMAND_RELOAD_GAMEOBJECT_TEMPLATE_LOCALE,       true,  &HandleReloadLocalesGameobjectCommand,          "" },
             { "gossip_menu_option_locale",     rbac::RBAC_PERM_COMMAND_RELOAD_GOSSIP_MENU_OPTION_LOCALE,        true,  &HandleReloadLocalesGossipMenuOptionCommand,    "" },
             { "item_template_locale",          rbac::RBAC_PERM_COMMAND_RELOAD_ITEM_TEMPLATE_LOCALE,             true,  &HandleReloadLocalesItemCommand,                "" },
@@ -475,22 +476,43 @@ public:
                 continue;
             }
 
-            CreatureTemplate const* cInfo = sObjectMgr->GetCreatureTemplate(entry);
-            if (!cInfo)
-            {
-                handler->PSendSysMessage(LANG_COMMAND_CREATURESTORAGE_NOTFOUND, entry);
-                continue;
-            }
-
-            TC_LOG_INFO("misc", "Reloading creature template entry {}", entry);
+            // An entry the server has not loaded yet is loaded now: a template
+            // added to the database while the realm runs can be spawned without
+            // a restart (.spawn creature).
+            bool const added = !sObjectMgr->GetCreatureTemplate(entry);
+            TC_LOG_INFO("misc", "{} creature template entry {}", added ? "Loading new" : "Reloading", entry);
 
             Field* fields = result->Fetch();
             sObjectMgr->LoadCreatureTemplate(fields);
-            sObjectMgr->CheckCreatureTemplate(cInfo);
+            if (CreatureTemplate const* cInfo = sObjectMgr->GetCreatureTemplate(entry))
+                sObjectMgr->CheckCreatureTemplate(cInfo);
+            if (added)
+                handler->PSendSysMessage("Creature template %u loaded (new).", entry);
         }
 
         sObjectMgr->InitializeQueriesData(QUERY_DATA_CREATURES);
         handler->SendGlobalGMSysMessage("Creature template reloaded.");
+        return true;
+    }
+
+    // New entries and existing ones alike, one row each.
+    static bool HandleReloadGameObjectTemplateCommand(ChatHandler* handler, char const* args)
+    {
+        if (!*args)
+            return false;
+
+        for (std::string_view entryStr : Trinity::Tokenize(args, ' ', false))
+        {
+            uint32 const entry = Trinity::StringTo<uint32>(entryStr).value_or(0);
+            bool const added = !sObjectMgr->GetGameObjectTemplate(entry);
+            if (!entry || !sObjectMgr->ReloadGameObjectTemplate(entry))
+            {
+                handler->PSendSysMessage("No gameobject_template row %u.", entry);
+                continue;
+            }
+            TC_LOG_INFO("misc", "{} gameobject template entry {}", added ? "Loaded new" : "Reloaded", entry);
+            handler->PSendSysMessage("Gameobject template %u %s.", entry, added ? "loaded (new)" : "reloaded");
+        }
         return true;
     }
 
