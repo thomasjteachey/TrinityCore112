@@ -3890,6 +3890,9 @@ void Player::SendInitialSpells()
 
 void Player::SendUnlearnSpells()
 {
+    if (AllStar::IsSwapInProgress(this))
+        return;
+
     WorldPacket data(SMSG_SEND_UNLEARN_SPELLS, 4 + 4 * m_spells.size());
 
     uint32 spellCount = 0;
@@ -4247,7 +4250,9 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
                 if (spellInfo->IsPassive() && HandlePassiveSpellLearn(spellInfo))
                     CastSpell(this, spellId, true);
             }
-            else if (IsInWorld())
+            // An All-Star swap tells the client about its spellbook itself, in
+            // one diff (Miscellaneous/AllStar.cpp).
+            else if (IsInWorld() && !AllStar::IsSwapInProgress(this))
             {
                 if (next_active_spell_id)
                 {
@@ -4615,7 +4620,8 @@ void Player::LearnSpell(uint32 spell_id, bool dependent, uint32 fromSkill /*= 0*
     bool learning = AddSpell(spell_id, active, true, dependent, false, false, fromSkill);
 
     // prevent duplicated entires in spell book, also not send if not in world (loading)
-    if (learning && IsInWorld())
+    // - nor during an All-Star swap, which sends its own diff (AllStar.cpp)
+    if (learning && IsInWorld() && !AllStar::IsSwapInProgress(this))
     {
         WorldPacket data(SMSG_LEARNED_SPELL, 6);
         data << uint32(spell_id);
@@ -31960,6 +31966,12 @@ Pet* Player::SummonPet(uint32 entry, float x, float y, float z, float ang, PetTy
 
 void Player::SendSupercededSpell(uint32 oldSpell, uint32 newSpell) const
 {
+    // Building an All-Star persona walks every rank chain; the client is told
+    // the result once, by the swap's own diff - this one would leave each
+    // chain's top rank in its spellbook twice.
+    if (AllStar::IsSwapInProgress(this))
+        return;
+
     WorldPacket data(SMSG_SUPERCEDED_SPELL, 8);
     data << uint32(oldSpell) << uint32(newSpell);
     SendDirectMessage(&data);

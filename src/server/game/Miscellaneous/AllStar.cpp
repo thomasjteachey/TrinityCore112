@@ -47,6 +47,8 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <unordered_map>
@@ -106,6 +108,15 @@ struct Kit
     std::array<uint32, MAX_GLYPH_SLOT_INDEX> Glyphs{};
     std::vector<KitItem> Items;             // equipment slots only
     bool TournamentMode = false;            // extra_flags PLAYER_EXTRA_TOURNAMENT_MODE
+    // The source's own keybindings (character_account_data type 3, the
+    // client's bindings-cache: "bind KEY COMMAND" over the defaults), when it
+    // keeps a set of its own; without one it plays on its account's.
+    bool OwnBindings = false;
+    std::vector<std::pair<std::string, std::string>> Bindings;
+    // The source's character macros by button number (type 5, "MACRO
+    // 0x1000000|n ..."): a button can only point at the player's own, so
+    // each becomes the spell its macro casts.
+    std::unordered_map<uint32, std::string> CharacterMacros;
     std::vector<uint32> RewardedQuests;     // their spells are taught at every login
     bool HasPet = false;
     uint32 SourcePetNumber = 0;
@@ -206,6 +217,7 @@ namespace
         KIT_QUERY_INVENTORY,
         KIT_QUERY_PETS,
         KIT_QUERY_QUESTS,
+        KIT_QUERY_ACCOUNT_DATA,
         MAX_KIT_QUERY
     };
 
@@ -235,6 +247,7 @@ namespace
             add(KIT_QUERY_INVENTORY, CHAR_SEL_CHARACTER_INVENTORY);
             add(KIT_QUERY_PETS, CHAR_SEL_CHAR_PETS);
             add(KIT_QUERY_QUESTS, CHAR_SEL_CHARACTER_QUESTSTATUSREW);
+            add(KIT_QUERY_ACCOUNT_DATA, CHAR_SEL_PLAYER_ACCOUNT_DATA);
             return res;
         }
 
@@ -273,6 +286,154 @@ namespace
     }
 
     // ---------------------------------------------------------- kit parsing
+    std::string Trim(std::string_view text)
+    {
+        size_t first = 0;
+        while (first < text.size() && std::isspace(static_cast<unsigned char>(text[first])))
+            ++first;
+        size_t last = text.size();
+        while (last > first && std::isspace(static_cast<unsigned char>(text[last - 1])))
+            --last;
+        return std::string(text.substr(first, last - first));
+    }
+
+    std::string Lower(std::string text)
+    {
+        for (char& c : text)
+            c = char(std::tolower(static_cast<unsigned char>(c)));
+        return text;
+    }
+
+    // bindings-cache: "BINDINGMODE n", then "bind KEY COMMAND" per changed key.
+    void ParseBindings(std::string const& data, Kit& kit)
+    {
+        kit.OwnBindings = !Trim(data).empty();
+        for (std::string_view raw : Trinity::Tokenize(data, '\n', false))
+        {
+            std::string const line = Trim(raw);
+            if (line.rfind("bind ", 0) != 0)
+                continue;
+            std::string const rest = Trim(std::string_view(line).substr(5));
+            size_t const space = rest.find(' ');
+            if (space == std::string::npos || !space)
+                continue;
+            std::string command = Trim(std::string_view(rest).substr(space + 1));
+            if (!command.empty())
+                kit.Bindings.emplace_back(rest.substr(0, space), std::move(command));
+        }
+    }
+
+    // macros-cache: "MACRO <id> \"<name>\" <icon>", the body, "END". A
+    // character macro's id is 0x1000000 | its number on the action buttons.
+    void ParseMacros(std::string const& data, Kit& kit)
+    {
+        uint32 current = 0;
+        std::string body;
+        for (std::string_view raw : Trinity::Tokenize(data, '\n', true))
+        {
+            std::string const line = Trim(raw);
+            if (line.rfind("MACRO ", 0) == 0)
+            {
+                std::string_view const rest = std::string_view(line).substr(6);
+                uint32 const id = Trinity::StringTo<uint32>(rest.substr(0, rest.find(' '))).value_or(0);
+                current = (id & 0x1000000) ? (id & 0xFFFFFF) : 0;
+                body.clear();
+            }
+            else if (line == "END")
+            {
+                if (current)
+                    kit.CharacterMacros[current] = body;
+                current = 0;
+            }
+            else if (current)
+                body += line + '\n';
+        }
+    }
+
+    // The spells a macro casts, in the order it would try them: every
+    // "#showtooltip X", "/cast", "/use", "/castsequence" and "/castrandom" option, with its
+    // [conditions], ! and (Rank N) taken off - the rank kept apart.
+    std::vector<std::pair<std::string, uint32>> MacroSpellCandidates(std::string const& body)
+    {
+        std::vector<std::pair<std::string, uint32>> candidates;
+        for (std::string_view raw : Trinity::Tokenize(body, '\n', false))
+        {
+            std::string const line = Trim(raw);
+            std::string const lower = Lower(line);
+            std::string rest;
+            for (char const* command : { "#showtooltip ", "/castsequence ", "/castrandom ", "/cast ", "/use " })
+            {
+                if (lower.rfind(command, 0) == 0)
+                {
+                    rest = line.substr(std::strlen(command));
+                    break;
+                }
+            }
+            if (rest.empty())
+                continue;
+
+            for (std::string_view option : Trinity::Tokenize(rest, ';', false))
+            {
+                std::string name = Trim(option);
+                while (!name.empty() && name[0] == '[')
+                {
+                    size_t const close = name.find(']');
+                    name = close == std::string::npos ? std::string() : Trim(std::string_view(name).substr(close + 1));
+                }
+                if (Lower(name).rfind("reset=", 0) == 0)
+                {
+                    size_t const space = name.find(' ');
+                    name = space == std::string::npos ? std::string() : Trim(std::string_view(name).substr(space + 1));
+                }
+                size_t const comma = name.find(',');
+                if (comma != std::string::npos)
+                    name = Trim(std::string_view(name).substr(0, comma));
+                while (!name.empty() && (name[0] == '!' || name[0] == '?'))
+                    name.erase(0, 1);
+
+                uint32 rank = 0;
+                size_t const paren = name.find('(');
+                if (paren != std::string::npos)
+                {
+                    std::string const inside = Lower(name.substr(paren + 1));
+                    if (inside.rfind("rank ", 0) == 0)
+                        rank = Trinity::StringTo<uint32>(std::string_view(inside).substr(5, inside.find(')') - 5)).value_or(0);
+                    name = Trim(std::string_view(name).substr(0, paren));
+                }
+                if (!name.empty())
+                    candidates.emplace_back(name, rank);
+            }
+        }
+        return candidates;
+    }
+
+    // The known spell a macro line names: that rank when it names one and it
+    // is in the spellbook, else the highest rank the spellbook lists.
+    uint32 FindKnownSpell(Player const* player, std::string const& name, uint32 rank)
+    {
+        std::string const wanted = Lower(name);
+        std::string const wantedRank = rank ? Trinity::StringFormat("rank {}", rank) : std::string();
+        uint32 best = 0;
+        uint8 bestRank = 0;
+        for (auto const& [spell, known] : player->GetSpellMap())
+        {
+            if (known.state == PLAYERSPELL_REMOVED || known.disabled || !known.active)
+                continue;
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
+            if (!info || !info->SpellName[LOCALE_enUS] || Lower(info->SpellName[LOCALE_enUS]) != wanted)
+                continue;
+            if (rank && info->Rank[LOCALE_enUS] && Lower(info->Rank[LOCALE_enUS]) == wantedRank)
+                return spell;
+            uint8 const thisRank = sSpellMgr->GetSpellRank(spell);
+            if (!best || thisRank > bestRank)
+            {
+                best = spell;
+                bestRank = thisRank;
+            }
+        }
+        return best;
+    }
+
     std::shared_ptr<Kit> ParseKit(KitQueryHolder const& holder)
     {
         PreparedQueryResult character = holder.GetPreparedResult(KIT_QUERY_CHARACTER);
@@ -335,17 +496,17 @@ namespace
 
         // Already the active group's (the statement joins activeTalentGroup).
         // A macro or an equipment set on a button is only an index: the client
-        // looks it up among ITS character's macros and sets. The source's
-        // character macros and sets would show the player's own, so they are
-        // left off; its account macros are the player's too, except for a
-        // template, which lives on another account.
+        // looks it up among ITS character's macros and sets. Sets are left
+        // off; character macros are kept here and turned into the spell the
+        // macro casts in Build (CharacterMacros); account macros are the
+        // player's too, except for a template, which lives on another account.
         if (PreparedQueryResult result = holder.GetPreparedResult(KIT_QUERY_ACTIONS))
         {
             do
             {
                 Field* row = result->Fetch();
                 uint8 const type = row[2].GetUInt8();
-                if (type == ACTION_BUTTON_CMACRO || type == ACTION_BUTTON_EQSET || (kit->Template && type == ACTION_BUTTON_MACRO))
+                if (type == ACTION_BUTTON_EQSET || (kit->Template && type == ACTION_BUTTON_MACRO))
                     continue;
                 kit->Buttons.push_back({ row[0].GetUInt8(), row[1].GetUInt32(), type });
             } while (result->NextRow());
@@ -356,6 +517,22 @@ namespace
             do
                 kit->RewardedQuests.push_back(result->Fetch()[0].GetUInt32());
             while (result->NextRow());
+        }
+
+        //   0     1     2
+        // type, time, data
+        if (PreparedQueryResult result = holder.GetPreparedResult(KIT_QUERY_ACCOUNT_DATA))
+        {
+            do
+            {
+                Field* row = result->Fetch();
+                uint8 const type = row[0].GetUInt8();
+                std::string const data = row[2].GetString();
+                if (type == PER_CHARACTER_BINDINGS_CACHE)
+                    ParseBindings(data, *kit);
+                else if (type == PER_CHARACTER_MACROS_CACHE)
+                    ParseMacros(data, *kit);
+            } while (result->NextRow());
         }
 
         if (PreparedQueryResult result = holder.GetPreparedResult(KIT_QUERY_GLYPHS))
@@ -625,6 +802,30 @@ namespace
         player->SendProficiency(ITEM_CLASS_ARMOR, player->GetArmorProficiency());
         if (player->GetPet())
             player->PetSpellInitialize();
+    }
+
+    // CENTURION_AllStar puts the persona's keybindings on the client (never
+    // saved there) and the player's own back on RESET.
+    void SendBindings(Player* player, Kit const* kit)
+    {
+        WorldSession* session = player->GetSession();
+        if (!session || session->IsVirtualSession())
+            return;
+
+        if (!kit || kit->Template)
+        {
+            SendAddonLine(player, "BIND:RESET");
+            return;
+        }
+        if (!kit->OwnBindings)
+        {
+            SendAddonLine(player, "BIND:ACCOUNT");
+            return;
+        }
+        SendAddonLine(player, "BIND:BEGIN");
+        for (auto const& [key, command] : kit->Bindings)
+            SendAddonLine(player, "BIND:" + key + " " + command);
+        SendAddonLine(player, "BIND:END");
     }
 
     void NoteSwap(Player const* player)
@@ -1174,8 +1375,26 @@ void PersonaAccess::Build(Player* player, PersonaStash& stash, Kit const& kit)
     {
         if (button.Button >= MAX_ACTION_BUTTONS)
             continue;
+
+        uint32 action = button.Action;
+        uint8 type = button.Type;
+        if (type == ACTION_BUTTON_CMACRO)
+        {
+            // The spell the macro casts, if the persona knows one of them.
+            auto const macro = kit.CharacterMacros.find(button.Action);
+            if (macro == kit.CharacterMacros.end())
+                continue;
+            action = 0;
+            for (auto const& [name, rank] : MacroSpellCandidates(macro->second))
+                if ((action = FindKnownSpell(player, name, rank)))
+                    break;
+            if (!action)
+                continue;
+            type = ACTION_BUTTON_SPELL;
+        }
+
         ActionButton& ab = player->m_actionButtons[button.Button];
-        ab.SetActionAndType(button.Action, ActionButtonType(button.Type));
+        ab.SetActionAndType(action, ActionButtonType(type));
         ab.uState = ACTIONBUTTON_UNCHANGED;
     }
 
@@ -1247,6 +1466,7 @@ bool PersonaAccess::Apply(Player* player, KitPtr const& kit)
     Build(player, stash, *kit);
     NoteSwap(player);
     SyncClient(player, before);
+    SendBindings(player, kit.get());
 
     TC_LOG_DEBUG("bg.battleground", "All-Star: {} ({}) now wears {} ({}, class {}{}): {} spells, {} talents, {} pieces.",
         player->GetName(), player->GetGUID().GetCounter(), kit->Name, kit->Source, uint32(kit->Class),
@@ -1346,7 +1566,10 @@ void PersonaAccess::Restore(Player* player)
     }
     NoteSwap(player);
     if (player->IsInWorld())
+    {
         SyncClient(player, before);
+        SendBindings(player, nullptr);
+    }
 }
 
 void PersonaAccess::Maintain(Player* player)
