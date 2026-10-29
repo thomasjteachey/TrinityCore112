@@ -97,6 +97,13 @@ namespace Movement
     // a minute at a time. A step, a ledge lip or a floor the leg climbs over
     // leaves the space above the head open, and the navmesh walks it. A point
     // past a low wall is off the mesh or on an island of its own.
+    //
+    // A leg still held, in an arena or a battleground, can be split over the
+    // floor instead (SplitBotSplineLegOverNavMeshFloor): a point on the
+    // navmesh where it rises over the line, each shorter leg through this
+    // same test. That relaxes nothing above; it only lets a route follow a
+    // lip the navmesh walks, where the straight leg ran into the top of it.
+
     // The gates a battleground still has standing, by position. Gates are
     // gameobjects and the navmesh holds none, so the pathfinder draws its
     // routes straight through a closed Strand of the Ancients or Isle of
@@ -177,27 +184,28 @@ namespace Movement
         return blockedAt(1.5f) && blockedAt(4.0f);
     }
 
+    static constexpr float BotSplineChestHeight = 1.5f;
+    static constexpr float BotSplineOverheadHeight = 2.5f;
+
+    static bool IsBotSplineRayBlocked(Unit const* unit, Map const* map, Vector3 const& from, Vector3 const& to, float height)
+    {
+        return !map->isInLineOfSight(from.x, from.y, from.z + height, to.x, to.y, to.z + height,
+            unit->GetPhaseMask(), LINEOFSIGHT_CHECK_VMAP, VMAP::ModelIgnoreFlags::M2);
+    }
+
     static bool IsBotSplineLegBlocked(Unit const* unit, Map const* map, std::optional<PathGenerator>& navmesh,
         Vector3 const& from, Vector3 const& to)
     {
-        auto const blockedAt = [map, unit](Vector3 const& a, Vector3 const& b, float height)
-        {
-            return !map->isInLineOfSight(a.x, a.y, a.z + height, b.x, b.y, b.z + height,
-                unit->GetPhaseMask(), LINEOFSIGHT_CHECK_VMAP, VMAP::ModelIgnoreFlags::M2);
-        };
-
-        constexpr float ChestHeight = 1.5f;
-        constexpr float OverheadHeight = 2.5f;
         if ((to - from).squaredLength() < 0.25f)
             return false;
 
         if (IsBotSplineLegThroughGate(unit, map, from, to))
             return true;
 
-        if (!blockedAt(from, to, ChestHeight))
+        if (!IsBotSplineRayBlocked(unit, map, from, to, BotSplineChestHeight))
             return false;
 
-        if (!map->IsBattleArena() && !blockedAt(from, to, OverheadHeight))
+        if (!map->IsBattleArena() && !IsBotSplineRayBlocked(unit, map, from, to, BotSplineOverheadHeight))
         {
             if (!navmesh)
                 navmesh.emplace(unit);
@@ -208,20 +216,147 @@ namespace Movement
         return true;
     }
 
-    static bool FindBotSplineWallCrossing(Unit const* unit, PointsArray const& path, uint32& blockedLeg,
-        std::optional<PathGenerator>& navmesh)
+    // A held leg can be plain floor all the same: a raised lip or a step the
+    // navmesh climbs (up to 1.6 yards at a time) standing above the straight
+    // line between two route points, so the chest ray over both ends runs into
+    // the top of it. Thakraj's centre ring is one, a rim 1.2 yards high and two
+    // wide on the platform floor: routes across the ring were held at its
+    // edge, and bots running to the middle stood still or slid back. Nagrand's
+    // pillar bases, a Lordaeron step and the low wall inside Nefarian's Horde
+    // gate (where Durgan froze) are others.
+    //
+    // So the leg gets points on the navmesh floor where it rises over the line,
+    // as the terrain hug does on open ground, and every shorter leg goes
+    // through the full leg test again. The split is only tried where the
+    // navmesh itself walks the leg (GetNavMeshFloorAlongLine), on a short leg,
+    // under open space 2.5 yards up: a lip leaves that open, a wall or a ramp
+    // overhead does not. A leg out of an arena has no navmesh under its far
+    // part, so it stays held. Offline, against every arena wall edge with legs
+    // four and eight yards out, it released none the chest ray held.
+    static constexpr float NavMeshFloorSampleStep = 0.5f;
+    static constexpr float NavMeshFloorMinRise = 0.25f;     // floor this little over the line is left alone
+    static constexpr float NavMeshFloorMaxLeg = 8.0f;       // two route steps
+    static constexpr uint32 NavMeshFloorMaxDepth = 4;
+    static constexpr uint32 NavMeshFloorMaxRoutePoints = 512;
+    // The navmesh smooths its floor over a thin wall or a gap; a point the real
+    // floor puts further than this off the navmesh is not on that floor.
+    static constexpr float NavMeshFloorMaxSnap = 1.5f;
+
+    struct NavMeshFloorSample
+    {
+        float t;            // along the held leg, 0 at its start and 1 at its end
+        Vector3 point;
+    };
+
+    // False when a point would not sit on the floor the navmesh describes.
+    static bool AppendNavMeshFloorLeg(Unit const* unit, Vector3 const& from, Vector3 const& to, float fromT, float toT,
+        std::vector<NavMeshFloorSample> const& samples, uint32 depth, PointsArray& out)
+    {
+        if (depth < NavMeshFloorMaxDepth)
+        {
+            float bestRise = NavMeshFloorMinRise;
+            NavMeshFloorSample const* best = nullptr;
+            for (NavMeshFloorSample const& sample : samples)
+            {
+                if (sample.t <= fromT || sample.t >= toT)
+                    continue;
+
+                float const u = (sample.t - fromT) / (toT - fromT);
+                float const rise = sample.point.z - (from.z + (to.z - from.z) * u);
+                if (rise > bestRise)
+                {
+                    bestRise = rise;
+                    best = &sample;
+                }
+            }
+
+            if (best)
+            {
+                // Onto the real floor there, as the route's own points are.
+                Vector3 step = best->point;
+                unit->UpdateAllowedPositionZ(step.x, step.y, step.z);
+                if (std::fabs(step.z - best->point.z) > NavMeshFloorMaxSnap)
+                    return false;
+                return AppendNavMeshFloorLeg(unit, from, step, fromT, best->t, samples, depth + 1, out) &&
+                    AppendNavMeshFloorLeg(unit, step, to, best->t, toT, samples, depth + 1, out);
+            }
+        }
+
+        out.push_back(to);
+        return true;
+    }
+
+    // On success `floorPoints` holds the points to put between `from` and `to`.
+    static bool SplitBotSplineLegOverNavMeshFloor(Unit const* unit, Map const* map, std::optional<PathGenerator>& navmesh,
+        Vector3 const& from, Vector3 const& to, PointsArray& floorPoints)
+    {
+        floorPoints.clear();
+
+        float const dx = to.x - from.x;
+        float const dy = to.y - from.y;
+        float const lengthSq = dx * dx + dy * dy;
+        if (lengthSq < 0.25f || lengthSq > NavMeshFloorMaxLeg * NavMeshFloorMaxLeg)
+            return false;
+
+        if (IsBotSplineRayBlocked(unit, map, from, to, BotSplineOverheadHeight))
+            return false;
+
+        if (!navmesh)
+            navmesh.emplace(unit);
+
+        std::vector<Vector3> floor;
+        if (!navmesh->GetNavMeshFloorAlongLine(from, to, NavMeshFloorSampleStep, floor) || floor.empty())
+            return false;
+
+        std::vector<NavMeshFloorSample> samples;
+        samples.reserve(floor.size());
+        for (Vector3 const& point : floor)
+            samples.push_back({ ((point.x - from.x) * dx + (point.y - from.y) * dy) / lengthSq, point });
+
+        PointsArray legEnds;
+        if (!AppendNavMeshFloorLeg(unit, from, to, 0.0f, 1.0f, samples, 0, legEnds) || legEnds.size() < 2)
+            return false;
+
+        Vector3 legStart = from;
+        for (Vector3 const& legEnd : legEnds)
+        {
+            if (IsBotSplineLegBlocked(unit, map, navmesh, legStart, legEnd))
+                return false;
+            legStart = legEnd;
+        }
+
+        // The last leg end is `to`, already on the route.
+        floorPoints.assign(legEnds.begin(), legEnds.end() - 1);
+        return true;
+    }
+
+    // `floorSplits` counts the held legs split over the floor; only a plain run
+    // on the ground (`followFloor`) is split, as only it is terrain-hugged.
+    static bool FindBotSplineWallCrossing(Unit const* unit, PointsArray& path, uint32& blockedLeg,
+        std::optional<PathGenerator>& navmesh, bool followFloor, uint32& floorSplits)
     {
         Map const* map = unit->FindMap();
         if (!map || !map->IsBattlegroundOrArena())
             return false;
 
+        PointsArray floorPoints;
         for (uint32 i = 1; i < path.size(); ++i)
         {
-            if (IsBotSplineLegBlocked(unit, map, navmesh, path[i - 1], path[i]))
+            if (!IsBotSplineLegBlocked(unit, map, navmesh, path[i - 1], path[i]))
+                continue;
+
+            if (followFloor && path.size() < NavMeshFloorMaxRoutePoints &&
+                SplitBotSplineLegOverNavMeshFloor(unit, map, navmesh, path[i - 1], path[i], floorPoints))
             {
-                blockedLeg = i;
-                return true;
+                path.insert(path.begin() + i, floorPoints.begin(), floorPoints.end());
+                ++floorSplits;
+                // Every leg up to the old leg end is tested clear.
+                i += uint32(floorPoints.size());
+                continue;
             }
+
+            blockedLeg = i;
+            return true;
         }
 
         return false;
@@ -240,7 +375,7 @@ namespace Movement
     // this never lets a bot walk a leg the guard would refuse; it only changes
     // where the route starts. Steps that bend the route least are tried first.
     static bool TryBotSplineSidestep(Unit const* unit, PointsArray& path, uint32& blockedLeg,
-        std::optional<PathGenerator>& navmesh)
+        std::optional<PathGenerator>& navmesh, bool followFloor, uint32& floorSplits)
     {
         Map const* map = unit->FindMap();
         if (!map || path.size() < 2)
@@ -295,7 +430,7 @@ namespace Movement
 
                 path.insert(path.begin() + 1, step);
                 blockedLeg = 0;
-                FindBotSplineWallCrossing(unit, path, blockedLeg, navmesh);
+                FindBotSplineWallCrossing(unit, path, blockedLeg, navmesh, followFloor, floorSplits);
                 return true;
             }
         }
@@ -449,32 +584,41 @@ namespace Movement
             // A plain run on the ground only: an arc, a fall, a swim or a flight
             // is not meant to follow the terrain, and a waypoint route's point
             // indexes must stay the ones it was given.
-            if (serverDriven && args.path_Idx_offset == 0 && args.flags.isLinear() && !args.flags.parabolic &&
+            bool const plainGroundRun = serverDriven && args.path_Idx_offset == 0 && args.flags.isLinear() && !args.flags.parabolic &&
                 !args.flags.falling && !args.flags.animation && !args.flags.cyclic && !args.flags.flying &&
-                !unit->IsFlying() && !unit->IsHovering() && !unit->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
+                !unit->IsFlying() && !unit->IsHovering() && !unit->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+            if (plainGroundRun)
                 HugBotSplineToTerrain(unit, args.path);
 
+            // Map updates run one map per thread and a bot is on one map, so a
+            // thread-local throttle needs no lock. One line per bot per five
+            // seconds: a generator that keeps re-requesting the same blocked
+            // route would otherwise log every tick.
+            auto const logThrottled = [this]()
+            {
+                thread_local std::unordered_map<uint64, uint32> lastLogMsByGuid;
+                uint32 const nowMs = GameTime::GetGameTimeMS();
+                uint32& lastLogMs = lastLogMsByGuid[unit->GetGUID().GetRawValue()];
+                if (lastLogMs && nowMs - lastLogMs < 5000)
+                    return false;
+                lastLogMs = nowMs;
+                return true;
+            };
+
             uint32 blockedLeg = 0;
+            uint32 floorSplits = 0;
             std::optional<PathGenerator> navmesh;
-            if (serverDriven && FindBotSplineWallCrossing(unit, args.path, blockedLeg, navmesh))
+            if (serverDriven && FindBotSplineWallCrossing(unit, args.path, blockedLeg, navmesh, plainGroundRun, floorSplits))
             {
                 // Only a plain run is bent around a corner. A jump, knockback
                 // or fall keeps its own arc, so it is held as before.
                 Vector3 const heldTo = args.path[1];
                 bool const sidestepped = blockedLeg == 1 && args.flags.isLinear() && !args.flags.parabolic &&
                     !args.flags.falling && !args.flags.animation && !args.flags.cyclic &&
-                    TryBotSplineSidestep(unit, args.path, blockedLeg, navmesh);
+                    TryBotSplineSidestep(unit, args.path, blockedLeg, navmesh, plainGroundRun, floorSplits);
 
-                // Map updates run one map per thread and a bot is on one map,
-                // so a thread-local throttle needs no lock. One line per bot
-                // per five seconds: a generator that keeps re-requesting the
-                // same blocked route would otherwise log every tick.
-                thread_local std::unordered_map<uint64, uint32> lastLogMsByGuid;
-                uint32 const nowMs = GameTime::GetGameTimeMS();
-                uint32& lastLogMs = lastLogMsByGuid[unit->GetGUID().GetRawValue()];
-                if (!lastLogMs || nowMs - lastLogMs >= 5000)
+                if (logThrottled())
                 {
-                    lastLogMs = nowMs;
                     MotionMaster const* motionMaster = unit->GetMotionMaster();
                     uint32 const motionType = motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0u;
                     Vector3 const& end = args.path.back();
@@ -522,6 +666,18 @@ namespace Movement
                     args.flags.parabolic = false;
                     args.flags.animation = false;
                 }
+            }
+            else if (floorSplits && logThrottled())
+            {
+                MotionMaster const* motionMaster = unit->GetMotionMaster();
+                uint32 const motionType = motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0u;
+                Vector3 const& start = args.path.front();
+                Vector3 const& end = args.path.back();
+                TC_LOG_INFO("playerbots.movement.spline",
+                    "PB spline: bot={} mover={} outcome=floor-split map={} motion_type={} points={} split_legs={} "
+                    "start=({}, {}, {}) final=({}, {}, {}).",
+                    driver->GetGUID().ToString(), unit->GetGUID().ToString(), unit->GetMapId(), motionType,
+                    uint32(args.path.size()), floorSplits, start.x, start.y, start.z, end.x, end.y, end.z);
             }
         }
 

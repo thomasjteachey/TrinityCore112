@@ -848,6 +848,97 @@ bool PathGenerator::FindNearestNavMeshPoint(G3D::Vector3 const& point, float hor
     return true;
 }
 
+// moveAlongSurface is the walk FindSmoothPath takes: it slides past a corner
+// the line grazes, where a straight dtNavMeshQuery::raycast stops dead on a
+// string-pulled route, and it only looks for `to` within a circle through both
+// points, so a point past a wall is never reached by going round it.
+bool PathGenerator::GetNavMeshFloorAlongLine(G3D::Vector3 const& from, G3D::Vector3 const& to, float sampleStep,
+    std::vector<G3D::Vector3>& floor) const
+{
+    floor.clear();
+
+    // Same staleness rule as IsNavMeshConnected.
+    if (!_navMesh || !_navMeshQuery || _navMapId != _source->GetMapId() || _navInstanceId != _source->GetInstanceId())
+        return false;
+
+    if (!HaveTile(from) || !HaveTile(to) || sampleStep <= 0.0f)
+        return false;
+
+    // Two floors of one place stand at least an agent height (1.6 yards)
+    // apart; a walk that ends further than this off `to` reached another one.
+    constexpr float EndHeightTolerance = 1.5f;
+    // A line off the walk's polygons for longer than one sample left the
+    // floor: an agent radius of navmesh is cut away either side of a wall.
+    constexpr uint32 MaxMissedSamples = 1;
+    constexpr uint32 MaxSamples = 64;
+    constexpr int MaxWalkPolys = 32;
+
+    float const extents[VERTEX_SIZE] = { 0.5f, 2.0f, 0.5f };
+    float const startPoint[VERTEX_SIZE] = { from.y, from.z, from.x };
+    float const endPoint[VERTEX_SIZE] = { to.y, to.z, to.x };
+    float startNearest[VERTEX_SIZE];
+    dtPolyRef startPoly = INVALID_POLYREF;
+    if (dtStatusFailed(_navMeshQuery->findNearestPoly(startPoint, extents, &_filter, &startPoly, startNearest)) || startPoly == INVALID_POLYREF)
+        return false;
+
+    float reached[VERTEX_SIZE];
+    dtPolyRef walk[MaxWalkPolys];
+    int walkLength = 0;
+    dtStatus const status = _navMeshQuery->moveAlongSurface(startPoly, startNearest, endPoint, &_filter, reached, walk, &walkLength, MaxWalkPolys);
+    if (dtStatusFailed(status) || (status & DT_BUFFER_TOO_SMALL) || walkLength <= 0)
+        return false;
+
+    // The walk ends exactly on `to` only when a polygon it reached holds it;
+    // otherwise it stops against the wall nearest to it.
+    if (dtVdist2DSqr(reached, endPoint) > 0.0001f)
+        return false;
+
+    float endHeight;
+    if (dtStatusFailed(_navMeshQuery->getPolyHeight(walk[walkLength - 1], endPoint, &endHeight)) ||
+        std::fabs(endHeight - to.z) > EndHeightTolerance)
+        return false;
+
+    float const dx = to.x - from.x;
+    float const dy = to.y - from.y;
+    uint32 const samples = std::min(MaxSamples, std::max(2u, uint32(std::sqrt(dx * dx + dy * dy) / sampleStep)));
+    uint32 missed = 0;
+    for (uint32 s = 1; s < samples; ++s)
+    {
+        float const t = float(s) / float(samples);
+        float const lineZ = from.z + (to.z - from.z) * t;
+        float const point[VERTEX_SIZE] = { from.y + dy * t, lineZ, from.x + dx * t };
+
+        // Of the walk's polygons under the point, the floor nearest the line:
+        // the walk can pass over or under itself.
+        bool found = false;
+        float floorZ = 0.0f;
+        for (int i = 0; i < walkLength; ++i)
+        {
+            float height;
+            if (dtStatusFailed(_navMeshQuery->getPolyHeight(walk[i], point, &height)))
+                continue;
+            if (!found || std::fabs(height - lineZ) < std::fabs(floorZ - lineZ))
+                floorZ = height;
+            found = true;
+        }
+
+        if (!found)
+        {
+            if (++missed > MaxMissedSamples)
+            {
+                floor.clear();
+                return false;
+            }
+            continue;
+        }
+
+        missed = 0;
+        floor.emplace_back(point[2], point[0], floorZ);
+    }
+
+    return true;
+}
+
 uint32 PathGenerator::FixupCorridor(dtPolyRef* path, uint32 npath, uint32 maxPath, dtPolyRef const* visited, uint32 nvisited)
 {
     int32 furthestPath = -1;

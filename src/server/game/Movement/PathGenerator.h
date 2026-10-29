@@ -80,6 +80,15 @@ class TC_GAME_API PathGenerator
         bool FindNearestNavMeshPoint(G3D::Vector3 const& point, float horizontalRange, G3D::Vector3& nearest,
             float verticalRange = 2.5f) const;
 
+        // The navmesh floor under the straight line between two points, when
+        // the navmesh walks that line: a walk along the surface from the
+        // polygon under `from` reaches `to` on a polygon at its height, and the
+        // line never runs more than one sample off that walk's polygons. Fills
+        // `floor` with the floor every `sampleStep` yards strictly between the
+        // two ends, in order from `from`.
+        bool GetNavMeshFloorAlongLine(G3D::Vector3 const& from, G3D::Vector3 const& to, float sampleStep,
+            std::vector<G3D::Vector3>& floor) const;
+
         // option setters - use optional
         void SetUseStraightPath(bool useStraightPath) { _useStraightPath = useStraightPath; }
         void SetPathLengthLimit(float distance) { _pointPathLimit = std::min<uint32>(uint32(distance/SMOOTH_PATH_STEP_SIZE), MAX_POINT_PATH_LENGTH); }
