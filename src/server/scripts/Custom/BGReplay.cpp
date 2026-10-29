@@ -208,6 +208,10 @@ namespace
         uint32 LastChannelClearMs = 0;
         uint32 ChannelClearBursts = 0;
 
+        // Participants the recording shows released (a ghost) and not back yet,
+        // by original guid. The viewer keeps their body where it fell.
+        std::unordered_set<uint64> ReleasedActors;
+
         // V103 diagnostic controls. These are activated by chat markers like .replaymark / .replaystep.
         bool ProbePaused = false;
         uint32 ProbeStepBudget = 0;
@@ -965,6 +969,7 @@ namespace
         constexpr uint8 REPLAY_AFLAG_CASTER = 0x08;
         constexpr uint8 REPLAY_AFLAG_DURATION = 0x20;
         constexpr uint32 REPLAY_SPELL_GHOST = 8326;
+        constexpr uint32 REPLAY_SPELL_GHOST_WISP = 20584;  // the night elf ghost (Player::BuildPlayerRepop)
 
         size_t pos = 0;
         if (!RewritePackedGuidAt(payload, pos, match))
@@ -1022,7 +1027,7 @@ namespace
                 pos += 8;
             }
 
-            if (spellId == REPLAY_SPELL_GHOST)
+            if (spellId == REPLAY_SPELL_GHOST || spellId == REPLAY_SPELL_GHOST_WISP)
             {
                 // Arena replays keep fake participant objects alive after death so later combat/movement packets
                 // cannot target a destroyed player object. Do not replay the death ghost aura, though: it makes
@@ -1686,7 +1691,48 @@ namespace
         }
     }
 
-    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
+    // Releasing spirit (Player::BuildPlayerRepop) turns a dead body into a ghost:
+    // PLAYER_FLAGS_GHOST, 1 health, a wisp display for a night elf. The living on the
+    // other team never see that ghost, and the replay viewer should not either, yet a
+    // recorder on the ghost's own team does, so the recording follows it. While a
+    // participant is released none of that reaches the viewer: the body stays dead where
+    // it fell until a block shows them alive (no ghost flag) again.
+    //
+    // `released` tracks it across packets; `isCreate` says the values are a create
+    // block's, which carries every field that is set, so no PLAYER_FLAGS means alive.
+    void HideReleasedReplayActorGhost(ReplayActor const& actor, std::vector<ReplayUpdateFieldValue>& values,
+        std::unordered_set<uint64>& released, bool isCreate)
+    {
+        uint64 const raw = actor.OriginalGuid.GetRawValue();
+        bool isReleased = released.count(raw) != 0;
+
+        auto flags = std::find_if(values.begin(), values.end(),
+            [](ReplayUpdateFieldValue const& value) { return value.FieldIndex == PLAYER_FLAGS; });
+
+        if (flags != values.end())
+            isReleased = (flags->Value & PLAYER_FLAGS_GHOST) != 0;
+        else if (isCreate)
+            isReleased = false;
+
+        if (!isReleased)
+        {
+            released.erase(raw);
+            return;
+        }
+
+        released.insert(raw);
+
+        if (flags != values.end())
+            flags->Value &= ~uint32(PLAYER_FLAGS_GHOST);
+
+        values.erase(std::remove_if(values.begin(), values.end(), [](ReplayUpdateFieldValue const& value)
+        {
+            return value.FieldIndex == UNIT_FIELD_HEALTH || value.FieldIndex == UNIT_FIELD_DISPLAYID;
+        }), values.end());
+    }
+
+    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid,
+        std::unordered_set<uint64>* released = nullptr, bool isCreate = false)
     {
         size_t blockPayloadStart = pos;
 
@@ -1776,6 +1822,9 @@ namespace
                 keptValues.push_back({ fieldIndex, value });
             }
         }
+
+        if (actor && released)
+            HideReleasedReplayActorGhost(*actor, keptValues, *released, isCreate);
 
         RewriteTargetGuidInKeptValues(keptValues, match, blockGuid);
 
@@ -2044,7 +2093,8 @@ namespace
         return true;
     }
 
-    bool RewriteUpdateObjectPayloadBlocks(std::vector<uint8>& payload, MatchRecord const& match, size_t pos, uint32 blockCount, char const* layoutName, size_t& endPos)
+    bool RewriteUpdateObjectPayloadBlocks(std::vector<uint8>& payload, MatchRecord const& match, size_t pos, uint32 blockCount, char const* layoutName, size_t& endPos,
+        std::unordered_set<uint64>* released = nullptr)
     {
         constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
         constexpr uint8 REPLAY_UPDATETYPE_MOVEMENT = 1;
@@ -2065,16 +2115,38 @@ namespace
 
             if (updateType == REPLAY_UPDATETYPE_OUT_OF_RANGE_OBJECTS || updateType == REPLAY_UPDATETYPE_NEAR_OBJECTS)
             {
+                size_t const countPos = pos;
                 uint32 guidCount = 0;
                 if (!ReadUInt32(payload, pos, guidCount))
                     return false;
 
+                uint32 keptCount = 0;
                 for (uint32 i = 0; i < guidCount; ++i)
                 {
+                    size_t const guidPos = pos;
                     ObjectGuid guid;
+                    if (!ReadPackedGuid(payload, pos, guid))
+                        return false;
+
+                    // A participant leaves a recorder's sight when they stealth, vanish or
+                    // release spirit, and the viewer keeps them, as with SMSG_DESTROY_OBJECT
+                    // (RewriteNonUpdatePacketGuids): replay actors live the whole replay.
+                    if (updateType == REPLAY_UPDATETYPE_OUT_OF_RANGE_OBJECTS && FindReplayActorByOriginalGuid(match, guid))
+                    {
+                        payload.erase(payload.begin() + guidPos, payload.begin() + pos);
+                        pos = guidPos;
+                        continue;
+                    }
+
+                    pos = guidPos;
                     if (!RewritePackedGuidAtResize(payload, pos, match, &guid))
                         return false;
+
+                    ++keptCount;
                 }
+
+                if (keptCount != guidCount)
+                    WriteUInt32(payload, countPos, keptCount);
 
                 continue;
             }
@@ -2094,7 +2166,7 @@ namespace
             {
                 case REPLAY_UPDATETYPE_VALUES:
                 {
-                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid, released, false))
                         return false;
 
                     break;
@@ -2116,7 +2188,7 @@ namespace
                     if (!SkipMovementCreateData(payload, pos, match, blockGuid, objectTypeId))
                         return false;
 
-                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid, released, true))
                         return false;
 
                     break;
@@ -2130,7 +2202,8 @@ namespace
         return true;
     }
 
-    bool TryRewriteUpdateObjectPayloadLayout(std::vector<uint8> const& originalPayload, MatchRecord const& match, bool hasHeaderByte, std::vector<uint8>& rewritten, size_t& endPos)
+    bool TryRewriteUpdateObjectPayloadLayout(std::vector<uint8> const& originalPayload, MatchRecord const& match, bool hasHeaderByte, std::vector<uint8>& rewritten, size_t& endPos,
+        std::unordered_set<uint64>* released = nullptr)
     {
         rewritten = originalPayload;
         endPos = 0;
@@ -2154,7 +2227,7 @@ namespace
         }
 
         char const* layoutName = hasHeaderByte ? "with-header-byte" : "no-header-byte";
-        if (!RewriteUpdateObjectPayloadBlocks(rewritten, match, pos, blockCount, layoutName, endPos))
+        if (!RewriteUpdateObjectPayloadBlocks(rewritten, match, pos, blockCount, layoutName, endPos, released))
             return false;
 
         if (endPos != rewritten.size())
@@ -2167,7 +2240,7 @@ namespace
         return true;
     }
 
-    bool RewriteUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
+    bool RewriteUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match, std::unordered_set<uint64>* released = nullptr)
     {
         // 3.3.5 update-object payloads are annoyingly easy to misparse across branches:
         //
@@ -2187,16 +2260,31 @@ namespace
         std::vector<uint8> rewritten;
         size_t endPos = 0;
 
-        if (TryRewriteUpdateObjectPayloadLayout(payload, match, false, rewritten, endPos))
+        // Each layout attempt tracks releases on its own copy; only the one that
+        // parses is kept.
+        std::unordered_set<uint64> releasedAttempt;
+        std::unordered_set<uint64>* attempt = released ? &releasedAttempt : nullptr;
+
+        if (released)
+            releasedAttempt = *released;
+
+        if (TryRewriteUpdateObjectPayloadLayout(payload, match, false, rewritten, endPos, attempt))
         {
             payload.swap(rewritten);
+            if (released)
+                released->swap(releasedAttempt);
             TC_LOG_DEBUG("arena.replay", "Replay update-object used no-header-byte layout size={}", uint32(payload.size()));
             return true;
         }
 
-        if (TryRewriteUpdateObjectPayloadLayout(payload, match, true, rewritten, endPos))
+        if (released)
+            releasedAttempt = *released;
+
+        if (TryRewriteUpdateObjectPayloadLayout(payload, match, true, rewritten, endPos, attempt))
         {
             payload.swap(rewritten);
+            if (released)
+                released->swap(releasedAttempt);
             TC_LOG_DEBUG("arena.replay", "Replay update-object used with-header-byte layout size={}", uint32(payload.size()));
             return true;
         }
@@ -2273,7 +2361,8 @@ namespace
 
 
     
-    bool RewriteCompressedUpdateObjectPayloadToUncompressed(std::vector<uint8>& payload, MatchRecord const& match)
+    bool RewriteCompressedUpdateObjectPayloadToUncompressed(std::vector<uint8>& payload, MatchRecord const& match,
+        std::unordered_set<uint64>* released = nullptr)
     {
         if (payload.size() < 4)
             return false;
@@ -2298,7 +2387,7 @@ namespace
             return false;
         }
 
-        if (!RewriteUpdateObjectPayload(decompressed, match))
+        if (!RewriteUpdateObjectPayload(decompressed, match, released))
         {
             TC_LOG_ERROR("arena.replay", "REPLAY_V104 compressed update parser failed after decompress; skipping compressed update rawSize={} uncompressedSize={}",
                 uint32(payload.size()), uncompressedSize);
@@ -2605,7 +2694,36 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             && payload.size() == 286;
     }
 
-    bool BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, WorldPacket& out)
+    // A released participant's ghost walks off to wherever it waits; the viewer keeps
+    // the body where it fell (HideReleasedReplayActorGhost), so none of that is replayed.
+    bool IsReleasedReplayActorMovement(PacketRecord const& frame, std::unordered_set<uint64> const& released)
+    {
+        if (released.empty() || frame.Packet.empty() || !IsMovementLikeOpcode(frame.Packet.GetOpcode()))
+            return false;
+
+        // Every movement-like opcode starts with the mover's packed guid.
+        uint8 const* data = frame.Packet.contents();
+        size_t const size = frame.Packet.size();
+        uint8 const mask = data[0];
+        size_t pos = 1;
+        uint64 mover = 0;
+
+        for (uint8 i = 0; i < 8; ++i)
+        {
+            if (!(mask & (1 << i)))
+                continue;
+
+            if (pos >= size)
+                return false;
+
+            mover |= uint64(data[pos++]) << (i * 8);
+        }
+
+        return released.count(mover) != 0;
+    }
+
+    bool BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, WorldPacket& out,
+        std::unordered_set<uint64>* released = nullptr)
     {
         std::vector<uint8> payload;
         payload.resize(frame.Packet.size());
@@ -2626,7 +2744,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             // 502 decimal is 0x1F6 / SMSG_COMPRESSED_UPDATE_OBJECT. Convert it to a normal
             // SMSG_UPDATE_OBJECT after decompressing and applying the same structural GUID rewrite. This removes
             // the client's compressed-update-object handler from the equation without dropping the update itself.
-            rewriteOk = RewriteCompressedUpdateObjectPayloadToUncompressed(payload, match);
+            rewriteOk = RewriteCompressedUpdateObjectPayloadToUncompressed(payload, match, released);
             if (!rewriteOk)
             {
                 TC_LOG_ERROR("arena.replay", "REPLAY_V104 skipped compressed update-object timestamp={} rawSize={} because conversion failed",
@@ -2638,7 +2756,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         }
         else if (frame.Packet.GetOpcode() == SMSG_UPDATE_OBJECT)
         {
-            rewriteOk = RewriteUpdateObjectPayload(payload, match);
+            rewriteOk = RewriteUpdateObjectPayload(payload, match, released);
         }
         else
         {
@@ -4640,8 +4758,15 @@ public:
             && sentThisUpdate < sendCap)
         {
             PacketRecord const& frame = state.Match.Packets[state.Cursor];
+            if (IsReleasedReplayActorMovement(frame, state.ReleasedActors))
+            {
+                ++state.Cursor;
+                ++sentThisUpdate;
+                continue;
+            }
+
             WorldPacket out;
-            if (!BuildPlaybackPacket(frame, state.Match, out))
+            if (!BuildPlaybackPacket(frame, state.Match, out, &state.ReleasedActors))
             {
                 TC_LOG_ERROR("arena.replay",
                     "REPLAY_PROBE_V102 skipped_build wall={} unixMs={} viewer={} bg={} cursor={} total={} frameTs={} opcode={} rawSize={}",
@@ -4760,6 +4885,7 @@ public:
         state.NameColorUpdateBursts = 0;
         state.LastChannelClearMs = 0;
         state.ChannelClearBursts = 0;
+        state.ReleasedActors.clear();
         state.ProbePaused = false;
         state.ProbeStepBudget = 0;
 
