@@ -126,6 +126,39 @@ namespace
             SendCCGameLine(player, "AM:POOL:" + pool);
     }
 
+    // The Battlemaster (CENTURION_ArenaMaster's battleground window): every
+    // battleground this character can queue for. Whitemane's three take a
+    // side; their joins go through her queue (npc_scarlet_chapel_queue.cpp).
+    //   BGQUEUE:MASTER:<battlemaster guid>:<its battleground>
+    //   BG:BEGIN
+    //   BG:B:<bgTypeId>:<mapId>:<per team>:<min level>:<max level>:<sides 0|1>:<name>
+    //   BG:END:<count>
+    void SendBattlemasterList(Player* player, ObjectGuid master, BattlegroundTypeId preselect)
+    {
+        SendCCGameLine(player, Trinity::StringFormat("BGQUEUE:MASTER:{}:{}", master.GetRawValue(), uint32(preselect)));
+        SendCCGameLine(player, "BG:BEGIN");
+        uint32 count = 0;
+        LocaleConstant const locale = player->GetSession()->GetSessionDbcLocale();
+        for (uint32 i = 0; i < sBattlemasterListStore.GetNumRows(); ++i)
+        {
+            BattlemasterListEntry const* entry = sBattlemasterListStore.LookupEntry(i);
+            if (!entry || entry->InstanceType != MAP_BATTLEGROUND)
+                continue;
+            BattlegroundTypeId const id = BattlegroundTypeId(entry->ID);
+            Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(id);
+            if (!bg || DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, id, nullptr) || !player->GetBGAccessByLevel(id))
+                continue;
+
+            std::string name = entry->Name[locale] && *entry->Name[locale] ? entry->Name[locale] : entry->Name[LOCALE_enUS];
+            name.erase(std::remove(name.begin(), name.end(), ':'), name.end());
+            bool const sides = id == BATTLEGROUND_SCM || id == BATTLEGROUND_BRT || id == BATTLEGROUND_OBC;
+            SendCCGameLine(player, Trinity::StringFormat("BG:B:{}:{}:{}:{}:{}:{}:{}", uint32(id), entry->MapID[0],
+                bg->GetMaxPlayersPerTeam(), bg->GetMinLevel(), bg->GetMaxLevel(), sides ? 1 : 0, name));
+            ++count;
+        }
+        SendCCGameLine(player, Trinity::StringFormat("BG:END:{}", count));
+    }
+
     // ARENAMASTER:JOIN:<mode>:<size>:<group> - the page and bracket the window
     // joins: R rated, S skirmish, MR/MS Four Corners rated/skirmish, B Buffle
     // Shuffle, A All-Star. The slot is the row the old window would have sent
@@ -287,6 +320,12 @@ void WorldSession::SendBattleGroundList(ObjectGuid guid, BattlegroundTypeId bgTy
         }
         bgTypeId = BATTLEGROUND_AA;
     }
+    // A battleground's battlemaster is the Battlemaster: one window for every
+    // battleground, this one picked (CENTURION_ArenaMaster, which hides the
+    // stock list still sent below for a client without it).
+    else if (BattlemasterListEntry const* entry = sBattlemasterListStore.LookupEntry(bgTypeId);
+        guid && entry && entry->InstanceType == MAP_BATTLEGROUND)
+        SendBattlemasterList(_player, guid, bgTypeId);
 
     WorldPacket data;
     sBattlegroundMgr->BuildBattlegroundListPacket(&data, guid, _player, bgTypeId, 0);

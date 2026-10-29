@@ -3,7 +3,9 @@
 #include "BattlegroundQueue.h"
 #include "Group.h"
 #include "GroupReference.h"
+#include "Miscellaneous/AddonRequestRoutes.h"
 #include "Miscellaneous/TournamentMode.h"
+#include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
@@ -12,6 +14,8 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include <DBCStores.h>
+#include "StringConvert.h"
+#include "Util.h"
 #include <algorithm>
 #include <string>
 
@@ -149,6 +153,135 @@ bool QueueGroup(Player* leader, Group* group, BattlegroundTypeId bgTypeId, uint3
     sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, queueTypeId, bgTypeId, bracketEntry->GetBracketId());
     return true;
 }
+
+// Whitemane's queue: the party leader for the party (one queue entry, sized to
+// a side), or the player alone; forcedTeam TEAM_NEUTRAL for either side.
+bool QueueWhitemaneBattleground(Player* player, BattlegroundTypeId bgTypeId, char const* battlegroundName, uint32 forcedTeam)
+{
+    Group* group = player->GetGroup();
+    if (group && !group->IsLeader(player->GetGUID()))
+    {
+        SendQueueError(player, "Only the party leader can queue your group.");
+        return true;
+    }
+
+    if (!group)
+    {
+        if (!QueueSinglePlayer(player, bgTypeId, forcedTeam))
+        {
+            std::string error = "Unable to queue for ";
+            error += battlegroundName;
+            error += " right now.";
+            SendQueueError(player, error.c_str());
+        }
+        else
+            CloseGossipMenuFor(player);
+        return true;
+    }
+
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* member = ref->GetSource();
+        if (!member)
+        {
+            SendQueueError(player, "All party members must be online.");
+            return true;
+        }
+    }
+
+    // A party bigger than one team can hold must be turned away here.
+    // QueueGroup enters it as ONE GroupQueueInfo and BattlegroundQueue
+    // only ever seats a group whole, so an oversized party waits for a
+    // number of free slots its side can never have - it sits in the
+    // queue forever with no error. The honor-tab path is guarded by
+    // Group::CanJoinBattlegroundQueue (BattlemasterList MaxGroupSize);
+    // this NPC bypasses that check, so apply both limits ourselves.
+    // Reachable since Scarlet Chapel dropped to a 5-player cap: a
+    // six-man party is an ordinary thing to walk up with.
+    if (Battleground const* sizeTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId))
+    {
+        uint32 partyCap = sizeTemplate->GetMaxPlayersPerTeam();
+        if (BattlemasterListEntry const* bl = sBattlemasterListStore.LookupEntry(bgTypeId))
+            partyCap = std::min(partyCap, bl->MaxGroupSize);
+
+        if (partyCap && group->GetMembersCount() > partyCap)
+        {
+            std::string error = battlegroundName;
+            error += " holds only ";
+            error += std::to_string(partyCap);
+            error += " per side - your party is too large.";
+            SendQueueError(player, error.c_str());
+            return true;
+        }
+    }
+
+    // Queue the party as ONE queue entry. Calling QueueSinglePlayer per
+    // member (as this used to) created a separate solo GroupQueueInfo
+    // for each of them, so the queue never knew they were together -
+    // and AddGroup's balancing deliberately pushes consecutive solo
+    // entries to opposite sides, which is exactly what scattered
+    // parties across both teams. One entry also lets the group-aware
+    // logic in BattlegroundQueue work: it evicts bots to make room
+    // rather than admitting a group partially or splitting it.
+    if (!QueueGroup(player, group, bgTypeId, forcedTeam))
+    {
+        std::string error = "Unable to queue your group for ";
+        error += battlegroundName;
+        error += " right now.";
+        SendQueueError(player, error.c_str());
+    }
+    else
+        CloseGossipMenuFor(player);
+
+    return true;
+}
+
+// The Battlemaster's window (CENTURION_ArenaMaster), owner 2026-10-29: "add a
+// similar bg frame with a bg battlemaster (get rid of whitemane and aethalas)".
+//   BGMASTER:JOIN:<battlemaster guid>:<bgTypeId>:<group 0|1>:<side N|A|H>
+// Whitemane's three take a side and go through her queue; every other
+// battleground through the stock join, as from the battlemaster's own list.
+void HandleBattlemasterRequest(Player* player, std::string_view argument)
+{
+    std::vector<std::string_view> const parts = Trinity::Tokenize(argument, ':', true);
+    if (!player || !player->GetSession() || parts.size() != 5 || parts[0] != "JOIN")
+        return;
+
+    Optional<uint64> const raw = Trinity::StringTo<uint64>(parts[1]);
+    Optional<uint32> const type = Trinity::StringTo<uint32>(parts[2]);
+    if (!raw || !type)
+        return;
+
+    ObjectGuid const master(*raw);
+    if (!player->GetNPCIfCanInteractWith(master, UNIT_NPC_FLAG_BATTLEMASTER))
+    {
+        player->GetSession()->SendNotification("Speak to a Battlemaster first.");
+        return;
+    }
+
+    BattlegroundTypeId const bgTypeId = BattlegroundTypeId(*type);
+    bool const group = parts[3] == "1";
+    char const* whitemane = bgTypeId == BATTLEGROUND_SCM ? "Scarlet Chapel"
+        : bgTypeId == BATTLEGROUND_BRT ? "Blackrock Throne"
+        : bgTypeId == BATTLEGROUND_OBC ? "Obsidian Colosseum" : nullptr;
+    if (whitemane)
+    {
+        uint32 const team = parts[4] == "A" ? TEAM_ALLIANCE : parts[4] == "H" ? TEAM_HORDE : TEAM_NEUTRAL;
+        // Alone or as the party, as she always did: a party is queued whole.
+        if (group || !player->GetGroup())
+            QueueWhitemaneBattleground(player, bgTypeId, whitemane, team);
+        else if (!QueueSinglePlayer(player, bgTypeId, team))
+            SendQueueError(player, (std::string("Unable to queue for ") + whitemane + " right now.").c_str());
+        return;
+    }
+
+    WorldPacket data(CMSG_BATTLEMASTER_JOIN, 8 + 4 + 4 + 1);
+    data << master;
+    data << uint32(bgTypeId);
+    data << uint32(0);                                      // first available
+    data << uint8(group ? 1 : 0);
+    player->GetSession()->HandleBattlemasterJoinOpcode(data);
+}
 }
 
 class npc_scarlet_chapel_queue : public CreatureScript
@@ -210,82 +343,7 @@ public:
 
         bool HandleQueue(Player* player, BattlegroundTypeId bgTypeId, char const* battlegroundName, uint32 forcedTeam)
         {
-            Group* group = player->GetGroup();
-            if (group && !group->IsLeader(player->GetGUID()))
-            {
-                SendQueueError(player, "Only the party leader can queue your group.");
-                return true;
-            }
-
-            if (!group)
-            {
-                if (!QueueSinglePlayer(player, bgTypeId, forcedTeam))
-                {
-                    std::string error = "Unable to queue for ";
-                    error += battlegroundName;
-                    error += " right now.";
-                    SendQueueError(player, error.c_str());
-                }
-                else
-                    CloseGossipMenuFor(player);
-                return true;
-            }
-
-            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
-            {
-                Player* member = ref->GetSource();
-                if (!member)
-                {
-                    SendQueueError(player, "All party members must be online.");
-                    return true;
-                }
-            }
-
-            // A party bigger than one team can hold must be turned away here.
-            // QueueGroup enters it as ONE GroupQueueInfo and BattlegroundQueue
-            // only ever seats a group whole, so an oversized party waits for a
-            // number of free slots its side can never have - it sits in the
-            // queue forever with no error. The honor-tab path is guarded by
-            // Group::CanJoinBattlegroundQueue (BattlemasterList MaxGroupSize);
-            // this NPC bypasses that check, so apply both limits ourselves.
-            // Reachable since Scarlet Chapel dropped to a 5-player cap: a
-            // six-man party is an ordinary thing to walk up with.
-            if (Battleground const* sizeTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId))
-            {
-                uint32 partyCap = sizeTemplate->GetMaxPlayersPerTeam();
-                if (BattlemasterListEntry const* bl = sBattlemasterListStore.LookupEntry(bgTypeId))
-                    partyCap = std::min(partyCap, bl->MaxGroupSize);
-
-                if (partyCap && group->GetMembersCount() > partyCap)
-                {
-                    std::string error = battlegroundName;
-                    error += " holds only ";
-                    error += std::to_string(partyCap);
-                    error += " per side - your party is too large.";
-                    SendQueueError(player, error.c_str());
-                    return true;
-                }
-            }
-
-            // Queue the party as ONE queue entry. Calling QueueSinglePlayer per
-            // member (as this used to) created a separate solo GroupQueueInfo
-            // for each of them, so the queue never knew they were together -
-            // and AddGroup's balancing deliberately pushes consecutive solo
-            // entries to opposite sides, which is exactly what scattered
-            // parties across both teams. One entry also lets the group-aware
-            // logic in BattlegroundQueue work: it evicts bots to make room
-            // rather than admitting a group partially or splitting it.
-            if (!QueueGroup(player, group, bgTypeId, forcedTeam))
-            {
-                std::string error = "Unable to queue your group for ";
-                error += battlegroundName;
-                error += " right now.";
-                SendQueueError(player, error.c_str());
-            }
-            else
-                CloseGossipMenuFor(player);
-
-            return true;
+            return QueueWhitemaneBattleground(player, bgTypeId, battlegroundName, forcedTeam);
         }
     };
 
@@ -298,4 +356,5 @@ public:
 void AddSC_npc_scarlet_chapel_queue()
 {
     new npc_scarlet_chapel_queue();
+    AddonRequestRoutes::Register("BGMASTER", &HandleBattlemasterRequest);
 }
