@@ -3817,11 +3817,13 @@ enum BattlegroundQueueTypeId
     BATTLEGROUND_QUEUE_SSH_3    = 25,
     BATTLEGROUND_QUEUE_SSH_2    = 26,
     BATTLEGROUND_QUEUE_SRF      = 27,
-    // All-Star's own skirmish queues (BATTLEGROUND_ASA): 1v1, 2v2, 3v3, 5v5.
+    // All-Star's own skirmish queues (BATTLEGROUND_ASA): 1v1 to 5v5 (4v4 came
+    // last, so its id follows 5v5's).
     BATTLEGROUND_QUEUE_ASA_1    = 28,
     BATTLEGROUND_QUEUE_ASA_2    = 29,
     BATTLEGROUND_QUEUE_ASA_3    = 30,
     BATTLEGROUND_QUEUE_ASA_5    = 31,
+    BATTLEGROUND_QUEUE_ASA_4    = 32,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 

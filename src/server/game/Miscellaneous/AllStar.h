@@ -44,8 +44,8 @@ class Player;
 // tournament starter template (Startwarrior and the rest,
 // Centurion.AllStar.TemplateCharacters), in class order.
 //
-// A death puts the player straight back at their team's start as the next
-// character of the lineup. The swap is made IN PLACE, on the live character -
+// A death is a death for two seconds (Centurion.AllStar.RespawnDelay); then the
+// player stands up where they fell as the next character of the lineup. The swap is made IN PLACE, on the live character -
 // same guid, same session, same seat - so there is no loading screen: what the
 // next character is made of - its name, race and looks, spells, talents,
 // glyphs, skills, action bars, gear, ammo and hunter pet - is read off its rows
@@ -165,6 +165,8 @@ namespace AllStar
     // and a button moved up a rank for each SMSG_LEARNED_SPELL - and taken as
     // the player's they rewrote bars, the real ones included.
     bool IgnoresClientButtons(Player const* player);
+    // CENTURION_AllStar's own lives counter: ALLSTAR:LIVES:<left>:<total>.
+    void SendLives(Player* player, uint32 left, uint32 total);
     // A persona's hunter pet arrives a moment after the persona (LoadPetFromDB
     // answers asynchronously): its trained spells are taught then. Called from
     // the match's update.

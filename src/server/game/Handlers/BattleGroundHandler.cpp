@@ -68,8 +68,8 @@ namespace
     //                             Four Corners)
     //   CCGAME ARENAQUEUE:SHUFFLE Buffle Shuffle: the 2v2 and 3v3 skirmish rows
     //                             only, queued alone
-    //   CCGAME ARENAQUEUE:ALLSTAR All-Star: the practice rows as 1v1, 2v2, 3v3
-    //                             and 5v5 skirmishes
+    //   CCGAME ARENAQUEUE:ALLSTAR All-Star: five practice rows, the 1v1 to
+    //                             5v5 skirmishes
     //
     // Sent before every arena window so a client never keeps the last mode.
     void SendArenaQueueMode(Player* player, std::string const& mode)
@@ -877,6 +877,10 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
         case 3:
             arenatype = ARENA_TYPE_5v5;
             break;
+        case 4:
+            // Only All-Star's window has a fifth row (below); anywhere else it
+            // is refused there.
+            break;
         default:
             TC_LOG_ERROR("network", "Unknown arena slot {} at HandleBattlemasterJoinArena()", arenaslot);
             return;
@@ -892,19 +896,24 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
         || masterBgTypeId == BATTLEGROUND_ASA)
         queueBgTypeId = masterBgTypeId;
 
-    // All-Star's window labels the four practice rows 1v1, 2v2, 3v3 and 5v5
-    // (ArenaFrame.lua, ARENAQUEUE:ALLSTAR); the slot the client sends is the
-    // row. There is no rated All-Star.
+    // All-Star's window has five rows, 1v1 to 5v5 (ArenaFrame.lua,
+    // ARENAQUEUE:ALLSTAR); the slot the client sends is the row, so the size
+    // is one more. There is no rated All-Star.
     bool const allStar = queueBgTypeId == BATTLEGROUND_ASA;
     if (allStar)
     {
         if (isRated)
         {
-            ChatHandler(this).SendSysMessage("All-Star is a skirmish: 1v1, 2v2, 3v3 or 5v5.");
+            ChatHandler(this).SendSysMessage("All-Star is a skirmish: 1v1, 2v2, 3v3, 4v4 or 5v5.");
             return;
         }
-        static uint8 const allStarTypes[] = { ARENA_TYPE_1v1, ARENA_TYPE_2v2, ARENA_TYPE_3v3, ARENA_TYPE_5v5 };
+        static uint8 const allStarTypes[] = { ARENA_TYPE_1v1, ARENA_TYPE_2v2, ARENA_TYPE_3v3, ARENA_TYPE_4v4, ARENA_TYPE_5v5 };
         arenatype = allStarTypes[arenaslot];
+    }
+    else if (!arenatype)
+    {
+        TC_LOG_ERROR("network", "Arena slot {} at HandleBattlemasterJoinArena() is All-Star's only", arenaslot);
+        return;
     }
 
     // Buffle Shuffle's battlemaster takes two queues: a 2v2 or a 3v3 skirmish,

@@ -1788,6 +1788,13 @@ bool HasReagentWaiver(Player const* player)
     if (Config.TournamentWaiveReagents && IsTournamentCharacter(player))
         return true;
 
+    // An All-Star match (owner: "this is a tournament arena"): every life after
+    // the first is another character's class with none of its bags, so nobody
+    // could bring the reagents of the character they are playing.
+    if (Battleground const* battleground = player ? player->GetBattleground() : nullptr)
+        if (battleground->IsAllStar())
+            return true;
+
     return IsFreeReagentContext(player);
 }
 

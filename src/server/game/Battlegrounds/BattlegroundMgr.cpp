@@ -1588,7 +1588,7 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
                     return BATTLEGROUND_QUEUE_NONE;
             }
         case BATTLEGROUND_ASA:
-            // All-Star: its own skirmish queues, 1v1 to 5v5 (no 4v4).
+            // All-Star: its own skirmish queues, 1v1 to 5v5.
             switch (arenaType)
             {
                 case ARENA_TYPE_1v1:
@@ -1597,6 +1597,8 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
                     return BATTLEGROUND_QUEUE_ASA_2;
                 case ARENA_TYPE_3v3:
                     return BATTLEGROUND_QUEUE_ASA_3;
+                case ARENA_TYPE_4v4:
+                    return BATTLEGROUND_QUEUE_ASA_4;
                 case ARENA_TYPE_5v5:
                     return BATTLEGROUND_QUEUE_ASA_5;
                 default:
@@ -1680,6 +1682,7 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
         case BATTLEGROUND_QUEUE_ASA_1:
         case BATTLEGROUND_QUEUE_ASA_2:
         case BATTLEGROUND_QUEUE_ASA_3:
+        case BATTLEGROUND_QUEUE_ASA_4:
         case BATTLEGROUND_QUEUE_ASA_5:
             return BATTLEGROUND_ASA;
         default:
@@ -1705,6 +1708,7 @@ uint8 BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId bgQueueTypeId)
             return ARENA_TYPE_3v3;
         case BATTLEGROUND_QUEUE_4v4:
         case BATTLEGROUND_QUEUE_BHF_4:
+        case BATTLEGROUND_QUEUE_ASA_4:
             return ARENA_TYPE_4v4;
         case BATTLEGROUND_QUEUE_5v5:
         case BATTLEGROUND_QUEUE_BHF_5:

@@ -25,6 +25,7 @@
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "GameTime.h"
+#include "Group.h"
 #include "Item.h"
 #include "Log.h"
 #include "Map.h"
@@ -130,7 +131,7 @@ namespace
     struct Settings
     {
         bool Enabled = true;
-        uint32 RespawnDelayMs = 0;
+        uint32 RespawnDelayMs = 2 * IN_MILLISECONDS;
         uint32 TimeLimitMs = 30 * MINUTE * IN_MILLISECONDS;
         uint8 SourceMinLevel = 60;
         std::array<ObjectGuid::LowType, 12> Templates{};
@@ -782,21 +783,54 @@ namespace
     {
         BroadcastName(player);
 
+        // Party and raid frames read class, power and health from the party
+        // stats and rebuild on the group list - a swap changes all of them,
+        // for a bot's teammates too.
+        player->SetGroupUpdateFlag(GROUP_UPDATE_FULL);
+        if (Group* group = player->GetGroup())
+            group->SendUpdate();
+
         WorldSession* session = player->GetSession();
         if (!session || session->IsVirtualSession())
             return;
 
         std::unordered_set<uint32> const after = VisibleSpells(player);
+        uint32 learned = 0;
         for (uint32 spell : after)
             if (!before.count(spell))
+            {
                 SendSpellbookChange(player, spell, true);
+                ++learned;
+            }
 
         player->SendTalentsInfoData(false);
         player->SendActionButtons(1);
 
+        uint32 removed = 0;
         for (uint32 spell : before)
             if (!after.count(spell))
+            {
                 SendSpellbookChange(player, spell, false);
+                ++removed;
+            }
+
+        // What the client was told, for the reports of bars and spellbooks
+        // it did not show (2026-10-28: a shaman's bars bare, a druid still
+        // offered Execute): every spell button whose spell it never heard of.
+        uint32 buttons = 0;
+        std::string unknown;
+        for (uint8 slot = 0; slot < MAX_ACTION_BUTTONS; ++slot)
+        {
+            ActionButton const* button = player->GetActionButton(slot);
+            if (!button)
+                continue;
+            ++buttons;
+            if (button->GetType() == ACTION_BUTTON_SPELL && !after.count(button->GetAction()))
+                unknown += Trinity::StringFormat(" {}:{}", uint32(slot), button->GetAction());
+        }
+        TC_LOG_INFO("bg.battleground", "All-Star: {} ({}) client sync: {} spells learned, {} removed, {} known, {} buttons{}{}.",
+            player->GetName(), player->GetGUID().GetCounter(), learned, removed, uint32(after.size()), buttons,
+            unknown.empty() ? "" : ", spell buttons it was not told about:", unknown);
 
         player->SendProficiency(ITEM_CLASS_WEAPON, player->GetWeaponProficiency());
         player->SendProficiency(ITEM_CLASS_ARMOR, player->GetArmorProficiency());
@@ -1595,7 +1629,7 @@ void LoadConfig()
 {
     Settings loaded;
     loaded.Enabled = sConfigMgr->GetBoolDefault("Centurion.AllStar.Enable", true);
-    loaded.RespawnDelayMs = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.AllStar.RespawnDelay", 0)));
+    loaded.RespawnDelayMs = uint32(std::max(0, sConfigMgr->GetIntDefault("Centurion.AllStar.RespawnDelay", 2 * IN_MILLISECONDS)));
     loaded.TimeLimitMs = uint32(std::max(1, sConfigMgr->GetIntDefault("Centurion.AllStar.TimeLimit", 30))) * MINUTE * IN_MILLISECONDS;
     loaded.SourceMinLevel = uint8(std::clamp(sConfigMgr->GetIntDefault("Centurion.AllStar.SourceMinLevel", 60), 1, 255));
 
@@ -1849,6 +1883,11 @@ bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& 
 bool IsSwapInProgress(Player const* player)
 {
     return player && Swapping == player;
+}
+
+void SendLives(Player* player, uint32 left, uint32 total)
+{
+    SendAddonLine(player, Trinity::StringFormat("LIVES:{}:{}", left, total));
 }
 
 bool IgnoresClientButtons(Player const* player)

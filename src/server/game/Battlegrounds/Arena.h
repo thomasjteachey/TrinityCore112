@@ -226,6 +226,8 @@ class TC_GAME_API Arena : public Battleground
             bool Out = false;
             bool Waiting = false;                   // dead, to come back as Lineup[Deaths]
             uint32 RespawnAt = 0;
+            bool VisualShown = false;               // the rez visual of this death has played
+            bool LivesShown = false;                // the player's client has been told its lives
             uint32 NextTry = 0;                     // a kit still loading is asked for again then
         };
         void SeatAllStar(Player* player);
@@ -239,6 +241,7 @@ class TC_GAME_API Arena : public Battleground
         void HandleAllStarDeath(Player* player, Player* killer);
         void ResetForAllStarLife(Player* player);
         bool BringBackAllStar(Player* player, AllStarSeat& seat, bool respawn);
+        void ShowAllStarLives(Player* player, AllStarSeat& seat);
         void UpdateAllStar(uint32 diff);
         void CheckAllStarWinConditions();
         void EndAllStarAtTimeLimit();
