@@ -44,6 +44,7 @@
 #include "Util.h"
 #include "Log.h"
 #include "Miscellaneous/AllStar.h"
+#include "Miscellaneous/BorrowedActionBars.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -304,6 +305,16 @@ namespace
         std::unordered_map<uint64, uint32> SentPowerType;
         std::unordered_map<uint64, uint32> SentClass;
         std::unordered_map<uint64, uint32> SentForm;
+
+        // Spectating (CenturionReplaySpectate.lua asks, ASSUN SPECTATE): the
+        // viewer's own default action bars show the spectated player's buttons.
+        // Their latest bar set and button cooldowns as playback stands, per
+        // original guid, so a spectate can start at any point of the replay.
+        std::unordered_map<uint64, size_t> LatestBars;                                     // -> Match.BarSnapshots index
+        std::unordered_map<uint64, std::unordered_map<uint64, uint32>> ActorCooldownEnds; // -> kind<<32|id -> end (getMSTime)
+        uint64 SpectatedOriginal = 0;
+        std::unordered_set<uint32> SpectateLearned;     // spells the viewer's client was taught for it
+        std::unordered_set<uint32> SpectateCooldowns;   // spells the viewer's client was given a cooldown on
     };
 
     // Real arena records by BG instance id. Packets are recorded from every map
@@ -316,6 +327,12 @@ namespace
 
     // Active playback states by viewer low guid.
     std::unordered_map<uint32, PlaybackState> ActiveReplays;
+
+    // Spectate requests from the viewer's addon (ASSUN SPECTATE), which arrive
+    // on the network thread; the viewer's map thread acts on them in
+    // UpdatePlaybackForViewer. Viewer low guid -> fake actor guid, 0 = stop.
+    std::mutex SpectateRequestLock;
+    std::unordered_map<uint32, uint64> SpectateRequests;
 
 
     uint64 ReplayUnixMilliseconds()
@@ -3809,58 +3826,244 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             viewer->GetGUID().GetCounter(), uiRaw, actor->Name, uint32(actor->Class), actor->Team, uint32(actor->Squad), event.TimestampMs);
     }
 
-    // A participant's action bars, for the spectate view: BRS (a new set
-    // starts, with its button count), BAR lines of "slot:type:action" entries,
-    // and one BMC line per macro button ("slot^icon^spell^name").
-    void ApplyReplayBarSnapshot(Player* viewer, PlaybackState& state, ReplayBarSnapshot const& snapshot)
+    // ------------------------------------------------------------------ spectate
+    //
+    // The spectated player's buttons go on the viewer's own default action
+    // bars, the way an All-Star life's do (AllStar::SyncClient): the client is
+    // taught every spell on them first (SMSG_LEARNED_SPELL - a bars packet
+    // clears any button whose spell the client does not know), then ONE
+    // SMSG_ACTION_BUTTONS, and their cooldowns go out as the viewer's own
+    // (SMSG_SPELL_COOLDOWN). The server never changes the viewer's saved bars:
+    // what the client says back about buttons is ignored meanwhile
+    // (BorrowedActionBars), and stopping sends REMOVED for the borrowed spells,
+    // then the viewer's real bars. See reference_client_action_bar_packets.
+
+    // Shapeshift form -> bonus action bar (SpellShapeshiftForm.dbc
+    // BonusActionBar, not loaded by this core): the main bar shows slots
+    // 72 + (bar - 1) * 12 .. +11 in that form. The viewer is in no form, so the
+    // spectated player's page is put on the viewer's slots 0..11.
+    uint8 ReplayFormBonusBar(uint32 form)
     {
-        ReplayActor const* actor = FindMutableReplayActorByOriginal(state.Match, snapshot.Guid);
-        if (!actor)
-            return;
-
-        ObjectGuid const uiGuid = actor->FakeGuid;
-        constexpr size_t kBarPayloadLength = 170;
-
-        SendReplayASCommand(viewer, uiGuid, "BRS", uint32(snapshot.Buttons.size()));
-
-        std::string line;
-        for (ReplayBarButton const& button : snapshot.Buttons)
+        switch (form)
         {
-            std::string const entry = std::to_string(button.Slot) + ":" + std::to_string(button.Packed >> 24) + ":"
-                + std::to_string(button.Packed & 0x00FFFFFF);
-            if (!line.empty() && line.size() + 1 + entry.size() > kBarPayloadLength)
-            {
-                SendReplayASCommand(viewer, uiGuid, "BAR", line);
-                line.clear();
-            }
-            if (!line.empty())
-                line += ",";
-            line += entry;
-        }
-        if (!line.empty())
-            SendReplayASCommand(viewer, uiGuid, "BAR", line);
-
-        for (ReplayBarButton const& button : snapshot.Buttons)
-        {
-            uint8 const type = uint8(button.Packed >> 24);
-            if (type != ACTION_BUTTON_MACRO && type != ACTION_BUTTON_CMACRO)
-                continue;
-
-            SendReplayASCommand(viewer, uiGuid, "BMC", std::to_string(button.Slot) + "^" + button.MacroIcon + "^"
-                + std::to_string(button.MacroSpell) + "^" + button.MacroName);
+            case FORM_CAT:              return 1;
+            case FORM_BEAR:             return 3;
+            case FORM_DIREBEAR:         return 3;
+            case FORM_MOONKIN:          return 4;
+            case FORM_BATTLESTANCE:     return 1;
+            case FORM_DEFENSIVESTANCE:  return 2;
+            case FORM_BERSERKERSTANCE:  return 3;
+            case FORM_STEALTH:          return 1;
+            case FORM_SHADOW:           return 1;
+            default:                    return 0;
         }
     }
 
-    // A cooldown on a participant's button: BCD "kind:id:remainingMs" (kind 0
-    // a spell, 1 an item; 0 ms = cleared).
-    void ApplyReplayCooldownEvent(Player* viewer, PlaybackState& state, ReplayCooldownEvent const& event)
+    ReplayBarSnapshot const* SpectatedBars(PlaybackState const& state)
     {
-        ReplayActor const* actor = FindMutableReplayActorByOriginal(state.Match, event.Guid);
+        auto const itr = state.LatestBars.find(state.SpectatedOriginal);
+        if (itr == state.LatestBars.end() || itr->second >= state.Match.BarSnapshots.size())
+            return nullptr;
+        return &state.Match.BarSnapshots[itr->second];
+    }
+
+    void SendSpectateBars(Player* viewer, PlaybackState& state)
+    {
+        if (!state.SpectatedOriginal || !viewer->GetSession())
+            return;
+
+        ReplayActor const* actor = FindMutableReplayActorByOriginal(state.Match, state.SpectatedOriginal);
+        ReplayBarSnapshot const* snapshot = SpectatedBars(state);
+        if (!actor || !snapshot)
+            return;
+
+        // The viewer's buttons: spells, items, and a macro as the spell it
+        // casts (the viewer has none of the player's macros).
+        std::array<uint32, MAX_ACTION_BUTTONS> packed{};
+        for (ReplayBarButton const& button : snapshot->Buttons)
+        {
+            if (button.Slot >= MAX_ACTION_BUTTONS)
+                continue;
+            uint8 const type = uint8(button.Packed >> 24);
+            if (type == ACTION_BUTTON_SPELL || type == ACTION_BUTTON_ITEM)
+                packed[button.Slot] = button.Packed;
+            else if ((type == ACTION_BUTTON_MACRO || type == ACTION_BUTTON_CMACRO) && button.MacroSpell)
+                packed[button.Slot] = button.MacroSpell | (uint32(ACTION_BUTTON_SPELL) << 24);
+        }
+
+        uint32 form = 0;
+        if (auto formItr = state.SentForm.find(actor->FakeGuid.GetRawValue()); formItr != state.SentForm.end())
+            form = formItr->second;
+        if (uint8 const bonus = ReplayFormBonusBar(form))
+        {
+            uint8 const first = uint8(72 + (bonus - 1) * 12);
+            bool any = false;
+            for (uint8 i = 0; i < 12; ++i)
+                any = any || packed[first + i] != 0;
+            if (any)
+                for (uint8 i = 0; i < 12; ++i)
+                    packed[i] = packed[first + i];
+        }
+
+        // Taught first: every spell on the bars the viewer does not know.
+        for (uint32 value : packed)
+        {
+            if (!value || uint8(value >> 24) != ACTION_BUTTON_SPELL)
+                continue;
+            uint32 const spell = value & 0x00FFFFFF;
+            if (viewer->HasSpell(spell) || state.SpectateLearned.count(spell) || !sSpellMgr->GetSpellInfo(spell))
+                continue;
+            WorldPacket learned(SMSG_LEARNED_SPELL, 6);
+            learned << uint32(spell);
+            learned << uint16(0);
+            viewer->SendDirectMessage(&learned);
+            state.SpectateLearned.insert(spell);
+        }
+
+        BorrowedActionBars::SetBorrowed(viewer->GetGUID(), true);
+
+        WorldPacket bars(SMSG_ACTION_BUTTONS, 1 + MAX_ACTION_BUTTONS * 4);
+        bars << uint8(1);
+        for (uint32 value : packed)
+            bars << uint32(value);
+        viewer->SendDirectMessage(&bars);
+    }
+
+    // A cooldown the spectated player has (or no longer has), as the viewer's own.
+    void SendSpectateCooldown(Player* viewer, PlaybackState& state, uint8 kind, uint32 id, uint32 remainingMs)
+    {
+        uint32 const spell = kind == REPLAY_COOLDOWN_ITEM ? ItemUseSpell(id) : id;
+        if (!spell)
+            return;
+
+        if (remainingMs)
+        {
+            WorldPacket data(SMSG_SPELL_COOLDOWN, 8 + 1 + 4 + 4);
+            data << uint64(viewer->GetGUID().GetRawValue());
+            data << uint8(0);
+            data << uint32(spell);
+            data << uint32(remainingMs);
+            viewer->SendDirectMessage(&data);
+            state.SpectateCooldowns.insert(spell);
+        }
+        else if (state.SpectateCooldowns.erase(spell))
+        {
+            WorldPacket data(SMSG_CLEAR_COOLDOWN, 4 + 8);
+            data << uint32(spell);
+            data << uint64(viewer->GetGUID().GetRawValue());
+            viewer->SendDirectMessage(&data);
+        }
+    }
+
+    void ClearSpectateCooldowns(Player* viewer, PlaybackState& state)
+    {
+        for (uint32 spell : state.SpectateCooldowns)
+        {
+            WorldPacket data(SMSG_CLEAR_COOLDOWN, 4 + 8);
+            data << uint32(spell);
+            data << uint64(viewer->GetGUID().GetRawValue());
+            viewer->SendDirectMessage(&data);
+        }
+        state.SpectateCooldowns.clear();
+    }
+
+    // The viewer's own bars and spellbook back. Safe to call when nothing is
+    // borrowed.
+    void StopSpectateBars(Player* viewer, PlaybackState& state)
+    {
+        bool const borrowed = state.SpectatedOriginal || !state.SpectateLearned.empty() || !state.SpectateCooldowns.empty();
+        state.SpectatedOriginal = 0;
+        if (!borrowed || !viewer || !viewer->GetSession())
+        {
+            state.SpectateLearned.clear();
+            state.SpectateCooldowns.clear();
+            return;
+        }
+
+        ClearSpectateCooldowns(viewer, state);
+
+        // REMOVED first (the client clears those buttons and tells the server,
+        // ignored), then the real bars, all of them spells the client knows.
+        for (uint32 spell : state.SpectateLearned)
+        {
+            if (viewer->HasSpell(spell))
+                continue;
+            WorldPacket removed(SMSG_REMOVED_SPELL, 4);
+            removed << uint32(spell);
+            viewer->SendDirectMessage(&removed);
+        }
+        state.SpectateLearned.clear();
+
+        viewer->SendActionButtons(1);
+        BorrowedActionBars::SetBorrowed(viewer->GetGUID(), false);   // keeps ignoring a few seconds
+
+        TC_LOG_DEBUG("arena.replay", "Replay spectate bars restored viewer={}", viewer->GetGUID().GetCounter());
+    }
+
+    void StartSpectateBars(Player* viewer, PlaybackState& state, uint64 fakeRaw)
+    {
+        ReplayActor* actor = FindMutableReplayActorByFake(state.Match, ObjectGuid(fakeRaw));
         if (!actor)
             return;
 
-        SendReplayASCommand(viewer, actor->FakeGuid, "BCD", std::to_string(uint32(event.Kind)) + ":" + std::to_string(event.Id)
-            + ":" + std::to_string(event.RemainingMs));
+        uint64 const original = actor->OriginalGuid.GetRawValue();
+        if (state.SpectatedOriginal && state.SpectatedOriginal != original)
+            ClearSpectateCooldowns(viewer, state);   // the last player's are not this one's
+        state.SpectatedOriginal = original;
+
+        SendSpectateBars(viewer, state);
+
+        uint32 const nowMs = getMSTime();
+        if (auto itr = state.ActorCooldownEnds.find(original); itr != state.ActorCooldownEnds.end())
+            for (auto const& [key, end] : itr->second)
+                if (end > nowMs)
+                    SendSpectateCooldown(viewer, state, uint8(key >> 32), uint32(key & 0xFFFFFFFF), end - nowMs);
+
+        TC_LOG_DEBUG("arena.replay", "Replay spectate viewer={} actor='{}' learned={}",
+            viewer->GetGUID().GetCounter(), actor->Name, uint32(state.SpectateLearned.size()));
+    }
+
+    // The addon's request, if one came in since the last update.
+    void ApplyPendingSpectateRequest(Player* viewer, PlaybackState& state)
+    {
+        uint64 request = 0;
+        {
+            std::lock_guard<std::mutex> lock(SpectateRequestLock);
+            auto const itr = SpectateRequests.find(viewer->GetGUID().GetCounter());
+            if (itr == SpectateRequests.end())
+                return;
+            request = itr->second;
+            SpectateRequests.erase(itr);
+        }
+
+        if (request)
+            StartSpectateBars(viewer, state, request);
+        else
+            StopSpectateBars(viewer, state);
+    }
+
+    // A participant's action bars as of now; the spectate bars follow them.
+    void ApplyReplayBarSnapshot(Player* viewer, PlaybackState& state, size_t index)
+    {
+        ReplayBarSnapshot const& snapshot = state.Match.BarSnapshots[index];
+        state.LatestBars[snapshot.Guid] = index;
+        if (state.SpectatedOriginal == snapshot.Guid)
+            SendSpectateBars(viewer, state);
+    }
+
+    // A cooldown on a participant's button, kept for a spectate that starts
+    // later and given to the viewer while they spectate that participant.
+    void ApplyReplayCooldownEvent(Player* viewer, PlaybackState& state, ReplayCooldownEvent const& event)
+    {
+        uint64 const key = (uint64(event.Kind) << 32) | event.Id;
+        std::unordered_map<uint64, uint32>& ends = state.ActorCooldownEnds[event.Guid];
+        if (event.RemainingMs)
+            ends[key] = getMSTime() + event.RemainingMs;
+        else
+            ends.erase(key);
+
+        if (state.SpectatedOriginal == event.Guid)
+            SendSpectateCooldown(viewer, state, event.Kind, event.Id, event.RemainingMs);
     }
 
     // Everything on the V3 timelines up to `timestampMs` (inclusive), in order.
@@ -3872,7 +4075,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             ApplyReplayRosterEvent(viewer, state, match.RosterEvents[state.RosterCursor++]);
 
         while (state.BarCursor < match.BarSnapshots.size() && match.BarSnapshots[state.BarCursor].TimestampMs <= timestampMs)
-            ApplyReplayBarSnapshot(viewer, state, match.BarSnapshots[state.BarCursor++]);
+            ApplyReplayBarSnapshot(viewer, state, state.BarCursor++);
 
         while (state.CooldownCursor < match.CooldownEvents.size() && match.CooldownEvents[state.CooldownCursor].TimestampMs <= timestampMs)
             ApplyReplayCooldownEvent(viewer, state, match.CooldownEvents[state.CooldownCursor++]);
@@ -4091,7 +4294,9 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             if (formItr == state.SentForm.end() || formItr->second != form)
             {
                 state.SentForm[uiRaw] = form;
-                SendReplayASCommand(viewer, uiGuid, "FRM", form);
+                // A new form or stance shows its own main bar page.
+                if (state.SpectatedOriginal && state.SpectatedOriginal == actor->OriginalGuid.GetRawValue())
+                    SendSpectateBars(viewer, state);
             }
         }
 
@@ -5398,6 +5603,21 @@ std::vector<uint8> payload(packet.size());
 
         std::string msg = copy.ReadCString(false);
 
+        // "ASSUN\tSPECTATE 0x<guid>" / "ASSUN\tSPECTATE OFF": queued for the
+        // viewer's map thread (this runs on the network thread).
+        std::string_view constexpr kSpectate = "ASSUN\tSPECTATE ";
+        if (msg.rfind(kSpectate, 0) == 0)
+        {
+            std::string const argument = msg.substr(kSpectate.size());
+            uint64 fake = 0;
+            if (argument.size() == 18 && argument[0] == '0' && (argument[1] == 'x' || argument[1] == 'X'))
+                fake = std::strtoull(argument.c_str() + 2, nullptr, 16);
+
+            std::lock_guard<std::mutex> lock(SpectateRequestLock);
+            SpectateRequests[session->GetPlayer()->GetGUID().GetCounter()] = fake;
+            return true;
+        }
+
         if (msg != "ASSUN\tRESTART")
             return false;
 
@@ -5622,12 +5842,24 @@ public:
         PlaybackState& state = activeItr->second;
         uint32 nowMs = getMSTime();
 
+        // Left the replay (Exit Replay, a teleport): the viewer's own bars and
+        // spellbook back if they were spectating, and the playback ends.
+        Battleground* currentBg = viewer->GetBattleground();
+        bool const inReplay = currentBg && currentBg->IsReplay() && currentBg->GetInstanceID() == state.BgInstanceId;
+        if (!inReplay && (state.Finished || state.PlaybackClockStarted))
+        {
+            StopSpectateBars(viewer, state);
+            {
+                std::lock_guard<std::mutex> lock(SpectateRequestLock);
+                SpectateRequests.erase(viewerLowGuid);
+            }
+            ActiveReplays.erase(activeItr);
+            return true;
+        }
+
         if (state.Finished)
         {
-            Battleground* currentBg = viewer->GetBattleground();
-            if (!currentBg || !currentBg->IsReplay() || currentBg->GetInstanceID() != state.BgInstanceId)
-                ActiveReplays.erase(activeItr);
-
+            ApplyPendingSpectateRequest(viewer, state);
             return true;
         }
 
@@ -5636,12 +5868,15 @@ public:
             if (nowMs - state.CreatedMs > ARENA_REPLAY_LOAD_GRACE_MS)
             {
                 (void)0; // replay system message removed
+                StopSpectateBars(viewer, state);
                 ActiveReplays.erase(activeItr);
                 return true;
             }
 
             return true;
         }
+
+        ApplyPendingSpectateRequest(viewer, state);
 
         if (!state.PlaybackClockStarted)
         {
@@ -5838,6 +6073,11 @@ public:
         state.SentClass.clear();
         state.SentForm.clear();
 
+        // The viewer's own bars back; the addon asks again once the replay runs.
+        StopSpectateBars(viewer, state);
+        state.LatestBars.clear();
+        state.ActorCooldownEnds.clear();
+
         TC_LOG_DEBUG("arena.replay", "Replay restarted viewer={} bg={} packets={}",
             viewerLowGuid, state.BgInstanceId, uint32(state.Match.Packets.size()));
 
@@ -5868,6 +6108,13 @@ public:
             return;
 
         ActiveReplays.erase(player->GetGUID().GetCounter());
+        {
+            std::lock_guard<std::mutex> lock(SpectateRequestLock);
+            SpectateRequests.erase(player->GetGUID().GetCounter());
+        }
+        // A client that logs out spectating has nothing borrowed any more; the
+        // next login sends the real bars.
+        BorrowedActionBars::SetBorrowed(player->GetGUID(), false);
     }
 };
 

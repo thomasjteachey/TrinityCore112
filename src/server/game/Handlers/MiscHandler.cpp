@@ -38,6 +38,7 @@
 #include "GuildMgr.h"
 #include "Language.h"
 #include "Log.h"
+#include "Miscellaneous/BorrowedActionBars.h"
 #include "Miscellaneous/Surnames.h"
 #include "Miscellaneous/TournamentMode.h"
 #include "MapManager.h"
@@ -1077,8 +1078,9 @@ void WorldSession::HandleSetActionButtonOpcode(WorldPacket& recvData)
     recvData >> button >> packetData;
     TC_LOG_DEBUG("network", "CMSG_SET_ACTION_BUTTON Button: {} Data: {}", button, packetData);
 
-    // The client answering an All-Star class swap, not the player (AllStar.h).
-    if (AllStar::IgnoresClientButtons(GetPlayer()))
+    // The client answering an All-Star class swap, not the player (AllStar.h),
+    // or showing a spectated replay player's bars (BorrowedActionBars.h).
+    if (AllStar::IgnoresClientButtons(GetPlayer()) || BorrowedActionBars::IgnoresClientButtons(GetPlayer()->GetGUID()))
         return;
 
     if (!packetData)
