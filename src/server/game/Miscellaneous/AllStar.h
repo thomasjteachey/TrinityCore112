@@ -47,8 +47,9 @@ class WorldSession;
 // it. A life left on "Random" is filled from the rest as before: the account's
 // character list, top to bottom (CharacterScreen::GetListPosition), each
 // level-60 character of a class not in the lineup yet, then - for every class
-// the account has no level-60 of - a random level-60 playerbot character of
-// that class (a stand-in; bots only), or that class's tournament starter
+// the account has no level-60 of - a random level-60 PvP bot of that class
+// (Playerbot.Pve.PvpOnlyAccountIds; a stand-in, bots only), or that class's
+// tournament starter
 // template (Startwarrior and the rest, Centurion.AllStar.TemplateCharacters).
 // With Centurion.AllStar.ShuffleLives (the default) that rest is taken in a
 // random order.

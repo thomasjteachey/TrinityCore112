@@ -2824,23 +2824,29 @@ void Update()
             RequestKit(GetTemplateCharacter(playerClass));
     }
 
-    // The playerbot accounts' level-60 characters, by class (StandIns).
+    // The PvP bots' level-60 characters, by class (StandIns): the accounts on
+    // Playerbot.Pve.PvpOnlyAccountIds, the same pool the battleground fill
+    // copies its level-60 bots from. Never the world bots on the other
+    // PLAYERBOT accounts (owner 2026-10-30: "allstar should use pvp bots" -
+    // a world bot, Caelhild, turned up as a stand-in).
     if (Config.Enabled && !StandInsAsked)
     {
         StandInsAsked = true;
-        QueryCallbacks.AddCallback(LoginDatabase.AsyncQuery("SELECT id FROM account WHERE username LIKE 'PLAYERBOT%'").WithCallback(
-            [](QueryResult accounts)
+        std::string ids;
+        for (std::string_view token : Trinity::Tokenize(sConfigMgr->GetStringDefault("Playerbot.Pve.PvpOnlyAccountIds", ""), ',', false))
         {
-            if (!accounts)
-                return;
-            std::string ids;
-            do
-            {
-                if (!ids.empty())
-                    ids += ',';
-                ids += std::to_string(accounts->Fetch()[0].GetUInt32());
-            } while (accounts->NextRow());
+            while (!token.empty() && (token.front() == ' ' || token.front() == '"'))
+                token.remove_prefix(1);
+            while (!token.empty() && (token.back() == ' ' || token.back() == '"'))
+                token.remove_suffix(1);
+            if (Optional<uint32> const account = Trinity::StringTo<uint32>(token))
+                ids += (ids.empty() ? "" : ",") + std::to_string(*account);
+        }
 
+        if (ids.empty())
+            TC_LOG_INFO("bg.battleground", "All-Star: Playerbot.Pve.PvpOnlyAccountIds names no account, so bots' lives use the starter templates.");
+        else
+        {
             std::string const sql = Trinity::StringFormat(
                 "SELECT guid, class FROM characters WHERE account IN ({}) AND level >= {} AND deleteDate IS NULL",
                 ids, uint32(Config.SourceMinLevel));
@@ -2861,13 +2867,13 @@ void Update()
                         guids.insert(guid);
                     } while (characters->NextRow());
                 }
-                TC_LOG_INFO("bg.battleground", "All-Star: {} playerbot characters can stand in for a class a lineup has nobody for.",
+                TC_LOG_INFO("bg.battleground", "All-Star: {} PvP bot characters can stand in for a class a lineup has nobody for.",
                     uint32(guids.size()));
                 std::lock_guard<std::mutex> lock(StandInMutex);
                 StandIns = std::move(found);
                 StandInGuids = std::move(guids);
             }));
-        }));
+        }
     }
 
     // What other threads asked for since the last tick. The processors are
