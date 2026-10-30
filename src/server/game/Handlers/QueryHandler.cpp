@@ -43,7 +43,8 @@ void WorldSession::SendNameQueryOpcode(ObjectGuid guid)
     // line under a guid no character has (AllStar.h).
     std::string personaName;
     uint8 personaRace = 0, personaGender = 0, personaClass = 0;
-    bool const persona = AllStar::GetPersonaNameData(guid, personaName, personaRace, personaGender, personaClass);
+    bool const persona = AllStar::GetPersonaNameData(guid, personaName, personaRace, personaGender, personaClass,
+        _player ? _player->GetGUID() : ObjectGuid::Empty);
 
     WorldPacket data(SMSG_NAME_QUERY_RESPONSE, (8+1+1+1+1+1+10));
     data << guid.WriteAsPacked();

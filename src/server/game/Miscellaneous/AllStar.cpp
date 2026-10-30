@@ -285,6 +285,14 @@ namespace
     };
     std::mutex NameMutex;
     std::unordered_map<ObjectGuid, PersonaName> Names;
+    // Who has been given each worn persona's name - by a swap's broadcast or
+    // by asking (WorldSession::SendNameQueryOpcode) - under NameMutex. A
+    // client keeps the name it was last given for a guid, so the hand-back
+    // (Restore) gives every one of them the real name again, wherever they
+    // are now: someone who left the arena before the swap back otherwise kept
+    // the borrowed name for the rest of their session (owner 2026-10-30:
+    // "still says the old names after an allstar match").
+    std::unordered_map<ObjectGuid, std::unordered_set<ObjectGuid>> Told;
 
     // -------------------------------------------------------- client catch-up
     std::mutex SwapTimeMutex;
@@ -967,15 +975,16 @@ namespace
     // changing"). Its addons' requests are whispers to UnitName("player"),
     // which then names the persona; that is harmless, as the chat handler
     // answers CCGAMEREQ before it ever looks the whisper's target up.
-    void BroadcastName(Player* player)
+    // BuildNameAnswer is that answer as the player stands: the persona's, or
+    // its own name with the family name. True when it is a persona's.
+    bool BuildNameAnswer(Player* player, WorldPacket& data)
     {
-        Map* map = player->FindMap();
-
         std::string name;
         uint8 race = 0;
         uint8 gender = 0;
         uint8 playerClass = 0;
-        if (!GetPersonaNameData(player->GetGUID(), name, race, gender, playerClass))
+        bool const persona = GetPersonaNameData(player->GetGUID(), name, race, gender, playerClass);
+        if (!persona)
         {
             CharacterCacheEntry const* cache = sCharacterCache->GetCharacterCacheByGuid(player->GetGUID());
             name = Surnames::Decorated(player->GetGUID(), cache ? cache->Name : player->GetName());
@@ -984,7 +993,7 @@ namespace
             playerClass = player->GetClass();
         }
 
-        WorldPacket data(SMSG_NAME_QUERY_RESPONSE, 8 + 1 + name.size() + 1 + 1 + 1 + 1 + 1 + 1);
+        data.Initialize(SMSG_NAME_QUERY_RESPONSE, 8 + 1 + name.size() + 1 + 1 + 1 + 1 + 1 + 1);
         data << player->GetGUID().WriteAsPacked();
         data << uint8(0);
         data << name;
@@ -993,15 +1002,51 @@ namespace
         data << uint8(gender);
         data << uint8(playerClass);
         data << uint8(0);
+        return persona;
+    }
+
+    void BroadcastName(Player* player)
+    {
+        WorldPacket data;
+        bool const persona = BuildNameAnswer(player, data);
 
         // The player first, map or not: the hand-back may come after it left
         // the arena, and its own client must not keep a persona's name.
         if (player->GetSession() && !player->GetSession()->IsVirtualSession())
             player->SendDirectMessage(&data);
+        Map* map = player->FindMap();
         if (!map)
             return;
+        std::vector<ObjectGuid> told;
         for (MapReference const& ref : map->GetPlayers())
             if (Player* viewer = ref.GetSource())
+                if (viewer != player && viewer->GetSession() && !viewer->GetSession()->IsVirtualSession())
+                {
+                    viewer->SendDirectMessage(&data);
+                    told.push_back(viewer->GetGUID());
+                }
+
+        if (persona && !told.empty())
+        {
+            std::lock_guard<std::mutex> lock(NameMutex);
+            Told[player->GetGUID()].insert(told.begin(), told.end());
+        }
+    }
+
+    // Restore, after the persona's name is gone: the real name to everyone
+    // who was given the persona's and is still online, on any map.
+    void TellRealName(Player* player, std::unordered_set<ObjectGuid> const& viewers)
+    {
+        // Out of the world, SyncClient told nobody - the player included.
+        bool const self = !player->IsInWorld() && player->GetSession() && !player->GetSession()->IsVirtualSession();
+        if (viewers.empty() && !self)
+            return;
+        WorldPacket data;
+        BuildNameAnswer(player, data);
+        if (self)
+            player->SendDirectMessage(&data);
+        for (ObjectGuid const& guid : viewers)
+            if (Player* viewer = ObjectAccessor::FindConnectedPlayer(guid))
                 if (viewer != player && viewer->GetSession() && !viewer->GetSession()->IsVirtualSession())
                     viewer->SendDirectMessage(&data);
     }
@@ -2274,9 +2319,15 @@ void PersonaAccess::Restore(Player* player)
 
     // From here the character saves as itself again.
     player->m_allStarPersona.reset();
+    std::unordered_set<ObjectGuid> told;
     {
         std::lock_guard<std::mutex> lock(NameMutex);
         Names.erase(player->GetGUID());
+        if (auto const itr = Told.find(player->GetGUID()); itr != Told.end())
+        {
+            told = std::move(itr->second);
+            Told.erase(itr);
+        }
     }
 
     player->UpdateAllStats();
@@ -2293,6 +2344,10 @@ void PersonaAccess::Restore(Player* player)
         SendMacros(player, nullptr);
         EnterDefaultStance(player);
     }
+    // SyncClient told this map; everyone else who was given the persona's
+    // name - gone from the arena already, or anywhere when this is a logout -
+    // is told the real one here.
+    TellRealName(player, told);
 
     // The end of the match's payout, now that the bags, class and spells are
     // the character's own (DeferMatchReward): the honor against its own cap,
@@ -2890,12 +2945,16 @@ void ForgetPastLife(ObjectGuid guid)
     Names.erase(guid);
 }
 
-bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& gender, uint8& playerClass)
+bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& gender, uint8& playerClass, ObjectGuid viewer)
 {
     std::lock_guard<std::mutex> lock(NameMutex);
     auto const itr = Names.find(guid);
     if (itr == Names.end())
         return false;
+    // A worn persona's asker is told the real name when it comes off (Told);
+    // a finished life's line never changes name.
+    if (!viewer.IsEmpty() && viewer != guid && guid.GetCounter() < PAST_LIFE_GUID_BASE)
+        Told[guid].insert(viewer);
     name = itr->second.Name;
     race = itr->second.Race;
     gender = itr->second.Gender;

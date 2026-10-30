@@ -185,7 +185,10 @@ namespace AllStar
     // class. false for everybody else, who are answered as ever. The player's
     // own client is never given it: Centurion addons check the server's
     // whispers against UnitName("player"). Safe from any thread.
-    bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& gender, uint8& playerClass);
+    // `viewer`: the character being answered, remembered so the real name
+    // reaches it when the persona comes off, wherever it is by then.
+    bool GetPersonaNameData(ObjectGuid guid, std::string& name, uint8& race, uint8& gender, uint8& playerClass,
+        ObjectGuid viewer = ObjectGuid::Empty);
     // A scoreboard line for a life that is over (Arena::KeepAllStarPastLife):
     // a guid of its own, which GetPersonaNameData answers until it is forgotten.
     ObjectGuid::LowType constexpr PAST_LIFE_GUID_BASE = 0xF0000000;
