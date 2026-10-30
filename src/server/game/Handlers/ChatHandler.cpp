@@ -322,7 +322,11 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         return;
     }
 
-    if (langDesc->skill_id != 0 && !sender->HasSkill(langDesc->skill_id))
+    // An All-Star persona is swapped on in place, so the client keeps the chat
+    // language it chose at zone-in for the real character's race, which the
+    // borrowed kit may not know. Every line goes out as Universal anyway
+    // (ChatHandler::BuildChatPacket), so the language is not checked.
+    if (langDesc->skill_id != 0 && !sender->HasSkill(langDesc->skill_id) && !sender->HasAllStarPersona())
     {
         // also check SPELL_AURA_COMPREHEND_LANGUAGE (client offers option to speak in that language)
         Unit::AuraEffectList const& langAuras = sender->GetAuraEffectsByType(SPELL_AURA_COMPREHEND_LANGUAGE);
