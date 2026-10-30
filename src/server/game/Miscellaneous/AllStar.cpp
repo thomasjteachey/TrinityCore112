@@ -2852,7 +2852,8 @@ void Update()
     {
         StandInsAsked = true;
         std::string ids;
-        for (std::string_view token : Trinity::Tokenize(sConfigMgr->GetStringDefault("Playerbot.Pve.PvpOnlyAccountIds", ""), ',', false))
+        std::string const accounts = sConfigMgr->GetStringDefault("Playerbot.Pve.PvpOnlyAccountIds", "");
+        for (std::string_view token : Trinity::Tokenize(accounts, ',', false))
         {
             while (!token.empty() && (token.front() == ' ' || token.front() == '"'))
                 token.remove_prefix(1);
