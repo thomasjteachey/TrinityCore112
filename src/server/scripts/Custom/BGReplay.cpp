@@ -314,6 +314,15 @@ namespace
         // are left out of the saved player lists: a bot copy's guid comes from
         // the player generator and may later belong to a real character.
         std::unordered_set<uint64> BotActorGuids;
+        // The match recorded (Battleground::GetMatchSerial). Records are kept by
+        // instance id, which is handed out again once a map is gone; a match
+        // that never reached OnBattlegroundEnd (everyone left, bots kept it
+        // going) left its record behind, and the next arena on that id added
+        // to it - four arenas in one replay, a 3v3 listing 33 players.
+        uint64 MatchSerial = 0;
+        // Bots gone before the end (a person took the seat a bot held while
+        // the gates were shut): in the replay, not in its list of who played.
+        std::unordered_set<uint64> UnlistedActorGuids;
 
         // Used only while recording to collapse duplicate cross-team broadcasts.
         std::unordered_map<uint64, uint32> RecentPacketHashTimes;
@@ -1206,11 +1215,11 @@ namespace
 
         std::lock_guard<std::recursive_mutex> lock(RecordsLock);
 
-        auto recordItr = Records.find(bg->GetInstanceID());
-        if (recordItr == Records.end())
+        MatchRecord* found = FindRecord(bg);
+        if (!found)
             return;   // nothing recorded yet: the first packet starts the record
 
-        MatchRecord& record = recordItr->second;
+        MatchRecord& record = *found;
         uint32 const nowMs = getMSTime();
         if (record.LastScanMs && getMSTimeDiff(record.LastScanMs, nowMs) < ARENA_REPLAY_PARTICIPANT_SCAN_MS)
             return;
@@ -1285,8 +1294,27 @@ namespace
         }
     }
 
+    // This match's record, or nullptr. One left by an earlier match on the same
+    // instance id is dropped here (MatchRecord::MatchSerial). RecordsLock held.
+    MatchRecord* FindRecord(Battleground* bg)
+    {
+        auto const itr = Records.find(bg->GetInstanceID());
+        if (itr == Records.end())
+            return nullptr;
+        if (itr->second.MatchSerial != bg->GetMatchSerial())
+        {
+            TC_LOG_INFO("arena.replay", "Dropped the unfinished recording of an earlier match on instance {} ({} packets, {} actors).",
+                bg->GetInstanceID(), uint32(itr->second.Packets.size()), uint32(itr->second.Actors.size()));
+            Records.erase(itr);
+            return nullptr;
+        }
+        return &itr->second;
+    }
+
     MatchRecord& GetOrCreateRecord(Battleground* bg)
     {
+        if (!FindRecord(bg))
+            Records[bg->GetInstanceID()].MatchSerial = bg->GetMatchSerial();
         MatchRecord& record = Records[bg->GetInstanceID()];
 
         if (!record.RecordStartMs)
@@ -5813,6 +5841,8 @@ std::vector<uint8> payload(packet.size());
         {
             if ((winners.count(actor.OriginalGuid.GetRawValue()) != 0) != winningSide)
                 continue;
+            if (match.UnlistedActorGuids.count(actor.OriginalGuid.GetRawValue()))
+                continue;
 
             // A bot as "b<guid>.<class>.<name>": a bot copy's guid may later be
             // a real character's, so the replay list shows the class and name
@@ -6468,11 +6498,11 @@ std::vector<uint8> payload(packet.size());
             return;
         }
 
-        auto recordItr = Records.find(instanceId);
-        if (recordItr == Records.end())
+        MatchRecord* found = FindRecord(bg);
+        if (!found)
             return;
 
-        MatchRecord& match = recordItr->second;
+        MatchRecord& match = *found;
         RefreshActorsFromBattleground(bg, match);
 
         if (match.ContainsBotParticipant && !RecordsBotMatches())
@@ -6508,6 +6538,10 @@ std::vector<uint8> payload(packet.size());
         uint32 winnerTeam = NormalizeReplayWinnerTeam(match, winner);
         uint32 loserTeam = bg->GetOtherTeam(winnerTeam);
         std::unordered_set<uint64> const winners = ReplayWinningActors(bg, match, winner);
+
+        for (uint64 bot : match.BotActorGuids)
+            if (!bg->IsPlayerInBattleground(ObjectGuid(bot)))
+                match.UnlistedActorGuids.insert(bot);
 
         std::string winnerPlayerGuids = JoinActorGuidList(match, winners, true);
         std::string loserPlayerGuids = JoinActorGuidList(match, winners, false);

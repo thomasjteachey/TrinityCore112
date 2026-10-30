@@ -543,6 +543,11 @@ class TC_GAME_API Battleground
         //here we can count minlevel and maxlevel for players
         void SetBracket(PvPDifficultyEntry const* bracketEntry);
         void SetInstanceID(uint32 InstanceID) { m_InstanceID = InstanceID; }
+        // This match and no other for the life of the process: an instance id
+        // is handed out again once its map is gone, so anything kept per match
+        // (an arena replay recording) checks this. Set by CreateNewBattleground.
+        uint64 GetMatchSerial() const { return m_MatchSerial; }
+        void AssignMatchSerial();
         void SetStatus(BattlegroundStatus Status) { m_Status = Status; }
         void SetClientInstanceID(uint32 InstanceID) { m_ClientInstanceID = InstanceID; }
         void SetStartTime(uint32 Time)      { m_StartTime = Time; }
@@ -1258,6 +1263,7 @@ class TC_GAME_API Battleground
         uint32 m_CustomGamePendingCloneCount;
         BattlegroundCustomRules m_CustomRules;
         bool   m_IsBotFillMatch;                            // padded with transient clones, see IsBotFillMatch()
+        uint64 m_MatchSerial = 0;                           // see GetMatchSerial()
         bool   m_IsBotFillRefused;                          // see IsBotFillRefused()
         std::map<ObjectGuid, uint32> m_PreparationSeatTakers; // invited into a clone's seat -> team, see CountPreparationSeatsHeldByClones()
         uint32 m_BotFillSeatsOnTheWay[PVP_TEAMS_COUNT] = { }; // see SetBotFillSeatsOnTheWay()

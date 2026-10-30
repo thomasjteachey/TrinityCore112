@@ -53,6 +53,7 @@
 #include "Mail.h"
 #include "Map.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdarg>
 #include <limits>
@@ -2899,6 +2900,12 @@ void Battleground::RestartPreparationCountdown()
     SetStartDelayTime(StartDelayTimes[BG_STARTING_EVENT_FIRST]);
     if (StartMessageIds[BG_STARTING_EVENT_FIRST])
         SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FIRST], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+}
+
+void Battleground::AssignMatchSerial()
+{
+    static std::atomic<uint64> next{ 0 };
+    m_MatchSerial = ++next;
 }
 
 std::string Battleground::GetPlayerDisplayName(Player const* player)
