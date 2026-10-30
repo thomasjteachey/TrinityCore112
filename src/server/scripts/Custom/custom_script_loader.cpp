@@ -59,6 +59,7 @@ void AddSC_custom_t2_priest_mage();
 void AddSC_custom_t2_rogue_armor();
 void AddSC_custom_wrapped_spells();
 void AddSC_custom_southpark_nolife();
+void AddSC_custom_caverns_unlock_ceremony();
 void AddSC_custom_sucky_demon();
 void AddSC_custom_starter_booster();
 void AddSC_custom_recruit_resolve();
@@ -133,6 +134,7 @@ void AddCustomScripts()
     AddSC_custom_t2_rogue_armor();
     AddSC_custom_wrapped_spells();
     AddSC_custom_southpark_nolife();
+    AddSC_custom_caverns_unlock_ceremony();
     AddSC_custom_sucky_demon();
     AddSC_custom_starter_booster();
     AddSC_custom_recruit_resolve();
