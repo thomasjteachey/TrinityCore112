@@ -3098,6 +3098,18 @@ Centurion.Battleground.Spoils.MinPresencePercent = 50
 Centurion.SoloShuffle.BalanceHealers = 0
 
 #
+#    ArenaReplay.RecordBotMatches
+#        Description: Arena replays of matches bots played in.
+#                     1 - recorded and saved like any other; a team of nothing but
+#                         bots is recorded from one of its bots.
+#                     0 - a match a bot took a seat in is not recorded.
+#                     Must be in worldserver.conf, not arena_replay.conf: the world
+#                     settings are read before that file. .reload config.
+#        Default:     0
+
+ArenaReplay.RecordBotMatches = 0
+
+#
 #    Centurion.AllStar.Enable
 #        Description: The All-Star arena (battleground 890): a few lives a player
 #                     (Centurion.AllStar.Lives), each a different class. Each death
