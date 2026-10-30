@@ -1160,7 +1160,7 @@ namespace
     // thread (BattlegroundMgr::Update -> OnBattlegroundUpdate).
     void ScanRecordingParticipants(Battleground* bg)
     {
-        if (!bg || bg->IsReplay() || bg->IsCustomGame() || bg->IsBotFillMatch() || !bg->isArena())
+        if (!bg || bg->IsReplay() || bg->IsCustomGame() || !bg->isArena())
             return;
 
         if (bg->GetStatus() != STATUS_WAIT_JOIN && bg->GetStatus() != STATUS_IN_PROGRESS)
@@ -6394,11 +6394,10 @@ std::vector<uint8> payload(packet.size());
         std::lock_guard<std::recursive_mutex> lock(RecordsLock);
         uint32 const instanceId = bg->GetInstanceID();
 
-        // Custom games and bot-filled skirmishes are non-standard matches and
-        // must never be persisted as arena replays. IsBotFillMatch is sticky,
-        // so it still answers correctly after the transient clones are gone.
-        // Discard any record created before either flag was applied.
-        if (bg->IsCustomGame() || bg->IsBotFillMatch())
+        // Custom games are never persisted as arena replays. A match bots took
+        // part in is dropped below (ContainsBotParticipant, sticky); the bot-
+        // fill flag alone says nothing, the fill sets it on every skirmish.
+        if (bg->IsCustomGame())
         {
             Records.erase(instanceId);
             return;
@@ -6675,12 +6674,17 @@ std::vector<uint8> payload(packet.size());
 
 
     // The arena whose replay records this session's packets, or nullptr.
+    // Not IsBotFillMatch: the battleground fill flags every skirmish it looks
+    // at, bots or not (PlayerbotBgFillDriver FillMatch), so an all-human 2v2
+    // was never recorded and nothing said so (owner 2026-10-30: "i just did an
+    // all-human 2v2"). A bot that really takes a seat marks the record
+    // (ContainsBotParticipant), which stops the recording and its save.
     Battleground* RecordedArenaFor(WorldSession* session)
     {
         Player* player = session ? session->GetPlayer() : nullptr;
         Battleground* bg = player ? player->GetBattleground() : nullptr;
 
-        if (!bg || bg->IsReplay() || bg->IsCustomGame() || bg->IsBotFillMatch() || !bg->isArena())
+        if (!bg || bg->IsReplay() || bg->IsCustomGame() || !bg->isArena())
             return nullptr;
 
         return bg;
@@ -6691,6 +6695,9 @@ std::vector<uint8> payload(packet.size());
         std::lock_guard<std::recursive_mutex> lock(RecordsLock);
 
         MatchRecord& record = GetOrCreateRecord(bg);
+        // A bot has been in it: it will never be saved (SaveReplay).
+        if (record.ContainsBotParticipant)
+            return;
         uint32 nowMs = getMSTime();
 
         if (IsDuplicateRecentPacket(record, packet, nowMs))
