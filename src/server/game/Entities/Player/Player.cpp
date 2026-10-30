@@ -7317,7 +7317,11 @@ void Player::UpdateCombatSkills(Unit* victim, WeaponAttackType attType, bool def
     if (lvldif < 3)
         lvldif = 3;
 
-    uint32 skilldif = 5 * plevel - (defense ? GetBaseDefenseSkillValue() : GetBaseWeaponSkillValue(attType));
+    // Compare the trained skill alone against the level cap. Permanent bonuses
+    // (the classic racials, e.g. orc Axe Specialization 20574 = aura 98 +5)
+    // sit on top of the cap, so counting them here froze the trained value
+    // 5 points short of max.
+    int32 skilldif = int32(5 * plevel) - int32(defense ? GetPureSkillValue(SKILL_DEFENSE) : GetBaseWeaponSkillValue(attType));
     if (skilldif <= 0)
         return;
 
@@ -27974,8 +27978,10 @@ uint32 Player::GetBaseWeaponSkillValue(WeaponAttackType attType) const
         return T2UnitHooks::TEMPORARY_WEAPON_SKILL;
 
     // weapon skill or (unarmed for base attack)
+    // Trained value only, without the permanent (racial) bonus: the only
+    // caller is the skill-up roll, which caps the trained value at level*5.
     uint32  skill = item ? item->GetSkill() : uint32(SKILL_UNARMED);
-    return GetBaseSkillValue(skill);
+    return GetPureSkillValue(skill);
 }
 
 void Player::ResurrectUsingRequestData()
