@@ -59,6 +59,7 @@
 #include "SpellMgr.h"
 #include "Timer.h"
 #include "UpdateFields.h"
+#include "World.h"
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
 
@@ -309,6 +310,10 @@ namespace
         // match must never become a saved replay even if the final roster is all
         // human by the time SaveReplay runs.
         bool ContainsBotParticipant = false;
+        // The bots among the actors (ArenaReplay.RecordBotMatches). Their guids
+        // are left out of the saved player lists: a bot copy's guid comes from
+        // the player generator and may later belong to a real character.
+        std::unordered_set<uint64> BotActorGuids;
 
         // Used only while recording to collapse duplicate cross-team broadcasts.
         std::unordered_map<uint64, uint32> RecentPacketHashTimes;
@@ -619,6 +624,16 @@ namespace
         return false;
     }
 
+    bool RecordsBotMatches()
+    {
+        return sWorld->getBoolConfig(CONFIG_ARENA_REPLAY_RECORD_BOT_MATCHES);
+    }
+
+    bool IsPersonSession(WorldSession const* session)
+    {
+        return session && !session->IsVirtualSession() && !session->IsTransientPlayerSession();
+    }
+
     bool IsTeamRecorder(Battleground* bg, Player const* player)
     {
         if (!bg || !player)
@@ -626,15 +641,35 @@ namespace
 
         // Keep the old "one player per team" idea to avoid duplicate broadcast packets,
         // but use a real clock for timestamps and a dedupe layer.
+        //
+        // The team's first PERSON. A bot has no client, so a bot taken as the
+        // recorder lost its team's view; only a team with nobody but bots is
+        // recorded from a bot (ArenaReplay.RecordBotMatches: WorldSession::
+        // SendPacket hands a bot's packets over for it).
+        bool const person = IsPersonSession(player->GetSession());
+        ObjectGuid firstOfTeam;
         for (auto const& it : bg->GetPlayers())
         {
             if (it.second.Team != player->GetBGTeam())
                 continue;
 
-            return it.first.GetRawValue() == player->GetGUID().GetRawValue();
+            if (firstOfTeam.IsEmpty())
+                firstOfTeam = it.first;
+
+            bool const self = it.first == player->GetGUID();
+            if (person && self)
+                return true;    // no person before it
+
+            if (self)
+                continue;
+
+            Player const* other = ObjectAccessor::FindConnectedPlayer(it.first);
+            if (other && IsPersonSession(other->GetSession()))
+                return false;   // that person records the team
         }
 
-        return true;
+        // A bot, on a team of bots.
+        return !person && RecordsBotMatches() && firstOfTeam == player->GetGUID();
     }
 
     uint8 PackedGuidMask(uint64 raw)
@@ -793,7 +828,10 @@ namespace
                 continue;
 
             if (bg->IsBotParticipantSession(player->GetSession()))
+            {
                 match.ContainsBotParticipant = true;
+                match.BotActorGuids.insert(player->GetGUID().GetRawValue());
+            }
 
             ReplayRosterEvent const identity = CaptureParticipantIdentity(bg, player, it.second.Team);
 
@@ -1179,7 +1217,7 @@ namespace
         record.LastScanMs = nowMs;
 
         RefreshActorsFromBattleground(bg, record);
-        if (record.ContainsBotParticipant)
+        if (record.ContainsBotParticipant && !RecordsBotMatches())
             return;   // never saved; do not spend the scan on it
 
         uint32 const timestamp = ReplayRecordClock(bg, record, nowMs);
@@ -5775,6 +5813,9 @@ std::vector<uint8> payload(packet.size());
         {
             if ((winners.count(actor.OriginalGuid.GetRawValue()) != 0) != winningSide)
                 continue;
+            // Who played it, for "my replays": a bot is nobody's (BotActorGuids).
+            if (match.BotActorGuids.count(actor.OriginalGuid.GetRawValue()))
+                continue;
 
             std::string const guid = std::to_string(actor.OriginalGuid.GetRawValue());
             std::string_view const separator = out.empty() ? "" : ", ";
@@ -6422,7 +6463,7 @@ std::vector<uint8> payload(packet.size());
         MatchRecord& match = recordItr->second;
         RefreshActorsFromBattleground(bg, match);
 
-        if (match.ContainsBotParticipant)
+        if (match.ContainsBotParticipant && !RecordsBotMatches())
         {
             TC_LOG_INFO("arena.replay", "Skipped arena replay containing bots instance={} map={} arenaType={}",
                 instanceId, bg->GetMapId(), uint32(match.ArenaTypeId));
@@ -6695,8 +6736,9 @@ std::vector<uint8> payload(packet.size());
         std::lock_guard<std::recursive_mutex> lock(RecordsLock);
 
         MatchRecord& record = GetOrCreateRecord(bg);
-        // A bot has been in it: it will never be saved (SaveReplay).
-        if (record.ContainsBotParticipant)
+        // A bot has been in it: it will never be saved (SaveReplay), unless
+        // ArenaReplay.RecordBotMatches keeps it.
+        if (record.ContainsBotParticipant && !RecordsBotMatches())
             return;
         uint32 nowMs = getMSTime();
 

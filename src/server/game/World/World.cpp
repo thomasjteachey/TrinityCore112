@@ -1571,6 +1571,10 @@ void World::LoadConfigSettings(bool reload)
     // Whether Buffle Shuffle cares about roles (Arena.h): on, the queue waits for
     // two healers and the rounds keep them apart; off, roles are ignored.
     m_bool_configs[CONFIG_CENTURION_SOLO_SHUFFLE_BALANCE_HEALERS] = sConfigMgr->GetBoolDefault("Centurion.SoloShuffle.BalanceHealers", false);
+    // Arena replays of matches bots played in (BGReplay.cpp). Off, a match a
+    // bot took a seat in is not recorded; on, it is, and a bot copy - which has
+    // no client - passes what it is sent to the recorder (WorldSession::SendPacket).
+    m_bool_configs[CONFIG_ARENA_REPLAY_RECORD_BOT_MATCHES] = sConfigMgr->GetBoolDefault("ArenaReplay.RecordBotMatches", false);
     // Percent chance a Violet Hold wave mirrors the party itself rather than
     // being drawn from the playerbot population (the 2.5% mono and full-roster
     // specials roll first and are unaffected).

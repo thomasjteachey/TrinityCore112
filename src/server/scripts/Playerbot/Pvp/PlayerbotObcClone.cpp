@@ -504,6 +504,20 @@ void CopySpellsTalentsAndGlyphs(Player* clone, Player* human)
         clone->SetGlyph(slot, human->GetGlyph(slot));
     }
     clone->ApplyGlyphAuras();
+
+    // Its action bars too. The copy never runs LoadFromDB to read them, and an
+    // arena replay shows the spectated player's bars (BGReplay
+    // CaptureActionBars): a bot's were empty. Spells and items only - a macro
+    // lives in the source's account data, which the copy cannot read.
+    for (uint8 slot = 0; slot < MAX_ACTION_BUTTONS; ++slot)
+    {
+        ActionButton const* button = human->GetActionButton(slot);
+        if (!button || !button->GetAction())
+            continue;
+        uint8 const type = button->GetType();
+        if (type == ACTION_BUTTON_SPELL || type == ACTION_BUTTON_ITEM)
+            clone->addActionButton(slot, button->GetAction(), type);
+    }
 }
 
 bool CreateHunterPetMirror(Player* clone, Pet* sourcePet)

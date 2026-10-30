@@ -226,7 +226,15 @@ void WorldSession::SendPacket(WorldPacket const* packet)
     ASSERT(packet->GetOpcode() != NULL_OPCODE);
 
     if (!m_Socket)
+    {
+        // A battleground's bot copy has no client, but an arena replay of a
+        // match bots play in records what a bot is sent when its team has no
+        // person to record it from (BGReplay IsTeamRecorder). Arenas only, and
+        // only with ArenaReplay.RecordBotMatches on: every packet is copied.
+        if (m_transientPlayerSession && _player && sWorld->getBoolConfig(CONFIG_ARENA_REPLAY_RECORD_BOT_MATCHES) && _player->InArena())
+            sScriptMgr->OnPacketSend(this, *packet);
         return;
+    }
 
 #ifdef TRINITY_DEBUG
     // Code for network use statistic
