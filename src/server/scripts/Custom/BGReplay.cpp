@@ -5813,11 +5813,20 @@ std::vector<uint8> payload(packet.size());
         {
             if ((winners.count(actor.OriginalGuid.GetRawValue()) != 0) != winningSide)
                 continue;
-            // Who played it, for "my replays": a bot is nobody's (BotActorGuids).
-            if (match.BotActorGuids.count(actor.OriginalGuid.GetRawValue()))
-                continue;
 
-            std::string const guid = std::to_string(actor.OriginalGuid.GetRawValue());
+            // A bot as "b<guid>.<class>.<name>": a bot copy's guid may later be
+            // a real character's, so the replay list shows the class and name
+            // kept here (ReplayPlayerList), and no character id matches it.
+            std::string guid = std::to_string(actor.OriginalGuid.GetRawValue());
+            if (match.BotActorGuids.count(actor.OriginalGuid.GetRawValue()))
+            {
+                std::string name = actor.Name;
+                name.erase(std::remove_if(name.begin(), name.end(), [](char c)
+                {
+                    return c == ':' || c == '|' || c == ';' || c == ',' || c == '.' || c == '\'';
+                }), name.end());
+                guid = Trinity::StringFormat("b{}.{}.{}", guid, uint32(actor.Class), name);
+            }
             std::string_view const separator = out.empty() ? "" : ", ";
             if (out.size() + separator.size() + guid.size() > kGuidColumnSize)
                 break;
@@ -6310,6 +6319,9 @@ std::vector<uint8> payload(packet.size());
         {
             while (!guid.empty() && guid.front() == ' ')
                 guid.remove_prefix(1);
+            // A bot: "b<guid>.<class>.<name>" (JoinActorGuidList).
+            if (!guid.empty() && guid.front() == 'b')
+                guid = guid.substr(1, guid.find('.') == std::string_view::npos ? std::string_view::npos : guid.find('.') - 1);
             if (Optional<uint64> raw = Trinity::StringTo<uint64>(guid))
                 record.WinnerGuids.insert(*raw);
         }
@@ -7242,6 +7254,24 @@ namespace
         {
             while (!token.empty() && token.front() == ' ')
                 token.remove_prefix(1);
+
+            // A bot, with the class and name it played under (JoinActorGuidList).
+            if (!token.empty() && token.front() == 'b')
+            {
+                std::size_t const classAt = token.find('.');
+                std::size_t const nameAt = classAt == std::string_view::npos ? classAt : token.find('.', classAt + 1);
+                if (nameAt == std::string_view::npos)
+                    continue;
+                Optional<uint32> const playerClass = Trinity::StringTo<uint32>(token.substr(classAt + 1, nameAt - classAt - 1));
+                std::string_view const name = token.substr(nameAt + 1);
+                if (!playerClass || name.empty())
+                    continue;
+                if (!out.empty())
+                    out += ',';
+                out += Trinity::StringFormat("{}.{}", *playerClass, CleanReplayText(std::string(name)));
+                continue;
+            }
+
             Optional<uint64> const raw = Trinity::StringTo<uint64>(token);
             if (!raw)
                 continue;
@@ -7264,6 +7294,9 @@ namespace
         std::unordered_set<uint32> const starred(saved.begin(), saved.end());
         char const* const list = favorites ? "FAV" : "RECENT";
 
+        // Whether this realm saves matches bots played in, for the window's
+        // note (CENTURION_ArenaMaster).
+        SendReplayLine(player, Trinity::StringFormat("BOTS:{}", RecordsBotMatches() ? 1 : 0));
         SendReplayLine(player, Trinity::StringFormat("BEGIN:{}", list));
         uint32 sent = 0;
         if (!ids.empty())
