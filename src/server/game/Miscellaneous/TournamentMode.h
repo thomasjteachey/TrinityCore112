@@ -402,6 +402,12 @@ namespace Tournament
     void FillRiftKit(Player* player, uint8 kitLevel, RiftWeapons const& weapons = {});
     // The starter-template item a class wears in an equipment slot, 0 for none.
     uint32 GetLoadoutTemplateItem(uint8 playerClass, uint8 slot);
+    // The loadout's answer for an untwinned weapon, shield or holdable in a
+    // hand slot: one of the SAME shape off the starter vendors (a one-handed
+    // axe for a one-handed axe, a shield for a shield), held to the item level
+    // of the player's class template piece. Not checked against what the
+    // player can equip. 0 when the rack has nothing of that shape.
+    uint32 GetShapedLoadoutWeapon(Player* player, uint32 original, uint8 slot);
 
     // Inside a tournament match only the tournament PvP consumables work
     // (Centurion.Tournament.BgConsumables - what Jazzik sells), plus what a

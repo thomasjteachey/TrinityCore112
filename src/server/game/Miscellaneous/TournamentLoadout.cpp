@@ -1357,6 +1357,19 @@ uint32 GetLoadoutTemplateItem(uint8 playerClass, uint8 slot)
     return itr != TemplateGear.end() ? itr->second : 0;
 }
 
+uint32 GetShapedLoadoutWeapon(Player* player, uint32 original, uint8 slot)
+{
+    ItemTemplate const* proto = player ? sObjectMgr->GetItemTemplate(original) : nullptr;
+    if (!proto)
+        return 0;
+
+    LoadoutEntry entry;
+    entry.OriginalClass = proto->Class;
+    entry.OriginalSubClass = proto->SubClass;
+    entry.OriginalInventoryType = proto->InventoryType;
+    return PickTournamentWeapon(player, entry, slot, false);
+}
+
 bool IsLoadoutSwapInProgress(Player const* player)
 {
     return player && SwapInProgress == player;

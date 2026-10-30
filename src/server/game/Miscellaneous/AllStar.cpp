@@ -1861,8 +1861,13 @@ void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit
 {
     // A match fought under the tournament's rules dresses everyone the same
     // way (Miscellaneous/TournamentLoadout.cpp): the tournament twin of a piece,
-    // else the class's starter template piece for the slot - and an empty slot
-    // gets the template piece too. Any other match wears the kit as it is.
+    // else - for a weapon, shield or holdable - one of the same shape off the
+    // starter vendors, else the class's starter template piece for the slot;
+    // an empty slot gets the template piece too. Any other match wears the kit
+    // as it is. The shape step was missing: a Protection warrior borrowed with
+    // a one-handed axe and a shield fought with the warrior template's
+    // two-hander and no shield (owner 2026-10-30: "why is caelhild longhorn
+    // wielding a 2her as a prot warrior").
     bool const tournament = Tournament::IsInTournamentMatch(player);
 
     std::array<KitItem const*, EQUIPMENT_SLOT_END> worn{};
@@ -1877,8 +1882,10 @@ void PersonaAccess::EquipKit(Player* player, PersonaStash& stash, Kit const& kit
         bool const cosmetic = slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD;
         if (tournament && !cosmetic)
         {
-            uint32 const twin = entry ? Tournament::GetItemForMode(entry, true) : 0;
-            entry = twin ? twin : Tournament::GetLoadoutTemplateItem(kit.Class, slot);
+            uint32 replacement = entry ? Tournament::GetItemForMode(entry, true) : 0;
+            if (!replacement && entry)
+                replacement = Tournament::GetShapedLoadoutWeapon(player, entry, slot);
+            entry = replacement ? replacement : Tournament::GetLoadoutTemplateItem(kit.Class, slot);
         }
         if (!entry)
             continue;
