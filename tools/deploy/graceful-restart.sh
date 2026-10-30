@@ -84,6 +84,43 @@ num_or() {
   esac
 }
 
+# The deploy waiting on this: the first ancestor that is not sudo (the pipeline
+# step runs `sudo graceful-restart.sh ...`). Aborting a build kills that shell but
+# not this script, which runs as root. On 2026-10-30 an aborted deploy whose
+# countdown had then been cancelled in game sat out the two-hour backstop below
+# and hard stopped live Centurion, with no deploy left to start it again: down
+# for over an hour. So once the caller is gone this never stops a realm. A timer
+# held or cancelled in game is left alone, and a realm that goes down on this
+# deploy's own countdown is started again on the build it already had (the
+# install that would have replaced it never ran).
+find_caller() {
+  local pid="$PPID" comm parent
+  while [ "$pid" -gt 1 ]; do
+    comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+    if [ "$comm" != "sudo" ]; then
+      printf '%s' "$pid"
+      return 0
+    fi
+    parent="$(ps -o ppid= -p "$pid" 2>/dev/null || true)"
+    pid="$(num_or "${parent// /}" 0)"
+  done
+  printf '0'
+}
+CALLER="$(find_caller)"
+CALLER_START=""
+if [ "$CALLER" -gt 1 ]; then
+  CALLER_START="$(ps -o lstart= -p "$CALLER" 2>/dev/null || true)"
+fi
+
+# True once the shell that started this deploy is gone - its pid gone, or taken
+# by another process (the start time no longer matches). Never true when the
+# caller could not be found: then this behaves as it always did.
+deploy_gone() {
+  [ -n "$CALLER_START" ] || return 1
+  [ "$(ps -o lstart= -p "$CALLER" 2>/dev/null || true)" != "$CALLER_START" ]
+}
+ORPHANED=0      # the deploy went away while its own countdown was running
+
 # Nothing to be polite to.
 if ! systemctl is-active --quiet "$SERVICE"; then
   echo "[graceful] $SERVICE is already stopped; nothing to announce."
@@ -109,6 +146,11 @@ chmod 0664 "$REQUEST_FILE" || true
 # was always going to do.
 PROBE=0
 while [ -f "$REQUEST_FILE" ]; do
+  if deploy_gone; then
+    echo "[graceful] the deploy that asked is gone; withdrawing the request and leaving $SERVICE running."
+    rm -f "$REQUEST_FILE" || true
+    exit 0
+  fi
   if [ "$PROBE" -ge 15 ]; then
     echo "[graceful] request not picked up in ${PROBE}s - this build has no shutdown watcher."
     echo "[graceful] falling back to a hard stop; the NEXT deploy will be graceful."
@@ -186,7 +228,27 @@ while systemctl is-active --quiet "$SERVICE"; do
     echo "[graceful] waiting for it on the operator's schedule rather than stopping $SERVICE; backstop ${HOLD_MAX_SECONDS}s."
   fi
 
+  # The deploy is gone (see find_caller). Its own countdown is let run - the
+  # realm is told it is going down - and the realm is started again after it.
+  # Anything else - cancelled, held, no timer at all - is nobody's to stop now.
+  if deploy_gone; then
+    if [ "$STATE" = "cancelled" ] || [ "$STATE" = "none" ] || { [ "$STATE" = "scheduled" ] && [ "$OURS" = "0" ]; }; then
+      echo "[graceful] the deploy that asked is gone and the timer is not its own (state=$STATE); leaving $SERVICE running."
+      rm -f "$REQUEST_FILE" || true
+      exit 0
+    fi
+    if [ "$ORPHANED" = "0" ]; then
+      ORPHANED=1
+      echo "[graceful] the deploy that asked is gone; $SERVICE is let finish its countdown and will be started again after."
+    fi
+  fi
+
   if [ "$WAITED" -ge "$DEADLINE" ]; then
+    if [ "$ORPHANED" = "1" ]; then
+      echo "[graceful] the deploy that asked is gone and $SERVICE is still up past ${DEADLINE}s; leaving it running."
+      rm -f "$REQUEST_FILE" || true
+      exit 0
+    fi
     if [ "$HELD_NOW" = "1" ]; then
       echo "[graceful] WARNING: held from inside the game for ${WAITED}s, past the ${DEADLINE}s this deploy was willing to wait."
       echo "[graceful] falling back to a hard stop so the deploy cannot wedge. Raise GRACEFUL_HOLD_MAX_SECONDS to wait longer."
@@ -214,3 +276,10 @@ echo "[graceful] $SERVICE stopped cleanly after ${WAITED}s."
 # It should have removed this itself; clearing it means a request can never be
 # left behind to fire against the NEXT boot.
 rm -f "$REQUEST_FILE" || true
+
+# Down on this deploy's countdown with the deploy gone: nothing will install or
+# start anything, so the realm comes back on the build it had.
+if [ "$ORPHANED" = "1" ] || deploy_gone; then
+  echo "[graceful] the deploy that asked is gone; starting $SERVICE again on the build it already had."
+  sudo systemctl start "$SERVICE" || true
+fi
