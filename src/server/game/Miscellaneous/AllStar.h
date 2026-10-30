@@ -75,10 +75,11 @@ class WorldSession;
 // disconnect - restores the stash first (Battleground::RemovePlayerAtLeave,
 // WorldSession::LogoutPlayer) and only then lets the save happen. What the
 // match pays (honor, kills) belongs to the character that queued; its end-of-
-// match honor and Mark of Honor wait for that restore (DeferMatchReward), and
-// every other character of the account that played a life earns the same
-// honor at its next login (QueueLifeHonor). The payout is Buffle Shuffle 3v3's
-// (BattlegroundMgr::GetHonorPayoutKey).
+// match honor and Mark of Honor wait for that restore (DeferMatchReward). The
+// honor is Buffle Shuffle 3v3's payout (BattlegroundMgr::GetHonorPayoutKey)
+// times the player's lives, split evenly between the lives played
+// (Arena::ShareEndOfMatchHonor); another character's share is paid at its
+// next login (QueueLifeHonor).
 //
 // Bots (the transient copies that fill a match) play by the same rules, every
 // class after their first from the starter templates: a copy has no character
@@ -227,8 +228,8 @@ namespace AllStar
     // without a persona: the caller pays as usual.
     bool DeferMatchReward(Player* player, uint32 honor, bool restoreMark);
     // Owner 2026-10-30: "grant honor for every character that participated
-    // (respecting honor caps)". Honor for a character of the account that
-    // played one of a player's lives, held in character_allstar_honor and paid
+    // (respecting honor caps)". A character of the account's share of the
+    // honor for playing one of a player's lives, held in character_allstar_honor and paid
     // at its next login (PayQueuedLifeHonor) through Player::RewardHonor, so
     // its own honor cap, Rate.Honor and honor mirror apply as to any award.
     // `account` must own the character; a row for anyone else is not written.

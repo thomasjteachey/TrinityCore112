@@ -1700,6 +1700,17 @@ void Battleground::EndBattleground(uint32 winner)
         // only grant rewards if battle has lasted 15 seconds
         if (paysOut)
         {
+            // All-Star: the honor is a pool shared out between the characters
+            // that played the player's lives; this is the share the player's
+            // own character keeps (Arena::ShareEndOfMatchHonor).
+            if (!m_IsCustomGame)
+            {
+                if (won)
+                    winner_honor = ShareEndOfMatchHonor(player, winner_honor);
+                else
+                    loser_honor = ShareEndOfMatchHonor(player, loser_honor);
+            }
+
             if (won)
             {
                 // Private custom games retain the normal gold payout, but
@@ -1768,11 +1779,6 @@ void Battleground::EndBattleground(uint32 winner)
                     player->SendDirectMessage(&moneyNotify);
                 }
             }
-
-            // All-Star: every other character of theirs that played a life
-            // earns the same honor (Arena::ShareEndOfMatchHonor).
-            if (!m_IsCustomGame)
-                ShareEndOfMatchHonor(player, won ? winner_honor : loser_honor);
         }
         player->ResetAllPowers();
         player->CombatStopWithPets(true);

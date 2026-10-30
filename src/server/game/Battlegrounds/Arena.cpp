@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 void ArenaScore::AppendToPacket(WorldPacket& data)
 {
@@ -2255,41 +2256,58 @@ void Arena::AppendScoreboardRows(std::vector<BattlegroundScore*>& rows)
     rows.insert(rows.end(), _allStarPastLives.begin(), _allStarPastLives.end());
 }
 
-void Arena::ShareEndOfMatchHonor(Player* player, uint32 honor)
+uint32 Arena::ShareEndOfMatchHonor(Player* player, uint32 honor)
 {
     if (!IsAllStar() || !player || !honor)
-        return;
+        return honor;
 
-    // A bot copy (no account) plays starter templates and stand-ins only.
+    // Owner 2026-10-30: "the honor gain should actually be 3v3 honor * the
+    // number of players evenly distributed to each participant. so if i stay
+    // alive as one character i get the full amount". The pool is the payout
+    // (Buffle Shuffle 3v3's) times the player's lives, split evenly between
+    // the lives they played: never dying, the character that queued takes all
+    // of it; all four played, each of the four takes one payout.
     auto const itr = _allStarSeats.find(player->GetGUID());
-    if (itr == _allStarSeats.end() || !itr->second.Account || !itr->second.HasLineup)
-        return;
+    if (itr == _allStarSeats.end() || !itr->second.HasLineup || itr->second.Lineup.empty())
+        return honor;
     AllStarSeat const& seat = itr->second;
 
+    uint64 const pool = uint64(honor) * seat.Lineup.size();
     // The lives played: each one up to the one worn at the end. A death still
     // waiting for its next life has not played that one yet.
-    std::size_t const played = std::min<std::size_t>(seat.Lineup.size(),
-        std::size_t(seat.Deaths) + (seat.Waiting || seat.Out ? 0 : 1));
+    std::size_t const played = std::clamp<std::size_t>(std::size_t(seat.Deaths) + (seat.Waiting || seat.Out ? 0 : 1),
+        1, seat.Lineup.size());
+    uint32 const share = uint32(std::min<uint64>(pool / played, std::numeric_limits<uint32>::max()));
 
-    // Life one is the character that queued, paid by EndBattleground. Of the
-    // rest, only the account's own characters: a starter template is nobody's,
-    // and a character whose kit could not be read played as its template.
+    // Life one is the character that queued. A later life's share goes to
+    // the account's character that played it; a starter template is the
+    // player in a starter's clothes, and a character whose kit could not be
+    // read played as its template, so theirs stays with the character that
+    // queued - as does what an uneven split leaves over. A bot copy (no
+    // account) keeps the whole pool.
+    uint64 own = pool - uint64(share) * played;
     std::vector<std::string> names;
-    for (std::size_t life = 1; life < played; ++life)
+    for (std::size_t life = 0; life < played; ++life)
     {
         AllStar::LineupEntry const& entry = seat.Lineup[life];
-        if (!entry.Source || entry.Template || entry.Source == seat.Playing || AllStar::KitFailed(entry.Source))
+        if (life == 0 || !seat.Account || !entry.Source || entry.Template || entry.Source == seat.Playing ||
+            AllStar::KitFailed(entry.Source))
+        {
+            own += share;
             continue;
+        }
 
-        AllStar::QueueLifeHonor(entry.Source, seat.Account, honor);
+        AllStar::QueueLifeHonor(entry.Source, seat.Account, share);
         std::string name;
         if (sCharacterCache->GetCharacterNameByGuid(ObjectGuid::Create<HighGuid::Player>(entry.Source), name))
             names.push_back(name);
     }
 
     if (!names.empty())
-        ChatHandler(player->GetSession()).PSendSysMessage("All-Star: %s played lives in this match and earn its honor too, at their next login.",
-            JoinNames(names).c_str());
+        ChatHandler(player->GetSession()).PSendSysMessage("All-Star: this match's honor is shared between the %u lives you played; %s get their share at their next login.",
+            uint32(played), JoinNames(names).c_str());
+
+    return uint32(std::min<uint64>(own, std::numeric_limits<uint32>::max()));
 }
 
 void Arena::ShowAllStarLives(Player* player, AllStarSeat& seat)

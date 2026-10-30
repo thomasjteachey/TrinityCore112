@@ -250,10 +250,11 @@ class TC_GAME_API Arena : public Battleground
         // starts again from nothing.
         void KeepAllStarPastLife(Player* player);
         void AppendScoreboardRows(std::vector<BattlegroundScore*>& rows) override;
-        // Every other character of the account that played one of the
-        // player's lives earns the player's end-of-match honor too, paid at
-        // its next login (AllStar::QueueLifeHonor).
-        void ShareEndOfMatchHonor(Player* player, uint32 honor) override;
+        // The end-of-match honor times the player's lives, shared evenly
+        // between the lives they played; another character's share is paid at
+        // its next login (AllStar::QueueLifeHonor). Returns the share of the
+        // character that queued.
+        uint32 ShareEndOfMatchHonor(Player* player, uint32 honor) override;
         void UpdateAllStar(uint32 diff);
         void CheckAllStarWinConditions();
         void EndAllStarAtTimeLimit();
