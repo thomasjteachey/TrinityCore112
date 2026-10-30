@@ -1202,6 +1202,8 @@ namespace
         }
     }
 
+    MatchRecord* FindRecord(Battleground* bg);  // below, with GetOrCreateRecord
+
     // Every ARENA_REPLAY_PARTICIPANT_SCAN_MS of a recorded arena: who each
     // participant is now, their action bars and their button cooldowns. World
     // thread (BattlegroundMgr::Update -> OnBattlegroundUpdate).
