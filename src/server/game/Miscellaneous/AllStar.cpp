@@ -1376,7 +1376,24 @@ private:
     static void PutBack(Player* player, uint8 slot, Item* item);
     static void RecastPassives(Player* player);
     static void ClearSkillFields(Player* player);
+    static void RedrawHands(Player* player);
 };
+
+void PersonaAccess::RedrawHands(Player* player)
+{
+    // The drawn weapon outlives the swap: the hands show what the sheath
+    // state names (Player::SetSheath fills the virtual item slots from it), and
+    // nothing changed it. A hunter who died with the bow out came back as a
+    // shaman holding the totem in the ranged slot - a relic has no model, so
+    // the client drew an error cube in his hand (owner 2026-10-30: "their
+    // weapon was a checkered box" after Elgrom became Claude). Without a real
+    // ranged weapon behind it, a drawn ranged weapon becomes the melee one;
+    // whichever it is, it is drawn again from the gear now worn.
+    SheathState sheath = player->GetSheath();
+    if (sheath == SHEATH_STATE_RANGED && !player->GetWeaponForAttack(RANGED_ATTACK, true))
+        sheath = SHEATH_STATE_MELEE;
+    player->SetSheath(sheath);
+}
 
 void PersonaAccess::Strip(Player* player)
 {
@@ -2213,6 +2230,7 @@ bool PersonaAccess::Apply(Player* player, KitPtr const& kit)
     }
 
     Build(player, stash, *kit);
+    RedrawHands(player);
     NoteSwap(player);
     SyncClient(player, before, stash.ClientSpells);
     SendBindings(player, kit.get());
@@ -2319,6 +2337,7 @@ void PersonaAccess::Restore(Player* player)
         }
         if (stash.Ammo)
             player->SetAmmo(stash.Ammo);
+        RedrawHands(player);
 
         RecastPassives(player);
         player->_LoadGlyphAuras();
