@@ -2255,6 +2255,43 @@ void Arena::AppendScoreboardRows(std::vector<BattlegroundScore*>& rows)
     rows.insert(rows.end(), _allStarPastLives.begin(), _allStarPastLives.end());
 }
 
+void Arena::ShareEndOfMatchHonor(Player* player, uint32 honor)
+{
+    if (!IsAllStar() || !player || !honor)
+        return;
+
+    // A bot copy (no account) plays starter templates and stand-ins only.
+    auto const itr = _allStarSeats.find(player->GetGUID());
+    if (itr == _allStarSeats.end() || !itr->second.Account || !itr->second.HasLineup)
+        return;
+    AllStarSeat const& seat = itr->second;
+
+    // The lives played: each one up to the one worn at the end. A death still
+    // waiting for its next life has not played that one yet.
+    std::size_t const played = std::min<std::size_t>(seat.Lineup.size(),
+        std::size_t(seat.Deaths) + (seat.Waiting || seat.Out ? 0 : 1));
+
+    // Life one is the character that queued, paid by EndBattleground. Of the
+    // rest, only the account's own characters: a starter template is nobody's,
+    // and a character whose kit could not be read played as its template.
+    std::vector<std::string> names;
+    for (std::size_t life = 1; life < played; ++life)
+    {
+        AllStar::LineupEntry const& entry = seat.Lineup[life];
+        if (!entry.Source || entry.Template || entry.Source == seat.Playing || AllStar::KitFailed(entry.Source))
+            continue;
+
+        AllStar::QueueLifeHonor(entry.Source, seat.Account, honor);
+        std::string name;
+        if (sCharacterCache->GetCharacterNameByGuid(ObjectGuid::Create<HighGuid::Player>(entry.Source), name))
+            names.push_back(name);
+    }
+
+    if (!names.empty())
+        ChatHandler(player->GetSession()).PSendSysMessage("All-Star: %s played lives in this match and earn its honor too, at their next login.",
+            JoinNames(names).c_str());
+}
+
 void Arena::ShowAllStarLives(Player* player, AllStarSeat& seat)
 {
     if (!seat.HasLineup)

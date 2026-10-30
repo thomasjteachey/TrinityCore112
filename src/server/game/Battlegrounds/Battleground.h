@@ -1192,6 +1192,10 @@ class TC_GAME_API Battleground
         // kind that runs far longer than a Warsong asks for more until its
         // own medians take over.
         virtual float FlatHonorMultiplier() const { return 1.0f; }
+        // After a player's end-of-match honor: what else earns it (All-Star,
+        // every character of theirs that played a life). `honor` is the payout
+        // as handed to RewardHonor, before Rate.Honor.
+        virtual void ShareEndOfMatchHonor(Player* /*player*/, uint32 /*honor*/) { }
 
         // Player lists, those need to be accessible by inherited classes
         BattlegroundPlayerMap m_Players;

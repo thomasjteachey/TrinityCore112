@@ -478,5 +478,29 @@ uint32 GetDepletedMarkEntryForPlayer(Player const* player)
 
     return bestEntry;
 }
+
+bool RestoreDepletedMark(Player* player)
+{
+    if (!player || !ConsumeEligibleDepletedMarks(player, 1))
+        return false;
+
+    // The depleted mark is already gone, so a full bag (or the restored
+    // mark's carry limit) must not eat the reward - the Postmaster holds it
+    // instead.
+    uint32 const markEntry = GetRestoredMarkEntry();
+    ItemPosCountVec dest;
+    Item* mark = nullptr;
+    if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, markEntry, 1) == EQUIP_ERR_OK)
+        mark = player->StoreNewItem(dest, markEntry, true);
+
+    // "Created" for the same reason as the spoils chest: the end-of-match
+    // loot filter drops a plain receive line, so the restore used to happen
+    // silently.
+    if (mark)
+        player->SendNewItem(mark, 1, true, true);
+    else
+        player->SendItemRetrievalMail(markEntry, 1);
+    return true;
+}
 }
 

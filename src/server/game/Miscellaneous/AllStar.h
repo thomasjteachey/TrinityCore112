@@ -74,7 +74,11 @@ class WorldSession;
 // Every other way out - the match ending, the leave button, a logout, a
 // disconnect - restores the stash first (Battleground::RemovePlayerAtLeave,
 // WorldSession::LogoutPlayer) and only then lets the save happen. What the
-// match pays (honor, kills) belongs to the character that queued.
+// match pays (honor, kills) belongs to the character that queued; its end-of-
+// match honor and Mark of Honor wait for that restore (DeferMatchReward), and
+// every other character of the account that played a life earns the same
+// honor at its next login (QueueLifeHonor). The payout is Buffle Shuffle 3v3's
+// (BattlegroundMgr::GetHonorPayoutKey).
 //
 // Bots (the transient copies that fill a match) play by the same rules, every
 // class after their first from the starter templates: a copy has no character
@@ -171,7 +175,8 @@ namespace AllStar
     void RestorePersona(Player* player);
     // The class the character really is (its own, persona or not).
     uint8 GetRealClass(Player const* player);
-    // The name the persona goes by ("" without one, or for a template).
+    // The name the persona goes by, family name included ("" without one, or
+    // for a template).
     std::string GetPersonaName(Player const* player);
     bool IsPersonaFromTemplate(Player const* player);
 
@@ -208,6 +213,25 @@ namespace AllStar
     // answers asynchronously): its trained spells are taught then. Called from
     // the match's update.
     void MaintainPersona(Player* player);
+
+    // ------------------------------------------------------------- rewards
+    // Battleground::EndBattleground, for a character still wearing a persona:
+    // its end-of-match honor and (on a win) the restored Mark of Honor are paid
+    // when RestorePersona puts the character back, not now. Worn, the bags are
+    // the persona's copies - anything stored there is destroyed with them, the
+    // Warchief's Socks the honor brings included - its class picks which
+    // depleted mark is eligible, and its spells decide the honor cap. False
+    // without a persona: the caller pays as usual.
+    bool DeferMatchReward(Player* player, uint32 honor, bool restoreMark);
+    // Owner 2026-10-30: "grant honor for every character that participated
+    // (respecting honor caps)". Honor for a character of the account that
+    // played one of a player's lives, held in character_allstar_honor and paid
+    // at its next login (PayQueuedLifeHonor) through Player::RewardHonor, so
+    // its own honor cap, Rate.Honor and honor mirror apply as to any award.
+    // `account` must own the character; a row for anyone else is not written.
+    void QueueLifeHonor(ObjectGuid::LowType character, uint32 account, uint32 honor);
+    // WorldSession::HandlePlayerLogin: pays what QueueLifeHonor held.
+    void PayQueuedLifeHonor(Player* player);
 }
 
 #endif // TRINITYCORE_ALL_STAR_H

@@ -159,9 +159,22 @@ public:
             if (stat.Key.ArenaType)
                 name += Trinity::StringFormat(" {}v{}", uint32(stat.Key.ArenaType), uint32(stat.Key.ArenaType));
 
-            bool const balanced = enabled && honorPerHour && stat.Samples >= minSamples;
+            // A kind paid another kind's payout (All-Star: Buffle Shuffle
+            // 3v3's) shows that one, worked out from that kind's matches.
+            BattlegroundMgr::MatchDurationKey const payKey = BattlegroundMgr::GetHonorPayoutKey(stat.Key);
+            bool const paidAsOther = payKey.TypeId != stat.Key.TypeId || payKey.ArenaType != stat.Key.ArenaType || payKey.MinLevel != stat.Key.MinLevel;
+            BattlegroundMgr::MatchDurationStats const* payStat = &stat;
+            if (paidAsOther)
+            {
+                payStat = nullptr;
+                for (BattlegroundMgr::MatchDurationStats const& other : stats)
+                    if (!(other.Key < payKey) && !(payKey < other.Key))
+                        payStat = &other;
+            }
+
+            bool const balanced = enabled && honorPerHour && payStat && payStat->Samples >= minSamples;
             BattlegroundMgr::HourlyHonorPayout const payout = balanced ?
-                sBattlegroundMgr->HourlyHonorPayoutFor(stat, honorPerHour) : BattlegroundMgr::GetFlatPayout(stat.Arena);
+                sBattlegroundMgr->HourlyHonorPayoutFor(*payStat, honorPerHour) : BattlegroundMgr::GetFlatPayout(stat.Arena);
 
             auto perHour = [&stat](uint32 earned, uint32 paid)
             {
@@ -172,7 +185,8 @@ public:
                 name.c_str(), uint32(stat.Key.MinLevel), uint32(stat.MaxLevel), stat.Samples,
                 stat.MedianSeconds / MINUTE, stat.MedianSeconds % MINUTE,
                 stat.MedianWinHonor, stat.MedianLossHonor, payout.Winner, payout.Loser,
-                balanced ? "" : (stat.Samples < minSamples ? " (flat, too few)" : " (flat)"),
+                paidAsOther ? (balanced ? " (Buffle Shuffle 3v3's)" : " (flat, as Buffle Shuffle 3v3)") :
+                    balanced ? "" : (stat.Samples < minSamples ? " (flat, too few)" : " (flat)"),
                 perHour(stat.MedianWinHonor, payout.Winner), perHour(stat.MedianLossHonor, payout.Loser));
         }
 

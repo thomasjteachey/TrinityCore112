@@ -1359,6 +1359,10 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     // and money here.
     RiftProgression::OnLogin(pCurrChar);
 
+    // Honor this character earned playing lives in the account's other
+    // characters' All-Star matches (AllStar::QueueLifeHonor).
+    AllStar::PayQueuedLifeHonor(pCurrChar);
+
     sScriptMgr->OnPlayerLogin(pCurrChar, firstLogin);
 
     // Last, because the login scripts above are what hand a tournament

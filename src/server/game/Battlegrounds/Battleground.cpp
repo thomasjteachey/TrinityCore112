@@ -1706,14 +1706,6 @@ void Battleground::EndBattleground(uint32 winner)
                 // never grant progression rewards that can be farmed.
                 if (!m_IsCustomGame)
                 {
-                    player->RewardHonor(nullptr, 1, winner_honor);
-                    if (CanAwardArenaPoints())
-                        player->ModifyArenaPoints(winner_arena);
-                    if (!player->GetRandomWinner())
-                        player->SetRandomWinner(true);
-
-                    player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
-
                     // Every arena and battleground win restores one depleted
                     // mark. This used to be an allow-list (arenas, WSG, the
                     // custom maps), and every battleground added after it -
@@ -1725,25 +1717,24 @@ void Battleground::EndBattleground(uint32 winner)
                     // requires no opposing players and must not feed the mark
                     // economy.
                     bool const canRestoreMark = GetTypeID(true) != BATTLEGROUND_VHR;
-                    if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
-                    {
-                        // The depleted mark is already gone, so a full bag (or
-                        // the restored mark's carry limit) must not eat the
-                        // reward - the Postmaster holds it instead.
-                        uint32 const markEntry = Trinity::Custom::GetRestoredMarkEntry();
-                        ItemPosCountVec dest;
-                        Item* mark = nullptr;
-                        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, markEntry, 1) == EQUIP_ERR_OK)
-                            mark = player->StoreNewItem(dest, markEntry, true);
 
-                        // "Created" for the same reason as the spoils chest:
-                        // the end-of-match loot filter drops a plain receive
-                        // line, so the restore used to happen silently.
-                        if (mark)
-                            player->SendNewItem(mark, 1, true, true);
-                        else
-                            player->SendItemRetrievalMail(markEntry, 1);
+                    // An All-Star player still wears the life they ended on:
+                    // its bags are copies that go with it, its class picks the
+                    // depleted mark, and its spells set the honor cap. Both are
+                    // paid the moment the character is itself again (AllStar::
+                    // DeferMatchReward); everyone else is paid here.
+                    if (!AllStar::DeferMatchReward(player, winner_honor, canRestoreMark))
+                    {
+                        player->RewardHonor(nullptr, 1, winner_honor);
+                        if (canRestoreMark)
+                            Trinity::Custom::RestoreDepletedMark(player);
                     }
+                    if (CanAwardArenaPoints())
+                        player->ModifyArenaPoints(winner_arena);
+                    if (!player->GetRandomWinner())
+                        player->SetRandomWinner(true);
+
+                    player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
 
                     AwardSpoilsChest(player, true);
                 }
@@ -1764,7 +1755,8 @@ void Battleground::EndBattleground(uint32 winner)
             {
                 if (!m_IsCustomGame)
                 {
-                    player->RewardHonor(nullptr, 1, loser_honor);
+                    if (!AllStar::DeferMatchReward(player, loser_honor, false))
+                        player->RewardHonor(nullptr, 1, loser_honor);
                     AwardSpoilsChest(player, false);
                 }
                 player->ModifyMoney(loser_money);
@@ -1776,6 +1768,11 @@ void Battleground::EndBattleground(uint32 winner)
                     player->SendDirectMessage(&moneyNotify);
                 }
             }
+
+            // All-Star: every other character of theirs that played a life
+            // earns the same honor (Arena::ShareEndOfMatchHonor).
+            if (!m_IsCustomGame)
+                ShareEndOfMatchHonor(player, won ? winner_honor : loser_honor);
         }
         player->ResetAllPowers();
         player->CombatStopWithPets(true);

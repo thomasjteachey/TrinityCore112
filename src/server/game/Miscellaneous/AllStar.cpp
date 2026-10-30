@@ -26,6 +26,7 @@
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "DepletedMarks.h"
 #include "GameTime.h"
 #include "Group.h"
 #include "Item.h"
@@ -226,6 +227,8 @@ namespace
     // reads or writes character_allstar_lineup until it is known to exist.
     std::atomic<bool> PicksTable{ false };
     std::size_t constexpr MAX_PICKS = 8;
+    // The same for character_allstar_honor (QueueLifeHonor).
+    std::atomic<bool> LifeHonorTable{ false };
 
     struct Pick
     {
@@ -1258,6 +1261,12 @@ struct PersonaStash
     uint32 PersonaPetNumber = 0;
     bool PetSpellsTaught = true;
 
+    // The match's end-of-match payout, held for the real character
+    // (DeferMatchReward) and paid by Restore.
+    bool RewardPending = false;
+    uint32 RewardHonor = 0;
+    bool RewardMark = false;
+
     ~PersonaStash()
     {
         // Only reached with something in it when the character went away
@@ -2172,6 +2181,10 @@ void PersonaAccess::Restore(Player* player)
     std::unordered_set<uint32> const before = VisibleSpells(player);
     PersonaStash& stash = *player->m_allStarPersona;
     std::unordered_set<uint32> shown = std::move(stash.ClientSpells);
+    // Read now: the stash is gone by the time they are paid, below.
+    bool const rewardPending = stash.RewardPending;
+    uint32 const rewardHonor = stash.RewardHonor;
+    bool const rewardMark = stash.RewardMark;
     if (player->IsInWorld())
         SendAddonLine(player, "QUIET");
     {
@@ -2279,6 +2292,18 @@ void PersonaAccess::Restore(Player* player)
         SendBindings(player, nullptr);
         SendMacros(player, nullptr);
         EnterDefaultStance(player);
+    }
+
+    // The end of the match's payout, now that the bags, class and spells are
+    // the character's own (DeferMatchReward): the honor against its own cap,
+    // with the Warchief's Socks it brings kept, and the Mark of Honor out of
+    // its own depleted marks. Before the save every caller makes next.
+    if (rewardPending)
+    {
+        if (rewardHonor)
+            player->RewardHonor(nullptr, 1, int32(std::min<uint32>(rewardHonor, uint32(std::numeric_limits<int32>::max()))));
+        if (rewardMark)
+            Trinity::Custom::RestoreDepletedMark(player);
     }
 }
 
@@ -2584,6 +2609,96 @@ namespace
         std::lock_guard<std::mutex> lock(PicksMutex);
         Picks = std::move(loaded);
     }
+
+    // World thread, the first Update, like the picks: the honor the
+    // characters that played other characters' lives have still to be paid.
+    void LoadLifeHonorTable()
+    {
+        CharacterDatabase.DirectExecute(
+            "CREATE TABLE IF NOT EXISTS `character_allstar_honor` ("
+            "`guid` INT UNSIGNED NOT NULL, "
+            "`honor` INT UNSIGNED NOT NULL DEFAULT 0, "
+            "PRIMARY KEY (`guid`)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='All-Star: honor earned playing another character''s life, paid at the next login'");
+        if (!CharacterDatabase.Query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'character_allstar_honor'"))
+        {
+            TC_LOG_ERROR("server.loading", "All-Star: table `character_allstar_honor` is missing and could not be made; "
+                "characters that play another character's life earn no honor until the next restart.");
+            return;
+        }
+        LifeHonorTable = true;
+    }
+}
+
+bool DeferMatchReward(Player* player, uint32 honor, bool restoreMark)
+{
+    PersonaStash* stash = player ? PersonaAccess::Stash(player) : nullptr;
+    if (!stash)
+        return false;
+
+    stash->RewardPending = true;
+    stash->RewardHonor += honor;
+    stash->RewardMark = stash->RewardMark || restoreMark;
+    return true;
+}
+
+void QueueLifeHonor(ObjectGuid::LowType character, uint32 account, uint32 honor)
+{
+    if (!character || !account || !honor || !LifeHonorTable)
+        return;
+
+    // Through the characters row, so only a character of that account is ever
+    // credited (a deleted one has given its account up: account 0).
+    CharacterDatabase.Execute(Trinity::StringFormat(
+        "INSERT INTO character_allstar_honor (guid, honor) "
+        "SELECT guid, {} FROM characters WHERE guid = {} AND account = {} "
+        "ON DUPLICATE KEY UPDATE honor = LEAST(character_allstar_honor.honor + {}, 2147483647)",
+        honor, character, account, honor).c_str());
+}
+
+void PayQueuedLifeHonor(Player* player)
+{
+    WorldSession* session = player ? player->GetSession() : nullptr;
+    if (!LifeHonorTable || !session || session->IsVirtualSession() || session->IsTransientPlayerSession())
+        return;
+
+    ObjectGuid const guid = player->GetGUID();
+    session->GetQueryProcessor().AddCallback(CharacterDatabase.AsyncQuery(Trinity::StringFormat(
+        "SELECT honor FROM character_allstar_honor WHERE guid = {}", guid.GetCounter()).c_str())
+        .WithCallback([session, guid](QueryResult result)
+    {
+        if (!result)
+            return;
+
+        uint32 const honor = result->Fetch()[0].GetUInt32();
+        Player* character = session->GetPlayer();
+        if (!honor || !character || character->GetGUID() != guid || !character->IsInWorld())
+            return;
+
+        // Not into a battleground it has logged back into: that match would
+        // count it as honor earned in play. It waits for a login outside one.
+        if (character->InBattleground())
+            return;
+
+        // RewardHonor applies Rate.Honor, the character's honor cap (with the
+        // notice when the cap eats some) and the honor mirror, as for any
+        // award. Taken off the row only once paid; what another match queued
+        // meanwhile stays for the next login.
+        if (!character->RewardHonor(nullptr, 1, int32(std::min<uint32>(honor, uint32(std::numeric_limits<int32>::max())))))
+            return;
+
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        trans->Append(Trinity::StringFormat(
+            "UPDATE character_allstar_honor SET honor = honor - {} WHERE guid = {} AND honor >= {}",
+            honor, guid.GetCounter(), honor).c_str());
+        trans->Append(Trinity::StringFormat(
+            "DELETE FROM character_allstar_honor WHERE guid = {} AND honor = 0", guid.GetCounter()).c_str());
+        CharacterDatabase.CommitTransaction(trans);
+
+        ChatHandler(session).SendSysMessage("All-Star: you played lives in your other characters' matches while you were away, and earned their honor.");
+        TC_LOG_INFO("bg.battleground", "All-Star: {} ({}) was paid {} honor for lives played in other characters' matches.",
+            character->GetName(), guid.GetCounter(), honor);
+    }));
 }
 
 void SendMasterLineup(Player* player)
@@ -2637,6 +2752,7 @@ void Update()
     {
         PicksLoaded = true;
         LoadPicks();
+        LoadLifeHonorTable();
     }
 
     if (Config.Enabled && !TemplatesAsked)
@@ -2742,7 +2858,9 @@ std::string GetPersonaName(Player const* player)
     PersonaStash const* stash = player ? PersonaAccess::Stash(player) : nullptr;
     if (!stash || !stash->Persona || (stash->Persona->Template && !stash->Persona->StandIn))
         return std::string();
-    return stash->Persona->Name;
+    // With its family name, as the name query answers it (ApplyPersona): the
+    // stocks panel and a finished life's scoreboard line are named from this.
+    return Surnames::Decorated(ObjectGuid::Create<HighGuid::Player>(stash->Persona->Source), stash->Persona->Name);
 }
 
 bool IsPersonaFromTemplate(Player const* player)
@@ -2810,10 +2928,12 @@ void SendLives(Player* player, uint32 left, uint32 total)
     if (!player)
         return;
     // The life being played: the borrowed character's name, or the player's
-    // own (life one, a starter template), and its class for the colour.
+    // own (life one, a starter template), and its class for the colour. With
+    // the family name, the way every name query answers it (a borrowed
+    // character's already carries its own, GetPersonaName).
     std::string name = GetPersonaName(player);
     if (name.empty())
-        name = player->GetName();
+        name = Surnames::Decorated(player->GetGUID(), player->GetName());
     SendAddonLine(player, Trinity::StringFormat("LIVES:{}:{}:{}:{}", left, total, uint32(player->GetClass()), name));
 }
 

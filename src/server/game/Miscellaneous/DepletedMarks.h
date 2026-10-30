@@ -62,6 +62,11 @@ namespace Trinity::Custom
     bool ConsumeEligibleDepletedMarks(Player* player, uint32 amount);
     uint32 GetOwnedEligibleDepletedMarkEntry(Player const* player);
     uint32 GetDepletedMarkEntryForPlayer(Player const* player);
+
+    // A battleground or arena win: one depleted mark the character can use is
+    // taken and a restored mark given - into the bags, or by mail when they
+    // are full. False (and nothing taken) without a depleted mark to restore.
+    bool RestoreDepletedMark(Player* player);
 }
 
 #endif // TRINITYCORE_DEPLETED_MARKS_H

@@ -1223,6 +1223,17 @@ BattlegroundMgr::MatchDurationKey BattlegroundMgr::GetMatchDurationKey(Battlegro
     return { typeId, bg->GetArenaType(), uint8(bg->GetMinLevel()) };
 }
 
+BattlegroundMgr::MatchDurationKey BattlegroundMgr::GetHonorPayoutKey(MatchDurationKey const& key)
+{
+    // All-Star pays what solo 3v3 - Buffle Shuffle 3v3 - pays, whatever its
+    // own size (owner 2026-10-30: "tie the honor to solo 3v3"). Its matches
+    // are still recorded under its own kind, so `.bgqueue honor` shows how
+    // long they really run.
+    if (key.TypeId == BATTLEGROUND_ASA)
+        return { uint32(BATTLEGROUND_SSH), uint8(ARENA_TYPE_3v3), key.MinLevel };
+    return key;
+}
+
 time_t BattlegroundMgr::GetMatchDurationCutoff()
 {
     uint32 const maxAgeDays = sWorld->getIntConfig(CONFIG_CENTURION_BG_HOURLY_HONOR_MAX_AGE_DAYS);
@@ -1474,7 +1485,7 @@ bool BattlegroundMgr::GetHourlyHonorPayout(Battleground const* bg, HourlyHonorPa
         return false;
 
     std::lock_guard<std::mutex> lock(_matchDurationLock);
-    auto const itr = _matchDurations.find(GetMatchDurationKey(bg));
+    auto const itr = _matchDurations.find(GetHonorPayoutKey(GetMatchDurationKey(bg)));
     if (itr == _matchDurations.end())
         return false;
 

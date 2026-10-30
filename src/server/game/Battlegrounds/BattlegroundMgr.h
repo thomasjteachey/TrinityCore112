@@ -217,6 +217,9 @@ class TC_GAME_API BattlegroundMgr
             uint32 Loser;
         };
         static MatchDurationKey GetMatchDurationKey(Battleground const* bg);
+        // The kind whose hourly payout a kind is paid: its own, except All-
+        // Star, which is paid Buffle Shuffle 3v3's.
+        static MatchDurationKey GetHonorPayoutKey(MatchDurationKey const& key);
         void LoadMatchDurations();
         // winHonor/lossHonor: the median in-match honor of each side, or -1
         // when the side had nobody in it at the end.
