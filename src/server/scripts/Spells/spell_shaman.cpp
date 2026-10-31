@@ -2382,15 +2382,18 @@ class spell_sha_purge : public SpellScript
 
         for (uint32 spellId : PurgeSpellIds)
         {
-            if (!sSpellMgr->GetSpellInfo(spellId))
+            SpellInfo const* purgeInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!purgeInfo)
                 continue;
 
-            spellHistory->AddCooldown(spellId, 0, std::chrono::milliseconds(cooldownMs));
+            // cooldown modifiers and the Rift's cooldown reduction, as StartCooldown would
+            uint32 const purgeCooldownMs = uint32(spellHistory->GetModifiedCooldown(purgeInfo, int32(cooldownMs)));
+            spellHistory->AddCooldown(spellId, 0, std::chrono::milliseconds(purgeCooldownMs));
 
             if (player)
             {
                 WorldPacket data;
-                spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, spellId, cooldownMs);
+                spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, spellId, purgeCooldownMs);
                 player->SendDirectMessage(&data);
             }
         }

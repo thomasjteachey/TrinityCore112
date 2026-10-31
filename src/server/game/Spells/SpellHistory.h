@@ -82,6 +82,10 @@ public:
     static Clock::duration const InfinityCooldownDelayCheck;
 
     void StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spell* spell = nullptr, bool onHold = false);
+    // A cooldown a script puts on one of the owner's spells by hand (AddCooldown),
+    // shortened the way StartCooldown would shorten it: SPELLMOD_COOLDOWN modifiers
+    // and, in Summoner's Rift, League's cooldown reduction.
+    int32 GetModifiedCooldown(SpellInfo const* spellInfo, int32 cooldownMs) const;
     void SendCooldownEvent(SpellInfo const* spellInfo, uint32 itemId = 0, Spell* spell = nullptr, bool startCooldown = true);
 
     template<class Type, class Period>

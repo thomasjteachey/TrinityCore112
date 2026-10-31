@@ -3099,8 +3099,11 @@ void Unit::CompleteGhostWolfCharge(Unit* target)
 
     if (SpellHistory* spellHistory = GetSpellHistory())
     {
-        static constexpr std::chrono::seconds GhostWolfCooldown(15);
+        static constexpr int32 GhostWolfCooldownMs = 15 * IN_MILLISECONDS;
         SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF);
+        // a cooldown like any other: cooldown modifiers and the Rift's cooldown
+        // reduction shorten it (a Rift player: "cdr from rehgar's fury isnt lowered")
+        std::chrono::milliseconds const GhostWolfCooldown(spellHistory->GetModifiedCooldown(ghostWolfInfo, GhostWolfCooldownMs));
 
         if (ghostWolfInfo)
         {

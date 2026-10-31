@@ -399,6 +399,22 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
     }
 }
 
+int32 SpellHistory::GetModifiedCooldown(SpellInfo const* spellInfo, int32 cooldownMs) const
+{
+    if (!spellInfo || cooldownMs <= 0)
+        return std::max(cooldownMs, 0);
+
+    if (Player* modOwner = _owner->GetSpellModOwner())
+        modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_COOLDOWN, cooldownMs);
+
+    // what the Rift's modifier could not reach (CooldownReduction is 0 where it did)
+    if (Player const* player = _owner->ToPlayer())
+        if (float const reduction = RiftProgression::CooldownReduction(player, spellInfo); reduction > 0.0f)
+            cooldownMs = int32(float(cooldownMs) * (1.0f - reduction) + 0.5f);
+
+    return std::max(cooldownMs, 0);
+}
+
 void SpellHistory::SendCooldownEvent(SpellInfo const* spellInfo, uint32 itemId /*= 0*/, Spell* spell /*= nullptr*/, bool startCooldown /*= true*/)
 {
     // Send activate cooldown timer (possible 0) at client side
