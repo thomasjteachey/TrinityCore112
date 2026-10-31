@@ -2720,6 +2720,23 @@ bool DeferMatchReward(Player* player, uint32 honor, bool restoreMark)
     stash->RewardPending = true;
     stash->RewardHonor += honor;
     stash->RewardMark = stash->RewardMark || restoreMark;
+
+    // Owner 2026-10-31: "all star mode currently doesnt tell you how much
+    // honor you are getting". Every other match pays the moment it ends, and
+    // the client prints "You have been awarded N honor points" over the
+    // scoreboard; this one is paid at the leave (Restore), so say the figure
+    // now. Rate.Honor applied, as RewardHonor will. Below the cap the award
+    // becomes experience there instead, so no honor figure is promised.
+    WorldSession* session = player->GetSession();
+    if (honor && session && !session->IsVirtualSession())
+    {
+        bool const paidAsExperience = !player->IsMaxLevel() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN) &&
+            sWorld->getBoolConfig(CONFIG_CENTURION_BG_XP_INSTEAD_OF_HONOR);
+        if (paidAsExperience)
+            ChatHandler(session).SendSysMessage("All-Star: your reward for this match is paid as experience when you leave the arena.");
+        else if (int32 const shown = player->ScaleHonorGain(float(honor)); shown > 0)
+            ChatHandler(session).PSendSysMessage("All-Star: you earned %d honor this match. It is paid when you leave the arena.", shown);
+    }
     return true;
 }
 

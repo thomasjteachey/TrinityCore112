@@ -3720,8 +3720,10 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
             // effect is selected directly so virtual teammates do not have to
             // emulate a three-client summoning ritual during the short prep
             // window. The normal summoned Soulwell object, ownership, lifetime,
-            // and charge counter are still used.
-            if (player->HasSpell(kWarlockRitualOfSoulsSpellId) &&
+            // and charge counter are still used. Create Soulwell itself is
+            // what every warlock is taught now (tournament kit, and the level
+            // 60 trainers since 2026-10-31), so knowing it counts as well.
+            if ((player->HasSpell(kWarlockRitualOfSoulsSpellId) || player->HasSpell(kWarlockCreateSoulwellSpellId)) &&
                 !playerbot::PvpCore::FindUsableSoulwell(player, 60.0f))
                 return { "warlock create soulwell prep", "create a team healthstone well before gates open",
                     kWarlockCreateSoulwellSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };

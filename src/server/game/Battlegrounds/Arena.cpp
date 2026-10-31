@@ -2303,9 +2303,14 @@ uint32 Arena::ShareEndOfMatchHonor(Player* player, uint32 honor)
             names.push_back(name);
     }
 
+    // With the figure (owner 2026-10-31: All-Star "doesnt tell you how much
+    // honor you are getting"), Rate.Honor applied as their login's
+    // RewardHonor will. What the queued character keeps is said when it is
+    // paid (AllStar::DeferMatchReward, or the award line itself).
     if (!names.empty())
-        ChatHandler(player->GetSession()).PSendSysMessage("All-Star: this match's honor is shared between the %u lives you played; %s get their share at their next login.",
-            uint32(played), JoinNames(names).c_str());
+        ChatHandler(player->GetSession()).PSendSysMessage("All-Star: this match's honor is split between the %u stocks you played. %s %s %u honor%s at their next login.",
+            uint32(played), JoinNames(names).c_str(), names.size() == 1 ? "gets" : "get",
+            uint32(std::max(0.0f, float(share) * sWorld->getRate(RATE_HONOR))), names.size() == 1 ? "" : " each");
 
     return uint32(std::min<uint64>(own, std::numeric_limits<uint32>::max()));
 }
