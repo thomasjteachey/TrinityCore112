@@ -1118,7 +1118,7 @@ namespace
     uint32 constexpr SPELL_CHAMPION_B = 94148;    // attack power, ranged attack power, crit
     uint32 constexpr SPELL_CHAMPION_C = 94154;    // melee and ranged attack speed, spell damage
     uint32 constexpr SPELL_CHAMPION_D = 94155;    // healing, mana, health regeneration
-    uint32 constexpr SPELL_CHAMPION_E = 94156;    // mana regeneration, (0: magic penetration is MagicPenetration), run speed
+    uint32 constexpr SPELL_CHAMPION_E = 94156;    // mana regeneration, cast speed (the bonus attack speed), run speed
     uint32 constexpr SPELL_CHAMPION_F = 94157;    // the boots' run speed; life steal (tenths of a percent); spell crit
     uint32 constexpr CHAMPION_CARRIERS[] = { SPELL_CHAMPION_A, SPELL_CHAMPION_B, SPELL_CHAMPION_C,
         SPELL_CHAMPION_D, SPELL_CHAMPION_E, SPELL_CHAMPION_F };
@@ -1545,6 +1545,11 @@ namespace
         float const attackSpeed = std::min(RiftLeague::ATTACK_SPEED_CAP,
             cs->AttackSpeed * (1.0f + cs->AttackSpeedPerLevel * (l - 1.0f) + it.AttackSpeed / 100.0f)
             * std::max(0.0f, 1.0f - near(Unique::AuraEnemyAs) / 100.0f));
+        // Attack speed is cast speed too (owner, 2026-10-31: "attack speed should also
+        // give you cast speed in summoner's rift"): every percent the champion attacks
+        // faster than its League base - its levels and its items - it also casts faster.
+        // Frozen Heart can take back what was gained, never cast below WoW's own speed.
+        int32 const castHaste = std::max(0, Round((attackSpeed / cs->AttackSpeed - 1.0f) * 100.0f));
 
         // health: WoW's own is the class's base health and its base stamina's
         float const naturalHealth = (player->GetFlatModifierValue(UNIT_MOD_HEALTH, BASE_VALUE) + float(player->GetCreateHealth()))
@@ -1633,7 +1638,7 @@ namespace
         SetCarrier(player, SPELL_CHAMPION_B, { meleePower, rangedPower, crit });
         SetCarrier(player, SPELL_CHAMPION_C, { meleeHaste, rangedHaste, spellPower });
         SetCarrier(player, SPELL_CHAMPION_D, { spellPower, mana, healthRegen });
-        SetCarrier(player, SPELL_CHAMPION_E, { manaRegen, 0, Round(it.MoveSpeed) });
+        SetCarrier(player, SPELL_CHAMPION_E, { manaRegen, castHaste, Round(it.MoveSpeed) });
         // the held items' crit is spell crit too: on top of the character's own,
         // where the melee crit above replaces it
         SetCarrier(player, SPELL_CHAMPION_F, { Round(bootsSpeed), Round(it.LifeSteal * 10.0f), Round(it.Crit) });
