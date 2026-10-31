@@ -192,10 +192,9 @@ void AuctionHouseMgr::SendAuctionWonMail(AuctionEntry* auction, CharacterDatabas
 
 // How long auction proceeds take to reach the seller.
 //
-// Deliberately NOT MailDeliveryDelay. That hour exists to make player-to-player
-// item mail hard to abuse, which is a good reason that has nothing to do with an
-// auction house paying out its own sale - and lowering it would take the
-// protection off ordinary mail as a side effect.
+// Deliberately NOT MailDeliveryDelay. That key is the delay on item mail between
+// characters (0 since 2026-10-31, the owner's call), which is a separate question
+// from when an auction house pays out its own sale.
 //
 // Read per call rather than cached: a completed auction is rare enough that a
 // config lookup does not matter, and it means a reload takes effect at once.

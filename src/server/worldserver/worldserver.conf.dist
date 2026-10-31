@@ -1266,10 +1266,12 @@ MinDiscoveredScaledXPRatio = 0
 
 #
 #    MailDeliveryDelay
-#        Description: Time (in seconds) mail delivery is delayed when sending items.
-#        Default:     3600 - (1 hour)
+#        Description: Time (in seconds) mail delivery is delayed when sending items
+#                     to a character on another account.
+#        Default:     0    - (owner 2026-10-31: mail between characters is instant)
+#                     3600 - (stock, 1 hour)
 
-MailDeliveryDelay = 3600
+MailDeliveryDelay = 0
 
 #
 #    CleanOldMailTime
@@ -3833,11 +3835,10 @@ Centurion.Chest.SlowOpenPercent.Bot = 100
 #
 #    Centurion.AuctionHouse.ProceedsDelaySeconds
 #        Description: How long the gold from a sale takes to reach the seller.
-#                     Deliberately NOT MailDeliveryDelay: that hour exists to make
-#                     player-to-player item mail hard to abuse, which has nothing
-#                     to do with the auction house paying out its own sale, and
-#                     lowering it would take the protection off ordinary mail as a
-#                     side effect.
+#                     Deliberately NOT MailDeliveryDelay: that key is the delay on
+#                     item mail between characters (0 since 2026-10-31, owner's
+#                     call), which is a separate question from when the auction
+#                     house pays out its own sale.
 #                     At 0 there is no gap to explain, so the "your money is
 #                     coming" invoice is not sent either - it would otherwise
 #                     arrive beside the mail already carrying the gold and say the
