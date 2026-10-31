@@ -6909,6 +6909,17 @@ Centurion.Rift.PlayerXpRate = 6.0
 Centurion.Rift.FlatHonorMultiplier = 2.0
 
 #
+#    Centurion.Rift.HonorMultiplier
+#        Description: Multiplier on every honor award paid in Summoner's Rift
+#                     (structures and the end of the match), applied after the
+#                     payout is worked out, so the hourly payout does not make
+#                     up the difference. Does not change the experience paid
+#                     below the level cap. .reload config applies a change at once.
+#        Default:     0.5 - (owner 2026-10-31: half honor)
+
+Centurion.Rift.HonorMultiplier = 0.5
+
+#
 #    Centurion.Rift.ExperienceMultiplier
 #        Description: Multiplier on the experience Summoner's Rift pays below the
 #                     level cap (its honor converted by

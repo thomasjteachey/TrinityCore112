@@ -8545,6 +8545,16 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
                 honor = int32(uint64(awarded) * (xp - grant) / xp);
         }
     }
+    // Summoner's Rift pays a share of its honor (owner 2026-10-31: "nerf the
+    // honor in summoners rift by half"): every award a champion is paid, the
+    // structures and the end of the match alike. After NoteMatchHonor above,
+    // so the hourly payout still reads the Rift's full in-play honor and does
+    // not top the cut back up; after the experience conversion, so a leveling
+    // character's experience is untouched.
+    if (honor > 0 && inRift)
+        honor = int32(std::lround(double(honor) *
+            double(std::max(0.0f, sConfigMgr->GetFloatDefault("Centurion.Rift.HonorMultiplier", 0.5f)))));
+
     // honor - for show honor points in log
     // victim_guid - for show victim name in log
     // victim_rank [1..4]  HK: <dishonored rank>
