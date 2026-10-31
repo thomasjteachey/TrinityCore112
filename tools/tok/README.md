@@ -9,9 +9,13 @@ Battleground type **106** (`BATTLEGROUND_TOK`, queue type 20) on map **998**
 - 10 a side, brackets 10-19 ... 60-69, first team to **1600** wins.
 - Four Orbs of Power on pedestals in the courtyard corners. Click one to carry
   it; one orb per player.
-- Every 5 s each carrier scores **3** outside the courtyard, **4** on the raised
-  courtyard floor, **5** down in the sunken centre pool. A killing blow on an
-  enemy scores **10**.
+- Every 5 s each carrier scores **2** outside the courtyard, **4** on the raised
+  courtyard floor, **8** down in the sunken centre pool (retail's 3/4/5 was too
+  flat to notice). A team holding several orbs gets a bonus on its whole tick:
+  **+25%** with 2 orbs, **+50%** with 3, **double** with all 4. A killing blow
+  on an enemy scores **10**. A carrier gets a centre-screen message saying what
+  the orb is worth whenever they move into a different ring.
+  Tables: `TOK_RING_POINTS` / `TOK_TEAM_ORB_BONUS_PCT` in `BattlegroundTOK.cpp`.
 - Holding an orb is a stacking debuff (Ascension's numbers, per stack: +30%
   damage taken, -7% healing taken, +10% damage done; one stack every 10 s, max
   10). Tune it in `Spell.dbc` 92300-92303, not in code.

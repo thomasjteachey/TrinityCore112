@@ -10,6 +10,7 @@
 #include "SpellAuraDefines.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
 #include "WorldStatePackets.h"
 
 #include <algorithm>
@@ -65,6 +66,17 @@ float constexpr TOK_CENTER_MAX_Z = 9.5f;
 float constexpr TOK_COURTYARD_MIN_X = 1685.74f, TOK_COURTYARD_MAX_X = 1881.11f;
 float constexpr TOK_COURTYARD_MIN_Y = 1212.31f, TOK_COURTYARD_MAX_Y = 1454.23f;
 
+// Points one orb earns its team each tick, by BG_TOK_Rings: each ring inward
+// doubles it. Retail's 3/4/5 was too flat to feel - the orbs spawn on the
+// courtyard floor, so carrying one down into the pool added a single point.
+uint32 constexpr TOK_RING_POINTS[BG_TOK_RING_COUNT] = { 2, 4, 8 };
+char const* const TOK_RING_NAMES[BG_TOK_RING_COUNT] = { "Outside the temple", "Temple courtyard", "Temple center" };
+
+// Bonus percent on a team's whole tick, indexed by how many orbs it holds, so
+// each extra orb is worth more than the one before (Eye of the Storm's bases
+// work the same way). All four double it.
+uint32 constexpr TOK_TEAM_ORB_BONUS_PCT[BG_TOK_ORB_COUNT + 1] = { 0, 0, 25, 50, 100 };
+
 // Where a bot carrier goes to hold its orb: the middle of the sunken pool,
 // spread a little per orb so four carriers do not stand in one spot.
 float constexpr TOK_HOLD_X = 1783.5f;
@@ -85,6 +97,21 @@ bool InRect(float x, float y, float minX, float maxX, float minY, float maxY)
 
 uint32 OrbHolderSpell(uint8 orb) { return BG_TOK_SPELL_ORB_HOLDER_FIRST + orb; }
 uint32 OrbStackSpell(uint8 orb)  { return BG_TOK_SPELL_ORB_STACK_FIRST + orb; }
+
+uint8 CarrierRing(Player const* carrier)
+{
+    float const x = carrier->GetPositionX();
+    float const y = carrier->GetPositionY();
+
+    if (InRect(x, y, TOK_CENTER_MIN_X, TOK_CENTER_MAX_X, TOK_CENTER_MIN_Y, TOK_CENTER_MAX_Y) &&
+        carrier->GetPositionZ() <= TOK_CENTER_MAX_Z)
+        return BG_TOK_RING_CENTER;
+
+    if (InRect(x, y, TOK_COURTYARD_MIN_X, TOK_COURTYARD_MAX_X, TOK_COURTYARD_MIN_Y, TOK_COURTYARD_MAX_Y))
+        return BG_TOK_RING_COURTYARD;
+
+    return BG_TOK_RING_OUTSIDE;
+}
 }
 
 void BattlegroundTOKScore::BuildObjectivesBlock(WorldPacket& data)
@@ -301,6 +328,7 @@ void BattlegroundTOK::EventPlayerClickedOnFlag(Player* player, GameObject* targe
     player->RemoveAurasByType(SPELL_AURA_MOUNTED);
 
     ShowOrbOnPedestal(uint8(orb), false);
+    _orbs[orb] = OrbState();
     _orbs[orb].Carrier = player->GetGUID();
     _orbs[orb].CarrierTeam = team;
 
@@ -374,37 +402,56 @@ void BattlegroundTOK::ValidateCarriers()
         // Retail does not let an orb carrier hide.
         carrier->RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
         carrier->RemoveAurasByType(SPELL_AURA_MOD_INVISIBILITY);
+
+        UpdateRingNotice(_orbs[orb], carrier);
     }
 }
 
-uint32 BattlegroundTOK::GetPointsAtCarrierPosition(Player const* carrier) const
+void BattlegroundTOK::UpdateRingNotice(OrbState& orb, Player* carrier)
 {
-    float const x = carrier->GetPositionX();
-    float const y = carrier->GetPositionY();
+    if (orb.NoticeCooldown > BG_TOK_CARRIER_CHECK_TIME)
+    {
+        orb.NoticeCooldown -= BG_TOK_CARRIER_CHECK_TIME;
+        return;
+    }
+    orb.NoticeCooldown = 0;
 
-    if (InRect(x, y, TOK_CENTER_MIN_X, TOK_CENTER_MAX_X, TOK_CENTER_MIN_Y, TOK_CENTER_MAX_Y) &&
-        carrier->GetPositionZ() <= TOK_CENTER_MAX_Z)
-        return BG_TOK_POINTS_CENTER;
+    uint8 const ring = CarrierRing(carrier);
+    if (ring == orb.NoticeRing)
+        return;
 
-    if (InRect(x, y, TOK_COURTYARD_MIN_X, TOK_COURTYARD_MAX_X, TOK_COURTYARD_MIN_Y, TOK_COURTYARD_MAX_Y))
-        return BG_TOK_POINTS_COURTYARD;
-
-    return BG_TOK_POINTS_OUTSIDE;
+    orb.NoticeRing = ring;
+    orb.NoticeCooldown = BG_TOK_RING_NOTICE_COOLDOWN;
+    carrier->GetSession()->SendAreaTriggerMessage("%s: your orb scores %u points every %u seconds.",
+        TOK_RING_NAMES[ring], ScaleResourceGain(TOK_RING_POINTS[ring]), uint32(BG_TOK_POINT_TICK_TIME) / uint32(IN_MILLISECONDS));
 }
 
 void BattlegroundTOK::AwardCarrierPoints()
 {
-    for (uint8 orb = 0; orb < BG_TOK_ORB_COUNT; ++orb)
+    uint32 ringPoints[PVP_TEAMS_COUNT] = { 0, 0 };
+    uint32 orbsHeld[PVP_TEAMS_COUNT] = { 0, 0 };
+
+    for (OrbState const& state : _orbs)
     {
-        OrbState const state = _orbs[orb];
-        if (state.Carrier.IsEmpty())
+        if (state.Carrier.IsEmpty() || (state.CarrierTeam != ALLIANCE && state.CarrierTeam != HORDE))
             continue;
 
         Player* carrier = ObjectAccessor::FindPlayer(state.Carrier);
         if (!carrier || !carrier->IsAlive() || carrier->GetMapId() != GetMapId())
             continue;
 
-        AddPoints(state.CarrierTeam, ScaleResourceGain(GetPointsAtCarrierPosition(carrier)));
+        TeamId const team = GetTeamIndexByTeamId(state.CarrierTeam);
+        ringPoints[team] += TOK_RING_POINTS[CarrierRing(carrier)];
+        ++orbsHeld[team];
+    }
+
+    for (TeamId team : { TEAM_ALLIANCE, TEAM_HORDE })
+    {
+        if (!ringPoints[team])
+            continue;
+
+        uint32 const points = ringPoints[team] * (100 + TOK_TEAM_ORB_BONUS_PCT[orbsHeld[team]]) / 100;
+        AddPoints(team == TEAM_ALLIANCE ? ALLIANCE : HORDE, ScaleResourceGain(points));
         if (GetStatus() != STATUS_IN_PROGRESS)
             return;
     }

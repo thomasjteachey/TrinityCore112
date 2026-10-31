@@ -5,9 +5,10 @@
  * The terrain, orb models, icons and orb auras come from the Ascension client
  * data; the rules are retail Mists of Pandaria's. Four Orbs of Power sit on
  * pedestals in the corners of the temple courtyard. Clicking one picks it up;
- * while held it earns the carrier's team victory points every tick - more the
- * closer to the sunken centre of the temple the carrier stands - and killing
- * blows score too. First team to 1600 wins.
+ * while held it earns the carrier's team victory points every tick - double
+ * for each ring closer to the sunken centre of the temple, and more again the
+ * more orbs the team holds at once - and killing blows score too. First team
+ * to 1600 wins.
  *
  * Holding an orb is a stacking debuff (more damage taken, less healing taken,
  * more damage done) that grows every ten seconds, so an orb cannot be parked
@@ -115,17 +116,26 @@ enum BG_TOK_Sounds
     BG_TOK_SOUND_ORB_RETURNED           = 8192
 };
 
+// Where an orb carrier stands, outermost first. The points each ring is worth
+// are TOK_RING_POINTS in the .cpp.
+enum BG_TOK_Rings : uint8
+{
+    BG_TOK_RING_OUTSIDE   = 0, // outside the courtyard
+    BG_TOK_RING_COURTYARD = 1, // the raised courtyard floor the orbs spawn on
+    BG_TOK_RING_CENTER    = 2, // down in the sunken centre pool
+    BG_TOK_RING_COUNT,
+    BG_TOK_RING_NONE      = BG_TOK_RING_COUNT
+};
+
 enum BG_TOK_Constants
 {
     BG_TOK_MAX_TEAM_SCORE         = 1600,
-    // Retail: three points a tick outside the courtyard, four on its raised
-    // floor, five down in the sunken centre.
-    BG_TOK_POINTS_OUTSIDE         = 3,
-    BG_TOK_POINTS_COURTYARD       = 4,
-    BG_TOK_POINTS_CENTER          = 5,
     BG_TOK_POINTS_PER_KILL        = 10,
     BG_TOK_POINT_TICK_TIME        = (5 * IN_MILLISECONDS),
     BG_TOK_CARRIER_CHECK_TIME     = 250,
+    // A carrier hears what the orb is worth when they change ring, at most
+    // this often, so walking a ramp along the edge does not spam them.
+    BG_TOK_RING_NOTICE_COOLDOWN   = 2 * IN_MILLISECONDS,
     // Same honor cadence as Eye of the Storm, the other 1600-point race.
     BG_TOK_HONOR_TICKS            = 260
 };
@@ -180,6 +190,10 @@ private:
     {
         ObjectGuid Carrier;
         uint32 CarrierTeam = 0;
+        // The ring the carrier was last told about, and how long until they
+        // can be told again.
+        uint8 NoticeRing = BG_TOK_RING_NONE;
+        uint32 NoticeCooldown = 0;
     };
 
     int32 FindOrbHeldBy(ObjectGuid guid) const;
@@ -190,7 +204,7 @@ private:
     void AwardCarrierPoints();
     void AddPoints(uint32 team, uint32 points);
     void UpdateScoreWorldStates();
-    uint32 GetPointsAtCarrierPosition(Player const* carrier) const;
+    void UpdateRingNotice(OrbState& orb, Player* carrier);
 
     std::array<OrbState, BG_TOK_ORB_COUNT> _orbs;
     uint32 _pointTickTimer;
