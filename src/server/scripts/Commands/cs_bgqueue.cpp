@@ -159,8 +159,8 @@ public:
             if (stat.Key.ArenaType)
                 name += Trinity::StringFormat(" {}v{}", uint32(stat.Key.ArenaType), uint32(stat.Key.ArenaType));
 
-            // A kind paid another kind's payout (All-Star: Buffle Shuffle
-            // 3v3's) shows that one, worked out from that kind's matches.
+            // A kind paid another kind's payout (All-Star: a regular 3v3's,
+            // per stock) shows that one, worked out from that kind's matches.
             BattlegroundMgr::MatchDurationKey const payKey = BattlegroundMgr::GetHonorPayoutKey(stat.Key);
             bool const paidAsOther = payKey.TypeId != stat.Key.TypeId || payKey.ArenaType != stat.Key.ArenaType || payKey.MinLevel != stat.Key.MinLevel;
             BattlegroundMgr::MatchDurationStats const* payStat = &stat;
@@ -185,7 +185,7 @@ public:
                 name.c_str(), uint32(stat.Key.MinLevel), uint32(stat.MaxLevel), stat.Samples,
                 stat.MedianSeconds / MINUTE, stat.MedianSeconds % MINUTE,
                 stat.MedianWinHonor, stat.MedianLossHonor, payout.Winner, payout.Loser,
-                paidAsOther ? (balanced ? " (Buffle Shuffle 3v3's)" : " (flat, as Buffle Shuffle 3v3)") :
+                paidAsOther ? (balanced ? " (3v3's, per stock)" : " (flat, as 3v3, per stock)") :
                     balanced ? "" : (stat.Samples < minSamples ? " (flat, too few)" : " (flat)"),
                 perHour(stat.MedianWinHonor, payout.Winner), perHour(stat.MedianLossHonor, payout.Loser));
         }

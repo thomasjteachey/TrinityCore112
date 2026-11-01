@@ -2264,9 +2264,10 @@ uint32 Arena::ShareEndOfMatchHonor(Player* player, uint32 honor)
     // Owner 2026-10-30: "the honor gain should actually be 3v3 honor * the
     // number of players evenly distributed to each participant. so if i stay
     // alive as one character i get the full amount". The pool is the payout
-    // (Buffle Shuffle 3v3's) times the player's lives, split evenly between
-    // the lives they played: never dying, the character that queued takes all
-    // of it; all four played, each of the four takes one payout.
+    // (a regular 3v3's, BattlegroundMgr::GetHonorPayoutKey) times the
+    // player's lives, split evenly between the lives they played: never
+    // dying, the character that queued takes all of it; all four played, each
+    // of the four takes one payout.
     auto const itr = _allStarSeats.find(player->GetGUID());
     if (itr == _allStarSeats.end() || !itr->second.HasLineup || itr->second.Lineup.empty())
         return honor;

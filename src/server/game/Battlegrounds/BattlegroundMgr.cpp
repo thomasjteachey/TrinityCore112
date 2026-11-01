@@ -1226,12 +1226,14 @@ BattlegroundMgr::MatchDurationKey BattlegroundMgr::GetMatchDurationKey(Battlegro
 
 BattlegroundMgr::MatchDurationKey BattlegroundMgr::GetHonorPayoutKey(MatchDurationKey const& key)
 {
-    // All-Star pays what solo 3v3 - Buffle Shuffle 3v3 - pays, whatever its
-    // own size (owner 2026-10-30: "tie the honor to solo 3v3"). Its matches
-    // are still recorded under its own kind, so `.bgqueue honor` shows how
-    // long they really run.
+    // Each All-Star stock pays what a regular 3v3 (All Arenas) pays, whatever
+    // its own size, so 4 stocks are worth four 3v3s (owner 2026-11-01:
+    // "shouldn't it be 4* 3v3 honor?"). It was Buffle Shuffle 3v3's until
+    // then, but a six-round shuffle already pays about four 3v3s, so All-Star
+    // paid about sixteen. Its matches are still recorded under its own kind,
+    // so `.bgqueue honor` shows how long they really run.
     if (key.TypeId == BATTLEGROUND_ASA)
-        return { uint32(BATTLEGROUND_SSH), uint8(ARENA_TYPE_3v3), key.MinLevel };
+        return { uint32(BATTLEGROUND_AA), uint8(ARENA_TYPE_3v3), key.MinLevel };
     return key;
 }
 

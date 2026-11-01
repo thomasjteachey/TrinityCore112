@@ -77,7 +77,7 @@ class WorldSession;
 // WorldSession::LogoutPlayer) and only then lets the save happen. What the
 // match pays (honor, kills) belongs to the character that queued; its end-of-
 // match honor and Mark of Honor wait for that restore (DeferMatchReward). The
-// honor is Buffle Shuffle 3v3's payout (BattlegroundMgr::GetHonorPayoutKey)
+// honor is a regular 3v3's payout (BattlegroundMgr::GetHonorPayoutKey)
 // times the player's lives, split evenly between the lives played
 // (Arena::ShareEndOfMatchHonor); another character's share is paid at its
 // next login (QueueLifeHonor).
