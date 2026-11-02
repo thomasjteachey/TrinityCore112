@@ -2095,11 +2095,40 @@ class spell_pri_shadow_wraith : public SpellScript
     }
 };
 
+// Puts Fade's cooldown back where it stood before a wraith the priest did not
+// cast (the Transcendence 5pc). Fade is DISABLED_WHILE_ACTIVE: its aura going on
+// holds the cooldown and coming off starts the full minute, whoever cast it.
+static void RestoreShadowWraithCooldown(Player* player, SpellHistory::Clock::time_point readyAt)
+{
+    SpellHistory* history = player->GetSpellHistory();
+    SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
+    if (readyAt <= now)
+    {
+        history->ResetCooldown(SPELL_PRIEST_SHADOW_WRAITH, true);
+        return;
+    }
+
+    int32 const wantedMs = int32(std::chrono::duration_cast<std::chrono::milliseconds>(readyAt - now).count());
+    int32 const currentMs = int32(history->GetRemainingCooldown(sSpellMgr->AssertSpellInfo(SPELL_PRIEST_SHADOW_WRAITH)));
+    if (currentMs != wantedMs)
+        history->ModifyCooldown(SPELL_PRIEST_SHADOW_WRAITH, wantedMs - currentMs);
+}
+
 // 89784 - Shadow Wraith aura
 class spell_pri_shadow_wraith_aura : public AuraScript
 {
     PrepareAuraScript(spell_pri_shadow_wraith_aura);
 
+public:
+    // Called by the Transcendence 5pc for a wraith it sent out: when this walk
+    // ends, Fade's own cooldown goes back to where it stood.
+    void KeepFadeCooldown(SpellHistory::Clock::time_point readyAt)
+    {
+        _keepFadeCooldown = true;
+        _fadeReadyAt = readyAt;
+    }
+
+private:
     bool Load() override
     {
         _wraithGuid.Clear();
@@ -2190,14 +2219,94 @@ class spell_pri_shadow_wraith_aura : public AuraScript
         _wraithGuid.Clear();
     }
 
+    // Runs after the aura has come off, so Fade's cooldown has already started.
+    void RestoreFadeCooldown(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (!_keepFadeCooldown)
+            return;
+
+        _keepFadeCooldown = false;
+        if (Player* player = GetTarget()->ToPlayer())
+            RestoreShadowWraithCooldown(player, _fadeReadyAt);
+    }
+
     void Register() override
     {
         AfterEffectApply += AuraEffectApplyFn(spell_pri_shadow_wraith_aura::OnApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
         AfterEffectRemove += AuraEffectRemoveFn(spell_pri_shadow_wraith_aura::OnRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_pri_shadow_wraith_aura::RestoreFadeCooldown, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
     }
 
-private:
     ObjectGuid _wraithGuid;
+    bool _keepFadeCooldown = false;
+    SpellHistory::Clock::time_point _fadeReadyAt;
+};
+
+// 21853 - Reactive Fade (Vestments of Transcendence 5pc). The DBC proc still casts
+// 21976, the classic 4 sec threat drop, every time. On top of that it sends out
+// the talent-tree Fade wraith (89784), at most once a minute, without touching
+// the priest's own Fade cooldown.
+class spell_pri_transcendence_reactive_fade : public AuraScript
+{
+    PrepareAuraScript(spell_pri_transcendence_reactive_fade);
+
+    static constexpr Seconds WraithInternalCooldown = Seconds(60);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PRIEST_SHADOW_WRAITH });
+    }
+
+    bool Load() override
+    {
+        return GetUnitOwner() && GetUnitOwner()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void SendWraith(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        Player* priest = GetTarget()->ToPlayer();
+        if (!priest || !priest->IsAlive())
+            return;
+
+        // Casting it again while a wraith is out would end that walk early.
+        if (priest->HasAura(SPELL_PRIEST_SHADOW_WRAITH))
+            return;
+
+        // Never cut off a cast or a channel (a real Fade press can't either).
+        if (priest->IsNonMeleeSpellCast(false, false, true))
+            return;
+
+        SpellHistory* history = priest->GetSpellHistory();
+        if (history->HasCooldown(GetId()))
+            return;
+
+        SpellInfo const* fade = sSpellMgr->AssertSpellInfo(SPELL_PRIEST_SHADOW_WRAITH);
+        SpellHistory::Clock::time_point const fadeReadyAt = GameTime::GetSystemTime()
+            + std::chrono::milliseconds(history->GetRemainingCooldown(fade));
+
+        // Free and off the global and Fade cooldowns, otherwise an ordinary cast:
+        // no wraith while stunned, silenced or mounted.
+        CastSpellExtraArgs args(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD
+            | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST | TRIGGERED_DONT_REPORT_CAST_ERROR));
+        args.SetTriggeringAura(aurEff);
+        if (priest->CastSpell(priest, SPELL_PRIEST_SHADOW_WRAITH, args) != SPELL_CAST_OK)
+            return;
+
+        history->AddCooldown(GetId(), 0, WraithInternalCooldown);
+
+        Aura* wraith = priest->GetAura(SPELL_PRIEST_SHADOW_WRAITH, priest->GetGUID());
+        spell_pri_shadow_wraith_aura* wraithScript = wraith
+            ? wraith->GetScript<spell_pri_shadow_wraith_aura>("spell_pri_shadow_wraith") : nullptr;
+        if (wraithScript)
+            wraithScript->KeepFadeCooldown(fadeReadyAt);
+        else // the walk failed at once, and starting Fade's cooldown on the way out
+            RestoreShadowWraithCooldown(priest, fadeReadyAt);
+    }
+
+    void Register() override
+    {
+        AfterEffectProc += AuraEffectProcFn(spell_pri_transcendence_reactive_fade::SendWraith, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
 };
 
 
@@ -2296,5 +2405,6 @@ void AddSC_priest_spell_scripts()
     RegisterSpellScript(spell_pre_renew_bonus);
     RegisterSpellScript(spell_pri_dispel_magic);
     RegisterSpellAndAuraScriptPair(spell_pri_shadow_wraith, spell_pri_shadow_wraith_aura);
+    RegisterSpellScript(spell_pri_transcendence_reactive_fade);
     RegisterSpellScript(spell_pri_silence);
 }
