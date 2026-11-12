@@ -437,11 +437,23 @@ namespace
 
         // ---- the talent build, and the spells it teaches (not the match's to govern)
         std::unordered_set<uint32> taughtByTalents;
+        // The chains an ability a class talent teaches through SPELL_EFFECT_LEARN_SPELL
+        // heads, whether or not the character took it: Bloodthirsty Grip teaches
+        // Bloodthirst Rank 1, and Ranks 2-4 are trained. Such a chain is the talent's,
+        // as Mortal Strike's is.
+        std::unordered_set<uint32> talentTaughtHeads;
         for (TalentEntry const* talent : sTalentStore)
         {
             TalentTabEntry const* tab = talent ? sTalentTabStore.LookupEntry(talent->TabID) : nullptr;
             if (!tab || !(tab->ClassMask & player->GetClassMask()))
                 continue;
+
+            for (uint32 rankSpell : talent->SpellRank)
+                if (SpellInfo const* info = rankSpell ? sSpellMgr->GetSpellInfo(rankSpell) : nullptr)
+                    for (SpellEffectInfo const& effect : info->GetEffects())
+                        if (effect.Effect == SPELL_EFFECT_LEARN_SPELL && effect.TriggerSpell)
+                            if (uint32 const head = sSpellMgr->GetFirstSpellInChain(effect.TriggerSpell))
+                                talentTaughtHeads.insert(head);
 
             for (int32 rank = MAX_TALENT_RANK - 1; rank >= 0; --rank)
             {
@@ -549,10 +561,13 @@ namespace
             // ranks after it are in the chain. The lists name almost none of them
             // (Trueshot Aura, Aimed Shot, Mortal Strike), so a talent learned in the
             // match stayed at rank 1 (owner, 2026-10-23: "i should be able to learn
-            // trueshot aura 2/3 with skillpoints").
+            // trueshot aura 2/3 with skillpoints"). Nor is the chain of an ability a
+            // talent teaches: Bloodthirst is on no list, so learning Bloodthirsty Grip
+            // in the match gave a Bloodthirst whose ranks 2-4 were gone.
             SpellInfo const* first = sSpellMgr->GetSpellInfo(itr->first);
             int32 const status = first ? WhitelistStatus(player->GetClass(), first) : -1;
-            if (status == 0 && !GetTalentSpellPos(itr->first))
+            bool const talent = GetTalentSpellPos(itr->first) || talentTaughtHeads.count(itr->first);
+            if (status == 0 && !talent)
             {
                 state.Removed.insert(chain.Ranks.begin(), chain.Ranks.end());
                 itr = state.Chains.erase(itr);
@@ -561,7 +576,7 @@ namespace
             // The ranks after a talent are picks, once the talent is learned in
             // the match - never free: learning Trueshot Aura at 30 handed over all
             // three ranks, the level-50 and -60 ones too.
-            chain.Talent = GetTalentSpellPos(itr->first) != nullptr;
+            chain.Talent = talent;
             if (status == 2 && !chain.Talent)
                 state.FreeChains.insert(itr->first);
             for (uint32 spell : chain.Ranks)
@@ -998,7 +1013,22 @@ namespace
             return false;
         auto const chain = state.SpellToChain.find(spell);
         if (chain == state.SpellToChain.end())
+        {
+            // A talent chain's head - the talent's own rank (Mortal Strike 1) or the
+            // ability it teaches (Bloodthirst 1) - is none of the chain's picks.
+            // Learned with the talent in the match, it comes back inactive when the
+            // character had trained a rank above it: that rank superseded it, and the
+            // match does not hand the trained ranks back with the talent
+            // (Player::LearnSpell). Until a rank of its chain is picked it is the best
+            // the match has given, so it is listed and the bars cast it.
+            if (!active)
+                if (auto const head = state.Chains.find(spell); head != state.Chains.end() && head->second.Talent)
+                {
+                    auto const unlocked = state.Unlocked.find(spell);
+                    return unlocked == state.Unlocked.end() || !unlocked->second;
+                }
             return active;
+        }
         // Every unlocked rank as WoW lists ranks - a spell whose ranks stack
         // (Arcane Shot) keeps them all; one whose new rank replaces the old
         // (an aspect, a buff) only the best - and nothing past the unlocked.
@@ -3327,8 +3357,8 @@ bool LearnsHigherRanks(Player const* player)
 }
 
 // A talent learned in the match: its old button comes back too, and a spell it
-// gives that is on no button yet - the talent's own, or what it teaches when it
-// is a passive - goes on the first free one, as a pick's does.
+// gives that is on no button yet - the talent's own, or what it teaches through
+// a learn effect - goes on the first free one, as a pick's does.
 void OnTalentLearned(Player* player, uint32 talentSpell)
 {
     if (!player)
@@ -3373,13 +3403,18 @@ void OnTalentLearned(Player* player, uint32 talentSpell)
     std::vector<uint32> given;
     if (SpellInfo const* info = sSpellMgr->GetSpellInfo(talentSpell))
     {
-        if (!info->IsPassive())
-            given.push_back(talentSpell);
-        else
+        // A talent that teaches through SPELL_EFFECT_LEARN_SPELL gives what it
+        // teaches. Its own spell is only the lesson, hidden from the spellbook and
+        // not always passive: Bloodthirsty Grip went on the bars, not Bloodthirst.
+        if (info->HasEffect(SPELL_EFFECT_LEARN_SPELL))
+        {
             for (SpellEffectInfo const& effect : info->GetEffects())
                 if (effect.Effect == SPELL_EFFECT_LEARN_SPELL && effect.TriggerSpell)
                     if (SpellInfo const* taught = sSpellMgr->GetSpellInfo(effect.TriggerSpell); taught && !taught->IsPassive())
                         given.push_back(effect.TriggerSpell);
+        }
+        else if (!info->IsPassive())
+            given.push_back(talentSpell);
     }
     for (uint32 spell : given)
     {
