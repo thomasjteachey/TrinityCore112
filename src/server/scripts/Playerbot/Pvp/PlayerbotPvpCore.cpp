@@ -8248,6 +8248,11 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         if (player->IsInWater() || IsInHazardousLiquidForRecovery(player))
             return false;
 
+        // A map that already refused the free eat/drink would only refuse it
+        // again, after the run had stopped (and shed its form) to sit down.
+        if (playerbot::PvpClassActions::IsRefreshmentRefused(player))
+            return false;
+
         float const manaPct = player->GetMaxPower(POWER_MANA) > 0 ? player->GetPowerPct(POWER_MANA) : 100.0f;
         if (manaPct >= kFlagRunRecoveryStartPct && player->GetHealthPct() >= kFlagRunRecoveryStartPct)
             return false;
@@ -9847,11 +9852,17 @@ PvpValues PvpCore::CollectValues(Player const* player)
 
     bool const inSpiritOfRedemption = IsPriestInSpiritOfRedemption(player);
     bool const movementPreventedByRoot = PvpCore::IsMovementPreventedByRoot(player);
+    // The disengage below exists only to buy a drink. On a map that refused
+    // the free drink (PvpClassActions::IsRefreshmentRefused) there is none to
+    // buy: the drink pick stopped the bot to sit, was refused, and the bot's
+    // orders walked it on again, every tick - a stutter step across the whole
+    // map, and a flight from every target it was sent to fight.
     bool const criticalLowMana = !inSpiritOfRedemption &&
         !UsesMeleeSpacingProfile(player, profileSelection) &&
         player->GetClass() != CLASS_HUNTER &&
         player->GetClass() != CLASS_WARLOCK &&
-        player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
+        player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f &&
+        !playerbot::PvpClassActions::IsRefreshmentRefused(player);
 
     // Hard-priority mana preservation policy for ranged/healing profiles: below
     // 10% mana, disengage above all other class behavior, then drink as soon as
