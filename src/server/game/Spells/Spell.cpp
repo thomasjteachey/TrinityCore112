@@ -6381,7 +6381,13 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                         return SPELL_FAILED_LINE_OF_SIGHT;
 
                     float objSize = target->GetCombatReach();
-                    float range = m_spellInfo->GetMaxRange(true, unitCaster, this) * 1.5f + objSize; // can't be overly strict
+                    // A modifier that shortens the range leaves the route the spell's own
+                    // budget. The limit is in route points (one for the start, one every
+                    // SMOOTH_PATH_STEP_SIZE), so a shortened range lost the far end of
+                    // itself: Charge cut to 16.25 yards (Summoner's Rift) got 6 points and
+                    // failed with "No path available" from 16.3 yards on, of the 19.25 the
+                    // range check allows. A lengthened range still widens the budget.
+                    float range = std::max(m_spellInfo->GetMaxRange(true, unitCaster, this), m_spellInfo->GetMaxRange(true)) * 1.5f + objSize; // can't be overly strict
 
                     m_preGeneratedPath = std::make_unique<PathGenerator>(unitCaster);
                     m_preGeneratedPath->SetPathLengthLimit(range);
