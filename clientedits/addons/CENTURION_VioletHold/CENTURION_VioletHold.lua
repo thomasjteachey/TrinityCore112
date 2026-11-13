@@ -22,10 +22,10 @@ local runes, expires, total = {}, 0, 60;
 -- What each rune is called over its bar, in its crystal's colour.
 local NAMES = {
 	[179905] = { "Berserking",        1.00, 0.55, 0.20 },
-	[300500] = { "Recharge",          1.00, 0.30, 0.30 },
+	[300500] = { "Recharge",          1.00, 0.45, 0.75 },
 	[300501] = { "Glacial Stasis",    0.45, 0.75, 1.00 },
-	[300502] = { "Volatile Core",     1.00, 0.85, 0.25 },
-	[300503] = { "Bright Reflection", 0.45, 1.00, 0.45 },
+	[300502] = { "Volatile Core",     1.00, 0.60, 0.20 },
+	[300503] = { "Bright Reflection", 1.00, 0.90, 0.35 },
 };
 
 local layer = CreateFrame("Frame", "CENTURION_VioletHoldRunes", WorldFrame);
