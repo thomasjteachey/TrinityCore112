@@ -49,10 +49,14 @@ local frames = {};
 function CreateFrame(kind, name, parent) local f = Frame(); frames[#frames + 1] = f; return f end
 WorldFrame = Frame();
 
--- every point projects to the middle of the screen, a yard = 2% of its height
+-- every point projects to the middle of the screen, a yard = 2% of its height;
+-- the player stands at (100, 200, 40)
+local projected = {};
 function CenturionUnitBar(i, x, y, z)
-	if ( i == 0 ) then return 0.5, 0.5, 0.02 end
+	if ( i == 0 ) then projected[#projected + 1] = { x, y, z }; return 0.5, 0.5, 0.02 end
+	if ( i == -1 ) then return 100, 200, 40 end
 end
+function UnitGUID(unit) if unit == "player" then return "0x0000000000018775" end end
 
 dofile(ADDON);
 local layer, events = frames[1], frames[2];
@@ -77,9 +81,9 @@ check(labels() == 0, "nothing before any feed");
 fire("VHRUNE:0;1880.5,800.2,38.4,300501;1900.0,780.0,38.4,300500");
 draw();
 check(labels() == 2, "two runes, two labels (got " .. labels() .. ")");
-check(frames[3].name.text == "Glacial Stasis", "first named Glacial Stasis (got " .. tostring(frames[3].name.text) .. ")");
-check(frames[4].name.text == "Recharge", "second named Recharge");
-check(frames[3].name.color and frames[3].name.color[3] == 1.00, "Glacial Stasis in blue");
+check(frames[3].name.text == "Freeze Enemies", "first named Freeze Enemies (got " .. tostring(frames[3].name.text) .. ")");
+check(frames[4].name.text == "Reset Cooldowns", "second named Reset Cooldowns");
+check(frames[3].name.color and frames[3].name.color[3] == 1.00, "Freeze Enemies in blue");
 check(frames[3].text == nil and frames[3].fill == nil, "no seconds, no bar");
 check(ringDots() == 80, "a Glacial Stasis rune gets its 80-dot ring (got " .. ringDots() .. ")");
 
@@ -104,14 +108,39 @@ draw();
 check(labels() == 0, "VHRUNE:0 clears every label");
 check(ringDots() == 0, "VHRUNE:0 clears the ring");
 
+-- the timebomb rune: named, with its 10-yard blast ring
+fire("VHRUNE:0;1880.5,800.2,38.4,300502;1900.0,780.0,38.4,300503");
+draw();
+check(frames[3].name.text == "You're a Timebomb" and frames[4].name.text == "Spawn a Clone of You", "timebomb and clone named");
+check(ringDots() == 40, "the timebomb rune gets its 40-dot ring (got " .. ringDots() .. ")");
+fire("VHRUNE:0");
+
+-- a party member carrying a core: a ring round where the server says they are
+fire("VHBOMB;0x0000000000000042,500.0,600.0,38.0");
+projected = {};
+draw();
+check(ringDots() == 40, "a carrier gets the blast ring (got " .. ringDots() .. ")");
+check(projected[1] and math.abs(projected[1][1] - 510) < 0.01 and math.abs(projected[1][2] - 600) < 0.01,
+	"ring 10 yards round the reported position");
+-- you carrying one: the ring follows your own position, not the report
+fire("VHBOMB;0x0000000000018775,500.0,600.0,38.0");
+projected = {};
+draw();
+check(projected[1] and math.abs(projected[1][1] - 110) < 0.01 and math.abs(projected[1][2] - 200) < 0.01,
+	"your own ring is drawn where you stand");
+fire("VHBOMB");
+draw();
+check(ringDots() == 0, "a bare VHBOMB clears the carriers' rings");
+
 -- a server still sending a lifetime: the number is ignored, the runes shown
 fire("VHRUNE:60000;1.0,2.0,3.0,179905");
 draw();
 check(labels() == 1 and frames[3].name.text == "Berserking", "an old-format line still names the rune");
+fire("VHBOMB;0x0000000000000042,500.0,600.0,38.0");
 
 events.scripts.OnEvent(events, "PLAYER_ENTERING_WORLD");
 draw();
-check(labels() == 0, "leaving the Hold clears the labels");
+check(labels() == 0 and ringDots() == 0, "leaving the Hold clears the labels and the carriers");
 
 events.scripts.OnEvent(events, "CHAT_MSG_ADDON", "OTHER", "VHRUNE:0;1.0,2.0,3.0,300500");
 draw();

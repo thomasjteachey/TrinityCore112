@@ -269,6 +269,11 @@ enum BG_VHR_Constants
     // Boon of Abundance adds a rune per stack on top of that (its brokers do
     // not grow with it), so the drop can be up to seven.
     BG_VHR_MAX_BONUS_RUNES  = 3,
+
+    // The Volatile Core rune's aura (5 sec, then the blast), and how often the
+    // party is told where its carriers are (SendBombFeed).
+    BG_VHR_SPELL_VOLATILE_CORE = 94311,
+    BG_VHR_BOMB_FEED_INTERVAL  = 200,
     BG_VHR_RUNE_SLOTS       = BG_VHR_MAX_WAVE_BUFFS + BG_VHR_MAX_BONUS_RUNES,
 
     // Below this many people the party gets one extra boon broker per wave. A
@@ -691,6 +696,11 @@ private:
     std::string BuildRuneFeed() const;
     void SendRuneFeed(Player* player = nullptr);
     void SendRuneFeedIfChanged();
+    // Who is carrying a Volatile Core, and where, so the addon can draw the
+    // blast's reach round them: "VHBOMB;<guid>,<x>,<y>,<z>;..." to the party
+    // every BG_VHR_BOMB_FEED_INTERVAL while anyone is, then a bare "VHBOMB"
+    // once when nobody is any more.
+    void SendBombFeed();
     bool PickBuffPosition(std::vector<Position> const& taken, Position& out) const;
     // First free broker slot, or BG_VHR_CREATURE_BOON_BROKER_MAX when all are
     // standing. Also collects the standing brokers' positions so a new drop
@@ -781,6 +791,9 @@ private:
     ObjectGuid _championGuid;
     // Which rune slots the last rune feed reported standing.
     uint8 _runeFeedMask = 0;
+    // The bomb feed's clock, and whether its last line named anybody.
+    uint32 _bombFeedTimerMs = 0;
+    bool _bombFeedSent = false;
 };
 
 #endif

@@ -300,6 +300,8 @@ void BattlegroundVHR::Reset()
     _waveCloneSources.clear();
     _championGuid.Clear();
     _runeFeedMask = 0;
+    _bombFeedTimerMs = 0;
+    _bombFeedSent = false;
 }
 
 bool BattlegroundVHR::SetupBattleground()
@@ -1413,6 +1415,31 @@ void BattlegroundVHR::SendRuneFeed(Player* player)
                 SendSquadFeedLine(member, line);
 }
 
+void BattlegroundVHR::SendBombFeed()
+{
+    std::vector<ObjectGuid> const roster = GetHumanRoster(true);
+    std::string line = "VHBOMB";
+    bool any = false;
+    for (ObjectGuid guid : roster)
+    {
+        Player const* member = ObjectAccessor::FindPlayer(guid);
+        if (!member || !member->IsInWorld() || !member->HasAura(BG_VHR_SPELL_VOLATILE_CORE))
+            continue;
+        line += Trinity::StringFormat(";0x{:016X},{:.1f},{:.1f},{:.1f}", guid.GetRawValue(),
+            member->GetPositionX(), member->GetPositionY(), member->GetPositionZ());
+        any = true;
+    }
+
+    // Nobody carrying: say so once, then stay quiet.
+    if (!any && !_bombFeedSent)
+        return;
+    _bombFeedSent = any;
+
+    for (ObjectGuid guid : roster)
+        if (Player* member = ObjectAccessor::FindPlayer(guid))
+            SendSquadFeedLine(member, line);
+}
+
 void BattlegroundVHR::SendRuneFeedIfChanged()
 {
     uint8 const mask = GetStandingRuneMask();
@@ -1723,6 +1750,13 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
     if (_allyRetryMs)
         _allyRetryMs = _allyRetryMs <= diff ? 0 : _allyRetryMs - diff;
 
+    _bombFeedTimerMs += diff;
+    if (_bombFeedTimerMs >= BG_VHR_BOMB_FEED_INTERVAL)
+    {
+        _bombFeedTimerMs = 0;
+        SendBombFeed();
+    }
+
     switch (_waveState)
     {
         case WaveState::AwaitingSpawn:
@@ -1766,7 +1800,7 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
     _stateCheckTimerMs = 0;
     CheckRunState();
     UpdateScoreWorldStates();
-    // A rune taken since the last check loses its timer bar.
+    // A rune taken since the last check loses its label.
     SendRuneFeedIfChanged();
 }
 
