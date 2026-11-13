@@ -208,11 +208,6 @@ local function MakeCard(i)
 	c.kind = Text(c, 9);
 	c.kind:SetPoint("TOPLEFT", c, "TOPLEFT", 8, -8);
 
-	c.greed = Text(c, 9);
-	c.greed:SetPoint("TOPRIGHT", c, "TOPRIGHT", -8, -8);
-	c.greed:SetTextColor(GOLD.r, GOLD.g, GOLD.b);
-	c.greed:SetText("GREED");
-
 	-- who else in the party is looking at this card: their initial, class-coloured
 	c.watch = {};
 	for k = 1, 5 do
@@ -323,7 +318,6 @@ local function DrawCard(c, card, index, count)
 	local kinds = { S = "CLASS SPELL", I = "LEGENDARY" };
 	c.kind:SetText(card.runWide and "RUN-WIDE" or kinds[card.kind] or "");
 	c.kind:SetTextColor(rarity.r, rarity.g, rarity.b);
-	if ( card.greedCard ) then c.greed:Show(); else c.greed:Hide(); end
 
 	c.name:SetText(card.name);
 	c.headline:SetText(card.headline ~= "" and card.headline or "Unique");
