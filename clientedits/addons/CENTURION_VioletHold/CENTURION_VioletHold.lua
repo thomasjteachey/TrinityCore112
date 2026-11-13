@@ -40,12 +40,12 @@ local pool = {};
 -- dots the Rift draws its turret range with). Each is taken standing on the
 -- rune, so its reach starts there:
 --   Freeze Enemies    every enemy within 30 yards (94313, SpellRadius 10)
---   You're a Timebomb  the blast, 10 yards round whoever carries it (94314,
---                     SpellRadius 13) - drawn round the rune, and round every
+--   You're a Timebomb  the blast, 20 yards round whoever carries it (94314,
+--                     SpellRadius 9) - drawn round the rune, and round every
 --                     carrier for as long as the core ticks (VHBOMB)
 local RINGS = {
 	[300501] = { radius = 30, dots = 80, r = 0.45, g = 0.75, b = 1.00 },
-	[300502] = { radius = 10, dots = 40, r = 1.00, g = 0.55, b = 0.15 },
+	[300502] = { radius = 20, dots = 60, r = 1.00, g = 0.55, b = 0.15 },
 };
 local BOMB_RING = RINGS[300502];
 local dots, dotsShown = {}, 0;
