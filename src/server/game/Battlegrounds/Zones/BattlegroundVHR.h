@@ -276,12 +276,6 @@ enum BG_VHR_Constants
     // way a wave does: a trio shares what eight would.
     BG_VHR_SHORT_HANDED_PARTY = 4,
 
-    // How long a dropped powerup survives before it is taken back, in ms. Waves
-    // are composed the moment the previous one dies, so this deliberately
-    // outlives the preparation window - the party can grab one while
-    // the next wave is still behind its cell door.
-    BG_VHR_BUFF_LIFETIME_MS = 60 * IN_MILLISECONDS,
-
     // Ideal spacing for a dropped powerup: this far from any living player, so
     // it has to be walked to rather than stood on, and this far from a cell
     // release point so it never lands in a gate that is about to open.
@@ -466,6 +460,12 @@ public:
     // Wave-clear rewards belong to the party. The clones are Players on the
     // enemy team and would otherwise walk over them on the way in.
     bool CanPickUpPowerup(Player const* player) const override;
+
+    // A rune taken stays taken for the rest of its drop. The stock respawn
+    // (Battleground::HandleTriggerBuff, 3 minutes) only never showed here
+    // while runes expired after a minute; untimed, it would hand a long wave
+    // the same rune twice.
+    uint32 GetBuffRespawnTime(uint32 /*type*/) const override { return RESPAWN_ONE_DAY; }
 
     // A party member just took a rune whose spell is runeSpellId (called by
     // the rune trap, GameObject.cpp). With Boon of Communion the rest of the
@@ -674,17 +674,18 @@ private:
     // This is the only route back from death in this mode.
     void RestorePartyAfterWave();
 
-    // Reward powerups, dropped when a wave is cleared and taken back after
-    // BG_VHR_BUFF_LIFETIME_MS.
+    // Reward powerups, dropped when a wave is cleared and taken back when the
+    // next wave is cleared (the drop that replaces them).
     // Returns how many boon brokers arrived with the drop.
     uint32 SpawnWaveRewardBuffs();
     void DespawnWaveRewardBuffs();
 
     // The runes still on the floor, for the CENTURION_VioletHold addon, which
-    // draws a timer bar over each one (through the client DLL's world-point
+    // names each one over it (through the client DLL's world-point
     // projection). One CCGAME line carries the whole state:
-    //   VHRUNE:<ms left>;<x>,<y>,<z>,<entry>;...   ("VHRUNE:0" = none)
-    // where entry is the rune's gameobject entry, which the addon names.
+    //   VHRUNE:0;<x>,<y>,<z>,<entry>;...   ("VHRUNE:0" alone = none)
+    // where entry is the rune's gameobject entry, which the addon names. The
+    // 0 was the milliseconds left when runes expired; they no longer do.
     // sent whenever the set of runes changes, and to anyone joining the run.
     uint8 GetStandingRuneMask() const;
     std::string BuildRuneFeed() const;
@@ -714,10 +715,10 @@ private:
     // leaves.
     uint32 _partySize;
 
-    // Counts down while dropped powerups are on the floor; 0 means none are
-    // out. Reset each time a wave is cleared, so a fresh drop always gets the
-    // full lifetime even if the previous one had not expired.
-    uint32 _buffLifetimeMs;
+    // A drop of runes is on the floor. Runes have no timer: they stay through
+    // the next wave until the drop after it replaces them, and one that is
+    // taken does not come back (GetBuffRespawnTime).
+    bool _runesOut;
 
     uint32 _waveNumber;
     uint32 _highestWaveCleared;

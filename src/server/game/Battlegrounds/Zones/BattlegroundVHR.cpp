@@ -181,7 +181,7 @@ BattlegroundVHR::BattlegroundVHR()
     _highestWaveCleared = 0;
     _waveState = WaveState::NotStarted;
     _prepTimerMs = 0;
-    _buffLifetimeMs = 0;
+    _runesOut = false;
     _lastCountdownSecond = 0;
     _stateCheckTimerMs = 0;
     _floorCheckTimerMs = 0;
@@ -274,7 +274,7 @@ void BattlegroundVHR::Reset()
     _highestWaveCleared = 0;
     _waveState = WaveState::NotStarted;
     _prepTimerMs = 0;
-    _buffLifetimeMs = 0;
+    _runesOut = false;
     _lastCountdownSecond = 0;
     _stateCheckTimerMs = 0;
     _floorCheckTimerMs = 0;
@@ -1344,7 +1344,7 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
     }
 
     if (droppedRune)
-        _buffLifetimeMs = BG_VHR_BUFF_LIFETIME_MS;
+        _runesOut = true;
 
     SendRuneFeedIfChanged();
     return brokersSpawned;
@@ -1355,14 +1355,14 @@ void BattlegroundVHR::DespawnWaveRewardBuffs()
     for (uint32 i = 0; i < BG_VHR_RUNE_SLOTS; ++i)
         DelObject(BG_VHR_OBJECT_BUFF_1 + i);
 
-    _buffLifetimeMs = 0;
+    _runesOut = false;
     SendRuneFeedIfChanged();
 }
 
 uint8 BattlegroundVHR::GetStandingRuneMask() const
 {
     uint8 mask = 0;
-    if (!_buffLifetimeMs)
+    if (!_runesOut)
         return mask;
 
     Map* map = FindBgMap();
@@ -1386,7 +1386,7 @@ std::string BattlegroundVHR::BuildRuneFeed() const
         return "VHRUNE:0";
 
     Map* map = FindBgMap();
-    std::string line = "VHRUNE:" + std::to_string(_buffLifetimeMs);
+    std::string line = "VHRUNE:0";
     for (uint32 i = 0; i < BG_VHR_RUNE_SLOTS; ++i)
     {
         if (!(mask & (1u << i)))
@@ -1722,16 +1722,6 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
 
     if (_allyRetryMs)
         _allyRetryMs = _allyRetryMs <= diff ? 0 : _allyRetryMs - diff;
-
-    // Dropped powerups are on a wall clock, not a wave clock: an uncollected
-    // reward is taken back whether or not the next wave has started.
-    if (_buffLifetimeMs)
-    {
-        if (_buffLifetimeMs <= diff)
-            DespawnWaveRewardBuffs();
-        else
-            _buffLifetimeMs -= diff;
-    }
 
     switch (_waveState)
     {
