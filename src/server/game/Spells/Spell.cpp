@@ -3089,7 +3089,9 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
             // Neither should Recharge (90200): a BG rune trap's "hit" is a pure
             // buff, but an ownerless neutral trap GO always passes the
             // IsValidAttackTarget gate above, so it needs the same exemption.
-            if (m_spellInfo->Id != 6474 && m_spellInfo->Id != 3600 && m_spellInfo->Id != 90200)
+            // The Violet Hold's runes (94310-94312) are trap-cast the same way.
+            if (m_spellInfo->Id != 6474 && m_spellInfo->Id != 3600 && m_spellInfo->Id != 90200 &&
+                (m_spellInfo->Id < 94310 || m_spellInfo->Id > 94312))
                 unit->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HITBYSPELL);
         }
         else if (m_caster->IsFriendlyTo(unit))

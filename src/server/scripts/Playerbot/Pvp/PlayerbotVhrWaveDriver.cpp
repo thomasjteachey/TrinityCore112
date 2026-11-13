@@ -382,6 +382,21 @@ void FulfilAllyRequests(BattlegroundVHR* bg)
             }
         }
 
+        // A Bright Reflection is a copy of the one who took the rune, never a
+        // bot. Its source gone (left the run), the request goes with it.
+        if (request.source)
+        {
+            Player* self = ObjectAccessor::FindPlayer(request.source);
+            Player* reflection = self && self->IsInWorld()
+                ? SeatClone(bg, self, bg->GetHumanTeam(), request.where, request.where, "Bright ")
+                : nullptr;
+            if (!reflection)
+                TC_LOG_WARN("playerbots", "PlayerbotVhrWaveDriver: could not field a Bright Reflection for instance {}.",
+                    instanceId);
+            bg->NotifyAllySpawned(request.id, reflection ? reflection->GetGUID() : ObjectGuid::Empty);
+            continue;
+        }
+
         std::vector<ObjectGuid> bots = CollectBotWaveSources(request.partyMinLevel, request.partyMaxLevel,
             loadSession != nullptr, DrawsFromPvpOnlyPool(bg));
         Player* source = nullptr;
@@ -820,6 +835,9 @@ void PlayerbotVhrWaveDriver::OnWorldUpdate(uint32 /*diffMs*/)
             case STATUS_IN_PROGRESS:
                 FulfilWaveRequest(vhr);
                 FulfilAllyRequests(vhr);
+                // Bright Reflections whose wave has fallen.
+                for (ObjectGuid const& reflection : vhr->TakeAlliesToDismiss())
+                    PlayerbotObcCloneManager::DestroyCustomGameClone(reflection);
                 break;
             case STATUS_WAIT_LEAVE:
                 // The run is over; take the surviving clones down with it.

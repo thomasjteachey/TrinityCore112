@@ -3163,8 +3163,10 @@ void SpellMgr::LoadSpellInfoCorrections()
     // trap. Positivity is forced separately in _isPositiveEffectImpl (the
     // custom-attributes pass runs after these corrections and would re-mark a
     // bare dummy aura negative, which is what made the buff break stealth and
-    // land as a debuff).
-    ApplySpellFix({ 90200 }, [](SpellInfo* spellInfo)
+    // land as a debuff). The Violet Hold's own runes - 94310 Glacial Stasis,
+    // 94311 Volatile Core, 94312 Bright Reflection - are the same trap-cast
+    // dummy aura and get the same treatment.
+    ApplySpellFix({ 90200, 94310, 94311, 94312 }, [](SpellInfo* spellInfo)
     {
         spellInfo->Attributes |= SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY;
         spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT;

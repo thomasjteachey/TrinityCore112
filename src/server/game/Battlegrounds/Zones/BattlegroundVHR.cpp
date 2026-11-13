@@ -293,6 +293,8 @@ void BattlegroundVHR::Reset()
     _nextAllyRequestId = 0;
     _allyRetryMs = 0;
     _allies.clear();
+    _fleetingAllies.clear();
+    _alliesToDismiss.clear();
     _menagerie.clear();
     _waveCloneSources.clear();
     _championGuid.Clear();
@@ -1058,6 +1060,8 @@ void BattlegroundVHR::CompleteWave()
     // is fixed from the party size captured at the start, but the composition
     // draws its source characters from the living roster, and a party that just
     // clawed through a wave should be whole again when that happens.
+    // Reflections last the wave they joined; they go before anyone is raised.
+    DismissFleetingAllies();
     RestorePartyAfterWave();
     uint32 const brokers = SpawnWaveRewardBuffs();
 
@@ -1241,9 +1245,9 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
     {
         BG_OBJECTID_BERSERKERBUFF_ENTRY,
         BG_VHR_GO_RECHARGE_BUFF,
-        BG_VHR_GO_BULWARK_BUFF,
-        BG_VHR_GO_RENEWAL_BUFF,
-        BG_VHR_GO_PRECISION_BUFF
+        BG_VHR_GO_GLACIAL_STASIS_BUFF,
+        BG_VHR_GO_VOLATILE_CORE_BUFF,
+        BG_VHR_GO_BRIGHT_REFLECTION_BUFF
     };
     uint32 const kBuffCount = uint32(sizeof(kBuffEntries) / sizeof(kBuffEntries[0]));
 
@@ -1496,13 +1500,60 @@ void BattlegroundVHR::RequestAlly(Player const* requester)
     _allyRetryMs = 0;
 }
 
+void BattlegroundVHR::RequestReflection(Player const* requester)
+{
+    if (!requester || requester->GetBGTeam() != _humanTeam || IsAlly(requester->GetGUID()))
+        return;
+
+    VhrAllyRequest request;
+    request.id = ++_nextAllyRequestId;
+    request.requester = requester->GetGUID();
+    request.where = requester->GetPosition();
+    request.partyMinLevel = request.partyMaxLevel = requester->GetLevel();
+    request.source = requester->GetGUID();
+    request.fleeting = true;
+
+    _allyRequests.push_back(request);
+    _allyRetryMs = 0;
+}
+
+uint32 BattlegroundVHR::GetPendingAllyRequestCount() const
+{
+    return uint32(std::count_if(_allyRequests.begin(), _allyRequests.end(),
+        [](VhrAllyRequest const& request) { return !request.fleeting; }));
+}
+
+std::vector<ObjectGuid> BattlegroundVHR::TakeAlliesToDismiss()
+{
+    std::vector<ObjectGuid> out;
+    out.swap(_alliesToDismiss);
+    return out;
+}
+
+void BattlegroundVHR::DismissFleetingAllies()
+{
+    // A reflection still waiting to be seated is not wanted any more either.
+    _allyRequests.erase(std::remove_if(_allyRequests.begin(), _allyRequests.end(),
+        [](VhrAllyRequest const& request) { return request.fleeting; }), _allyRequests.end());
+
+    for (ObjectGuid guid : _fleetingAllies)
+    {
+        _allies.erase(guid);
+        _eliminated.erase(guid);
+        _alliesToDismiss.push_back(guid);
+    }
+    _fleetingAllies.clear();
+}
+
 void BattlegroundVHR::NotifyAllySpawned(uint32 requestId, ObjectGuid allyGuid)
 {
+    bool fleeting = false;
     for (auto itr = _allyRequests.begin(); itr != _allyRequests.end(); ++itr)
     {
         if (itr->id != requestId)
             continue;
 
+        fleeting = itr->fleeting;
         _allyRequests.erase(itr);
         break;
     }
@@ -1511,6 +1562,8 @@ void BattlegroundVHR::NotifyAllySpawned(uint32 requestId, ObjectGuid allyGuid)
         return;
 
     _allies.insert(allyGuid);
+    if (fleeting)
+        _fleetingAllies.insert(allyGuid);
     _eliminated.erase(allyGuid);
 
     // The clone's Player name is an internal placeholder; the name everyone

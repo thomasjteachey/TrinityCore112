@@ -25,6 +25,7 @@
 #include "ScriptMgr.h"
 #include "Bag.h"
 #include "Battleground.h"
+#include "BattlegroundVHR.h"
 #include "CellImpl.h"
 #include "Containers.h"
 #include "DBCStores.h"
@@ -3380,6 +3381,109 @@ class spell_gen_recharge : public SpellScript
     }
 };
 
+// The Violet Hold's runes, dropped with Recharge and Berserking as a wave falls.
+// Like Recharge each is a trap-cast dummy aura (fixed up in SpellMgr, pinned
+// positive in SpellInfo) whose work happens here, on the hit - every pickup.
+enum VioletHoldRunes
+{
+    SPELL_VHR_GLACIAL_STASIS_RUNE   = 94310,
+    SPELL_VHR_VOLATILE_CORE_RUNE    = 94311,
+    SPELL_VHR_BRIGHT_REFLECTION     = 94312,
+    SPELL_VHR_GLACIAL_STASIS_FREEZE = 94313,  // stun, enemies within 20 yd, 5 sec
+    SPELL_VHR_VOLATILE_CORE_BLAST   = 94314,  // enemies within 10 yd, knocked back
+};
+
+// 94310 - Glacial Stasis: the taker freezes every enemy around them. The runes
+// outlive the gate window, so it can be kept for the moment the cells open.
+class spell_vhr_glacial_stasis_rune : public SpellScript
+{
+    PrepareSpellScript(spell_vhr_glacial_stasis_rune);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_VHR_GLACIAL_STASIS_FREEZE });
+    }
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        if (Player* player = GetHitPlayer())
+            player->CastSpell(player, SPELL_VHR_GLACIAL_STASIS_FREEZE, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_glacial_stasis_rune::HandleHit, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+    }
+};
+
+// 94311 - Volatile Core: the taker carries it for 5 sec, then it goes off around
+// them. Only a core that runs its course explodes - one whose carrier died
+// with it does not.
+class spell_vhr_volatile_core_rune : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_volatile_core_rune);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_VHR_VOLATILE_CORE_BLAST });
+    }
+
+    void AfterRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_EXPIRE)
+            return;
+
+        Unit* carrier = GetTarget();
+        if (carrier->IsAlive())
+            carrier->CastSpell(carrier, SPELL_VHR_VOLATILE_CORE_BLAST, true);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_vhr_volatile_core_rune::AfterRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 94314 - Volatile Core blast: a fifth of each enemy's maximum health, so it
+// matters the same at every level bracket the Hold runs.
+class spell_vhr_volatile_core_blast : public SpellScript
+{
+    PrepareSpellScript(spell_vhr_volatile_core_blast);
+
+    static constexpr float BLAST_MAX_HEALTH_PCT = 20.0f;
+
+    void HandleDamage(SpellEffIndex /*effIndex*/)
+    {
+        if (Unit* target = GetHitUnit())
+            SetHitDamage(int32(target->CountPctFromMaxHealth(BLAST_MAX_HEALTH_PCT)));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_volatile_core_blast::HandleDamage, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
+// 94312 - Bright Reflection: a copy of the taker fights beside them until the
+// wave falls. The battleground queues it; the clone driver seats it.
+class spell_vhr_bright_reflection : public SpellScript
+{
+    PrepareSpellScript(spell_vhr_bright_reflection);
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        Player* player = GetHitPlayer();
+        Battleground* bg = player ? player->GetBattleground() : nullptr;
+        if (bg && bg->GetTypeID() == BATTLEGROUND_VHR)
+            static_cast<BattlegroundVHR*>(bg)->RequestReflection(player);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_bright_reflection::HandleHit, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+    }
+};
+
 enum DiminishedSpells
 {
     SPELL_DIMINISHED        = 90201,
@@ -5036,6 +5140,10 @@ void AddSC_generic_spell_scripts()
     RegisterSpellScript(spell_gen_remove_impairing_auras);
     RegisterSpellScript(spell_gen_restoration);
     RegisterSpellScript(spell_gen_recharge);
+    RegisterSpellScript(spell_vhr_glacial_stasis_rune);
+    RegisterSpellScript(spell_vhr_volatile_core_rune);
+    RegisterSpellScript(spell_vhr_volatile_core_blast);
+    RegisterSpellScript(spell_vhr_bright_reflection);
     RegisterSpellScript(spell_gen_diminished);
     RegisterSpellAndAuraScriptPair(spell_gen_replenishment, spell_gen_replenishment_aura);
     RegisterSpellScript(spell_gen_remove_on_health_pct);

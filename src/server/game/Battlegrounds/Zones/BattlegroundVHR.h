@@ -285,16 +285,21 @@ enum BG_VHR_Constants
     BG_VHR_BUFF_MIN_CELL_DISTANCE = 12,
     BG_VHR_BUFF_MIN_DROP_DISTANCE = 12,
 
-    // The rune pool, alongside stock Berserking: cooldown reset (a red Power
-    // Crystal), Bulwark -25% damage taken (yellow), Renewal 3% health every
-    // 3 sec (green), Precision +15% crit (blue) - each two minutes, so a rune
-    // taken during the gate window still runs through the fight. Speed is
-    // deliberately not in the roll, and neither is Restoration: the party is
-    // put back to full as every wave falls, so it healed nobody.
-    BG_VHR_GO_RECHARGE_BUFF  = 300500,
-    BG_VHR_GO_BULWARK_BUFF   = 300501,
-    BG_VHR_GO_RENEWAL_BUFF   = 300502,
-    BG_VHR_GO_PRECISION_BUFF = 300503,
+    // The rune pool, alongside stock Berserking, each a Power Crystal (the
+    // spell scripts are in spell_generic.cpp):
+    //   Recharge (red)          every cooldown reset
+    //   Glacial Stasis (blue)   every enemy within 20 yd frozen for 5 sec
+    //   Volatile Core (yellow)  goes off 5 sec after it is taken: a fifth of
+    //                           each nearby enemy's health, and knocked back
+    //   Bright Reflection (green) a copy of the taker fights beside them
+    //                           until the wave falls
+    // The runes outlive the gate window, so the last three can be held for
+    // the fight. Speed is deliberately not in the roll, and neither is
+    // Restoration: the party is put back to full as every wave falls.
+    BG_VHR_GO_RECHARGE_BUFF          = 300500,
+    BG_VHR_GO_GLACIAL_STASIS_BUFF    = 300501,
+    BG_VHR_GO_VOLATILE_CORE_BUFF     = 300502,
+    BG_VHR_GO_BRIGHT_REFLECTION_BUFF = 300503,
 
     // Both end-of-run payouts share one shape: the matching arena-win payout,
     // times the wave the run ended on, divided by this. Honor additionally
@@ -405,6 +410,12 @@ struct VhrAllyRequest
     Position where;
     uint32 partyMinLevel = 0;
     uint32 partyMaxLevel = 0;
+    // Bright Reflection rune: the ally is a copy of THIS character (the one
+    // who took the rune) rather than a bot, named "Bright <name>", and it is
+    // fleeting - dismissed as the wave it joined falls instead of staying for
+    // the run. Fleeting allies never count toward Fellowship's stacks.
+    ObjectGuid source;
+    bool fleeting = false;
 };
 
 struct BattlegroundVHRScore final : public BattlegroundScore
@@ -527,13 +538,20 @@ public:
     // (no eligible bot online) is left in the queue and retried; DeferAllyRequests
     // is how the driver spaces those retries.
     void RequestAlly(Player const* requester);
+    // Bright Reflection rune: a copy of the taker fights beside them until
+    // the wave falls (VhrAllyRequest::fleeting).
+    void RequestReflection(Player const* requester);
     std::vector<VhrAllyRequest> const& GetPendingAllyRequests() const { return _allyRequests; }
-    uint32 GetPendingAllyRequestCount() const { return uint32(_allyRequests.size()); }
+    // Fellowship's own requests and allies only - the reflections are not its.
+    uint32 GetPendingAllyRequestCount() const;
     bool AreAllyRequestsDue() const { return !_allyRequests.empty() && !_allyRetryMs; }
     void DeferAllyRequests(uint32 ms) { _allyRetryMs = ms; }
     void NotifyAllySpawned(uint32 requestId, ObjectGuid allyGuid);
-    uint32 GetAllyCount() const { return uint32(_allies.size()); }
+    uint32 GetAllyCount() const { return uint32(_allies.size() - _fleetingAllies.size()); }
     bool IsAlly(ObjectGuid guid) const { return _allies.find(guid) != _allies.end(); }
+    // Reflections whose wave has fallen, for the driver to take down. Empties
+    // the list.
+    std::vector<ObjectGuid> TakeAlliesToDismiss();
 
 private:
     enum class WaveState : uint8
@@ -631,6 +649,9 @@ private:
     // RestorePartyAfterWave for the Fellowship allies, who are not on the
     // human roster.
     void RestoreAllies();
+    // As a wave falls its reflections go, alive or not, before anyone is
+    // restored.
+    void DismissFleetingAllies();
 
     // Called once as a wave falls: the party's dead stand back up, and every
     // player on its side - and their pets - is put at full health and mana.
@@ -726,6 +747,10 @@ private:
     uint32 _nextAllyRequestId;
     uint32 _allyRetryMs;
     GuidSet _allies;
+    // The reflections among _allies, and those waiting for the driver to
+    // take them down.
+    GuidSet _fleetingAllies;
+    std::vector<ObjectGuid> _alliesToDismiss;
     // Menagerie guardians alive for the current wave.
     std::vector<ObjectGuid> _menagerie;
     // MenagerieTrace: the last line logged per guardian, and its sampling clock.
