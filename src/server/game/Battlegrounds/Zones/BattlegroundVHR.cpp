@@ -200,7 +200,12 @@ void BattlegroundVHR::AddPlayer(Player* player)
     // The bars it walks in with, written down before the run can change them;
     // RemovePlayer gives them back (Miscellaneous/VioletHoldBars.h).
     if (!isInBattleground)
+    {
         VioletHoldBars::Stash(player);
+        // And the weapons, so leaving puts them back in hand. Before the base
+        // AddPlayer, which may stash them for the tournament loadout.
+        VioletHoldBoons::RememberHandsOnEntry(player);
+    }
 
     Battleground::AddPlayer(player);
 

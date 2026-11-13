@@ -39,6 +39,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Trainer.h"
+#include "VioletHoldBoons.h"
 #include "World.h"
 #include "WorldPacket.h"
 
@@ -159,7 +160,10 @@ void WorldSession::HandleGossipHelloOpcode(WorldPacket& recvData)
     if (FactionTemplateEntry const* factionTemplateEntry = sFactionTemplateStore.LookupEntry(unit->GetFaction()))
         _player->GetReputationMgr().SetVisible(factionTemplateEntry);
 
-    GetPlayer()->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TALK);
+    // Talking to the Violet Hold's boon broker keeps stealth: picking a boon
+    // must never give a rogue away.
+    if (unit->GetEntry() != VioletHoldBoons::NPC_BOON_BROKER)
+        GetPlayer()->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TALK);
     // remove fake death
     //if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
     //    GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);

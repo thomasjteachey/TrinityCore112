@@ -31,6 +31,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "StringFormat.h"
+#include "TournamentMode.h"
 
 #include <algorithm>
 #include <array>
@@ -507,11 +508,6 @@ void RecordGranted(Player* player, uint8 index, ObjectGuid itemGuid)
 static_assert(EQUIPMENT_SLOT_OFFHAND == EQUIPMENT_SLOT_MAINHAND + 1 && EQUIPMENT_SLOT_RANGED == EQUIPMENT_SLOT_MAINHAND + 2,
     "the displaced-weapon record assumes the three hand slots are consecutive");
 
-bool IsHandSlot(uint8 slot)
-{
-    return slot >= EQUIPMENT_SLOT_MAINHAND && slot <= EQUIPMENT_SLOT_RANGED;
-}
-
 bool IsGrantedItem(Player* player, Item const* item)
 {
     for (uint8 i = 0; i < ITEM_GRANT_COUNT; ++i)
@@ -520,62 +516,25 @@ bool IsGrantedItem(Player* player, Item const* item)
     return false;
 }
 
-// The broker's weapons arrive in the bags, and putting one on pushes the
-// character's own weapon into the bags in its place. Note which weapon that is
-// now, while it is still in hand, so StripAll can put it back on. A hand holding
-// an earlier broker weapon keeps its older record: that one is going away too.
-void RememberHandsBefore(Player* player, ItemTemplate const* proto)
-{
-    std::array<uint8, 2> slots{ NULL_SLOT, NULL_SLOT };
-    switch (proto->InventoryType)
-    {
-        case INVTYPE_2HWEAPON:
-            slots = { EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND };   // a two-hander empties the off hand too
-            break;
-        case INVTYPE_WEAPON:
-        case INVTYPE_WEAPONMAINHAND:
-            slots[0] = EQUIPMENT_SLOT_MAINHAND;
-            break;
-        case INVTYPE_SHIELD:
-        case INVTYPE_HOLDABLE:
-        case INVTYPE_WEAPONOFFHAND:
-            slots[0] = EQUIPMENT_SLOT_OFFHAND;
-            break;
-        case INVTYPE_RANGED:
-        case INVTYPE_RANGEDRIGHT:
-        case INVTYPE_THROWN:
-            slots[0] = EQUIPMENT_SLOT_RANGED;
-            break;
-        default:
-            return;
-    }
-
-    std::array<uint32, 3>& displaced = player->GetVioletHoldDisplacedWeapons();
-    for (uint8 slot : slots)
-    {
-        if (!IsHandSlot(slot))
-            continue;
-        Item* held = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-        if (!held || IsGrantedItem(player, held))
-            continue;
-        displaced[slot - EQUIPMENT_SLOT_MAINHAND] = uint32(held->GetGUID().GetCounter());
-    }
-}
-
-// Put the remembered weapons back into the hands a broker weapon just left
-// empty. Anything that no longer fits is left where it is: an item that is gone
-// (sold, destroyed, a tournament stand-in already taken back), sits in the bank,
-// or cannot be worn. A dead character is skipped - EquipItem adds no stats to
-// the dead, but the next unequip would still take them away.
-void ReequipDisplacedWeapons(Player* player, std::array<bool, 3> const& emptied)
+// Put the weapons the character walked in with (RememberHandsOnEntry) back into
+// every hand that is empty once the broker's weapons are gone - whichever hand a
+// broker weapon was worn in, and whatever the tournament loadout did with the
+// originals meanwhile (it stashes them on entry and hands them back, into the
+// bags when a broker weapon is still in the way, under the same guids).
+// Anything that no longer fits is left where it is: an item that is gone (sold,
+// destroyed), sits in the bank, or cannot be worn. A dead character is skipped -
+// EquipItem adds no stats to the dead, but the next unequip would still take
+// them away. Returns whether anything was put on.
+bool ReequipDisplacedWeapons(Player* player)
 {
     if (!player->IsAlive())
-        return;
+        return false;
 
+    bool equipped = false;
     std::array<uint32, 3> const& displaced = player->GetVioletHoldDisplacedWeapons();
     for (uint8 i = 0; i < 3; ++i)
     {
-        if (!emptied[i] || !displaced[i])
+        if (!displaced[i])
             continue;
 
         uint8 const slot = EQUIPMENT_SLOT_MAINHAND + i;
@@ -594,7 +553,9 @@ void ReequipDisplacedWeapons(Player* player, std::array<bool, 3> const& emptied)
 
         player->RemoveItem(item->GetBagSlot(), item->GetSlot(), true);
         player->EquipItem(dest, item, true);
+        equipped = true;
     }
+    return equipped;
 }
 
 // The character is about to drop back to `baseLevel`. Take back, newest
@@ -1092,9 +1053,6 @@ PickResult Take(Player* player, Offer offer)
         if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, info.itemEntry, 1) != EQUIP_ERR_OK)
             return PickResult::NoRoom;
 
-        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(info.itemEntry))
-            RememberHandsBefore(player, proto);
-
         Item* item = player->StoreNewItem(dest, info.itemEntry, true, GenerateItemRandomPropertyId(info.itemEntry));
         if (!item)
         {
@@ -1237,6 +1195,19 @@ char const* GetPickResultText(PickResult result)
     }
 }
 
+void RememberHandsOnEntry(Player* player)
+{
+    if (!player)
+        return;
+
+    std::array<uint32, 3>& displaced = player->GetVioletHoldDisplacedWeapons();
+    for (uint8 i = 0; i < 3; ++i)
+    {
+        Item* held = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND + i);
+        displaced[i] = held && !IsGrantedItem(player, held) ? uint32(held->GetGUID().GetCounter()) : 0;
+    }
+}
+
 void StripAll(Player* player)
 {
     if (!player)
@@ -1260,30 +1231,33 @@ void StripAll(Player* player)
 
     // Granted weapons go back, wherever they ended up (equipped, bags, bank).
     // Every copy of a run-only entry goes. There is only ever one, but the
-    // loop costs nothing and the guard keeps it finite. A hand one of them was
-    // held in is noted, so the weapon it pushed out can go back on - left
-    // empty, the next tournament match dressed that hand in the class's
-    // template weapon, which the player had never owned.
-    std::array<bool, 3> emptied{};
+    // loop costs nothing and the guard keeps it finite. Then the weapons the
+    // character walked in with go back on - left empty, a hand stayed empty
+    // (and the next tournament match dressed it in the class's template
+    // weapon, which the player had never owned).
+    bool handsChanged = false;
     for (uint8 i = 0; i < ITEM_GRANT_COUNT; ++i)
         for (uint8 guard = 0; guard < 8; ++guard)
         {
             Item* item = GetGrantedItem(player, i);
             if (!item)
                 break;
-            if (item->IsEquipped() && IsHandSlot(item->GetSlot()))
-            {
-                emptied[item->GetSlot() - EQUIPMENT_SLOT_MAINHAND] = true;
-                if (item->GetSlot() == EQUIPMENT_SLOT_MAINHAND && item->GetTemplate()->InventoryType == INVTYPE_2HWEAPON)
-                    emptied[EQUIPMENT_SLOT_OFFHAND - EQUIPMENT_SLOT_MAINHAND] = true;
-            }
+            if (item->IsEquipped())
+                handsChanged = true;
             player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
             if (!kItemGrants[i].runOnly)
                 break;
         }
 
-    ReequipDisplacedWeapons(player, emptied);
+    if (ReequipDisplacedWeapons(player))
+        handsChanged = true;
     player->GetVioletHoldDisplacedWeapons().fill(0);
+
+    // This runs as the character leaves for the world, and a client in the
+    // middle of a world port keeps showing the weapon it last saw - Thunderfury
+    // stayed in a rogue's hand after the run. Say the hands again on arrival.
+    if (handsChanged)
+        Tournament::RefreshVisualsAfterPort(player);
 
     // The broker's healthstone: run-only entries, so by entry (bags and worn).
     for (RunHealthstone const& stone : kRunHealthstones)

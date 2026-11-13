@@ -191,12 +191,36 @@ namespace
             case 19185:
             case 3600:
             case 6474:
+            // The Violet Hold runes' effects: Glacial Stasis's freeze and the
+            // Volatile Core's blast. Taking a rune must never put the taker in
+            // combat, and these are what the rune does for them.
+            case 94313:
+            case 94314:
                 return true;
             default:
                 break;
         }
 
         return IsHuntersMark(spellInfo);
+    }
+
+    // What a battleground rune's trap GO casts on whoever steps on it. Every one
+    // is a pure buff, but an ownerless neutral trap always passes the
+    // IsValidAttackTarget gate in DoSpellHitOnUnit, so without this the pickup
+    // counts as being hit by an enemy spell and strips stealth.
+    bool IsBattlegroundRuneSpell(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 23451: case 23978:                 // Speed
+            case 23493: case 24379:                 // Restoration
+            case 23505: case 24378:                 // Berserking
+            case 90200:                             // Recharge
+            case 94310: case 94311: case 94312:     // Violet Hold: Glacial Stasis, Volatile Core, Bright Reflection
+                return true;
+            default:
+                return false;
+        }
     }
 
     bool ShouldTotemSpellStartCombat(Unit const* unit)
@@ -3086,12 +3110,8 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
         if (m_caster->IsValidAttackTarget(unit, m_spellInfo) && !m_spellInfo->IsMindVision())
         {
             // Earthbind Totem pulses (6474/3600) should not break stealth/prowl.
-            // Neither should Recharge (90200): a BG rune trap's "hit" is a pure
-            // buff, but an ownerless neutral trap GO always passes the
-            // IsValidAttackTarget gate above, so it needs the same exemption.
-            // The Violet Hold's runes (94310-94312) are trap-cast the same way.
-            if (m_spellInfo->Id != 6474 && m_spellInfo->Id != 3600 && m_spellInfo->Id != 90200 &&
-                (m_spellInfo->Id < 94310 || m_spellInfo->Id > 94312))
+            // Neither should taking a battleground rune (IsBattlegroundRuneSpell).
+            if (m_spellInfo->Id != 6474 && m_spellInfo->Id != 3600 && !IsBattlegroundRuneSpell(m_spellInfo->Id))
                 unit->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HITBYSPELL);
         }
         else if (m_caster->IsFriendlyTo(unit))

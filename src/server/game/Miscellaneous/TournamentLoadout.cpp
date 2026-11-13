@@ -1969,6 +1969,12 @@ void RefreshLoadoutVisuals(Player* player)
     PendingVisualCount.store(PendingVisuals.size(), std::memory_order_relaxed);
 }
 
+void RefreshVisualsAfterPort(Player* player)
+{
+    if (player)
+        MarkVisualsStale(player->GetGUID());
+}
+
 bool IsConsumableAllowedInMatch(Player const* player, ItemTemplate const* proto)
 {
     if (!proto || !player || !IsEnabled() || !LoadoutConfig.BanConsumables)

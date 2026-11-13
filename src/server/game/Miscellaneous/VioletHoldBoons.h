@@ -443,6 +443,11 @@ namespace VioletHoldBoons
     // broker taught. Idempotent.
     TC_GAME_API void StripAll(Player* player);
 
+    // Note the weapons in the character's hands as it walks into the Hold,
+    // before the tournament loadout can stash them; StripAll puts them back on
+    // whatever hands are empty once the broker's weapons are gone.
+    TC_GAME_API void RememberHandsOnEntry(Player* player);
+
     // Login-time sweep: a character carrying boons who is not being placed
     // back into a Violet Hold run loses them here; one who IS placed back
     // gets the taught class spells re-learned from the knowledge marker.

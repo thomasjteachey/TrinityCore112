@@ -3173,6 +3173,16 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_HIT_RESULT | SPELL_ATTR3_NO_INITIAL_AGGRO;
     });
 
+    // What those runes do once taken - 94313 Glacial Stasis's freeze, 94314 the
+    // Volatile Core's blast - must not pull the taker into combat either. They
+    // are also listed in Spell.cpp's IsNoCombatSpell; this keeps them off threat
+    // lists, which would otherwise start combat on their own.
+    ApplySpellFix({ 94313, 94314 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT | SPELL_ATTR1_NOT_BREAK_STEALTH;
+        spellInfo->AttributesEx3 |= SPELL_ATTR3_NO_INITIAL_AGGRO;
+    });
+
     // Spells balanced for a level a player can be far below when they get
     // them: Violet Hold's brokers teach their class spells at any level (a
     // level-10 shaman could roll the level-60 Lava Burst), Earth Shield and

@@ -390,6 +390,10 @@ namespace Tournament
     // it just put down. Called every update by the tournament player script; it
     // returns at once unless that character is waiting for exactly this.
     void RefreshLoadoutVisuals(Player* player);
+    // Ask for that same refresh for anything else that changes worn gear on the
+    // way out of a battleground - the Violet Hold taking its broker weapons
+    // back (VioletHoldBoons::StripAll).
+    void RefreshVisualsAfterPort(Player* player);
     // True while this thread is dressing or undressing that character: the
     // battleground armour lock (Player.cpp) stands aside for the swap, which is
     // the one pass that has to change every slot.
