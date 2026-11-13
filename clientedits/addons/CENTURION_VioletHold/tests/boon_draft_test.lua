@@ -83,7 +83,7 @@ local function button(prefix)
 end
 local function takeButton()
 	for _, f in ipairs(frames) do
-		if f.template == "UIPanelButtonTemplate" and f.text ~= "Close" then return f end
+		if f.template == "UIPanelButtonTemplate" then return f end
 	end
 end
 
@@ -165,7 +165,7 @@ check(#sent == before, "nothing is sent after the deal is over");
 deal();
 fire("VHBOON:SHOW:" .. TAG);
 check(frame.shown and not card(206).stamp.shown, "a fresh deal starts clean");
-button("Close").scripts.OnClick(button("Close"));
+frame:Hide();   -- Escape or the X: the frame is in UISpecialFrames
 check(not frame.shown and lastSent() == "VHBOON:LOOK:" .. TAG .. ":999", "leaving puts the cards down for the party");
 
 -- gone
@@ -182,12 +182,12 @@ check(not frame.shown, "an empty hand never shows");
 events.scripts.OnEvent(events, "CHAT_MSG_ADDON", "OTHER", "VHBOON:SHOW:" .. TAG);
 check(not frame.shown, "other prefixes are ignored");
 
--- the deck strip
+-- one button, no side panels
 deal();
 fire("VHBOON:SHOW:" .. TAG);
-local chips = 0;
-for _, f in ipairs(frames) do if f.dot and f.shown then chips = chips + 1 end end
-check(chips == 4, "four deck chips from two DECK lines (got " .. chips .. ")");
+local buttons = 0;
+for _, f in ipairs(frames) do if f.template == "UIPanelButtonTemplate" then buttons = buttons + 1 end end
+check(buttons == 1, "a single Take button (got " .. buttons .. ")");
 events.scripts.OnEvent(events, "PLAYER_ENTERING_WORLD");
 check(not frame.shown, "leaving the Hold puts the hand away");
 

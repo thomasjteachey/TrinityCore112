@@ -27,13 +27,12 @@
 local PREFIX = "CCGAME";
 local REQUEST_PREFIX = "CCGAME" .. "REQ";
 local WHITE = "Interface\\Buttons\\WHITE8X8";
-local TITLE_FONT = "Fonts\\MORPHEUS.TTF";
 local BODY_FONT = "Fonts\\FRIZQT__.TTF";
 local CODE_NONE = 999;
 
-local CARD_W, CARD_H, CARD_GAP = 190, 300, 16;
-local FAN_DROP, LIFT = 10, 18;
-local TOP_PAD, HAND_TOP = 24, 112;
+local CARD_W, CARD_H, CARD_GAP = 150, 200, 10;
+local LIFT = 6;                -- how far the selected card rises
+local PAD, HAND_TOP = 14, 44;  -- frame padding; where the cards start
 
 local RARITY = {
 	{ name = "Common",    r = 0.81, g = 0.78, b = 0.86 },
@@ -119,18 +118,16 @@ local function IconOf(card)
 end
 
 -- ---------------------------------------------------------------------------
--- Frame
+-- Frame: a dark panel with a hairline border, a one-line header and the hand.
 
 local frame = CreateFrame("Frame", "CENTURION_VioletHoldDraft", UIParent);
 frame:Hide();
 frame:SetFrameStrata("DIALOG");
 frame:SetToplevel(true);
-frame:SetPoint("CENTER", UIParent, "CENTER", 0, 20);
-frame:SetBackdrop({
-	bgFile = WHITE, edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-	tile = false, edgeSize = 24, insets = { left = 6, right = 6, top = 6, bottom = 6 },
-});
-frame:SetBackdropColor(0.07, 0.05, 0.11, 0.96);
+frame:SetPoint("CENTER", UIParent, "CENTER", 0, 40);
+frame:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 });
+frame:SetBackdropColor(0.04, 0.04, 0.06, 0.94);
+frame:SetBackdropBorderColor(1, 1, 1, 0.10);
 frame:EnableMouse(true);
 frame:SetMovable(true);
 frame:SetClampedToScreen(true);
@@ -138,39 +135,37 @@ frame:RegisterForDrag("LeftButton");
 frame:SetScript("OnDragStart", function(self) self:StartMoving(); end);
 frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing(); end);
 if ( UISpecialFrames ) then
-	table.insert(UISpecialFrames, "CENTURION_VioletHoldDraft");
+	table.insert(UISpecialFrames, "CENTURION_VioletHoldDraft");   -- Escape closes it
 end
 
-local function Text(parent, size, font, layer)
+local function Text(parent, size, layer)
 	local fs = parent:CreateFontString(nil, layer or "OVERLAY");
-	fs:SetFont(font or BODY_FONT, size);
+	fs:SetFont(BODY_FONT, size);
 	fs:SetShadowOffset(1, -1);
-	fs:SetShadowColor(0, 0, 0, 1);
+	fs:SetShadowColor(0, 0, 0, 0.8);
 	return fs;
 end
 
-local waveText = Text(frame, 11);
-waveText:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, -TOP_PAD);
-waveText:SetTextColor(0.73, 0.66, 0.84);
-
-local title = Text(frame, 26, TITLE_FONT);
-title:SetPoint("TOPLEFT", waveText, "BOTTOMLEFT", 0, -6);
-title:SetTextColor(0.96, 0.93, 1.0);
+local title = Text(frame, 14);
+title:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -PAD);
+title:SetTextColor(0.95, 0.95, 0.97);
 title:SetText("Choose a boon");
 
--- The party, in class colours: the key to the initials on the cards.
-local partyText = Text(frame, 13);
-partyText:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -36, -TOP_PAD);
-partyText:SetJustifyH("RIGHT");
-
 local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton");
-close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4);
+close:SetScale(0.8);
+close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 2, 2);
+
+local waveText = Text(frame, 11);
+waveText:SetPoint("RIGHT", close, "LEFT", 0, 0);
+waveText:SetPoint("TOP", title, "TOP", 0, 0);
+waveText:SetTextColor(0.55, 0.55, 0.62);
 
 -- ---------------------------------------------------------------------------
 -- Cards
 
 local cards = {};
 local Refresh;
+local Take;
 
 local function Select(code)
 	if ( not draft or draft.taken or draft.selected == code ) then
@@ -189,127 +184,96 @@ local function CardByCode(code)
 	end
 end
 
-local Take;
-
 local function MakeCard(i)
 	local c = CreateFrame("Button", nil, frame);
 	c:SetWidth(CARD_W);
 	c:SetHeight(CARD_H);
-	c:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 2, insets = { left = 2, right = 2, top = 2, bottom = 2 } });
-	c:SetBackdropColor(0.10, 0.075, 0.16, 1);
+	c:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 });
+	c:SetBackdropColor(0.08, 0.08, 0.11, 1);
 	c:RegisterForClicks("LeftButtonUp");
 
-	c.art = c:CreateTexture(nil, "BACKGROUND");
-	c.art:SetTexture(WHITE);
-	c.art:SetPoint("TOPLEFT", c, "TOPLEFT", 2, -2);
-	c.art:SetPoint("TOPRIGHT", c, "TOPRIGHT", -2, -2);
-	c.art:SetHeight(108);
+	-- rarity, as a strip along the top edge
+	c.strip = c:CreateTexture(nil, "ARTWORK");
+	c.strip:SetTexture(WHITE);
+	c.strip:SetPoint("TOPLEFT", c, "TOPLEFT", 1, -1);
+	c.strip:SetPoint("TOPRIGHT", c, "TOPRIGHT", -1, -1);
+	c.strip:SetHeight(2);
 
-	c.glow = c:CreateTexture(nil, "ARTWORK");
-	c.glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border");
-	c.glow:SetBlendMode("ADD");
-	c.glow:SetWidth(132);
-	c.glow:SetHeight(132);
-	c.glow:SetPoint("CENTER", c, "TOP", 0, -58);
-
-	c.icon = c:CreateTexture(nil, "OVERLAY");
-	c.icon:SetWidth(54);
-	c.icon:SetHeight(54);
-	c.icon:SetPoint("CENTER", c, "TOP", 0, -58);
-	c.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93);
+	c.icon = c:CreateTexture(nil, "ARTWORK");
+	c.icon:SetWidth(40);
+	c.icon:SetHeight(40);
+	c.icon:SetPoint("TOP", c, "TOP", 0, -18);
+	c.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92);
 
 	c.kind = Text(c, 9);
-	c.kind:SetPoint("TOPLEFT", c, "TOPLEFT", 10, -9);
+	c.kind:SetPoint("TOPLEFT", c, "TOPLEFT", 8, -8);
 
-	c.greedBg = c:CreateTexture(nil, "OVERLAY");
-	c.greedBg:SetTexture(WHITE);
-	c.greedBg:SetVertexColor(GOLD.r, GOLD.g, GOLD.b);
-	c.greedBg:SetWidth(46);
-	c.greedBg:SetHeight(14);
-	c.greedBg:SetPoint("TOPRIGHT", c, "TOPRIGHT", -8, -7);
 	c.greed = Text(c, 9);
-	c.greed:SetPoint("CENTER", c.greedBg, "CENTER", 0, 0);
+	c.greed:SetPoint("TOPRIGHT", c, "TOPRIGHT", -8, -8);
+	c.greed:SetTextColor(GOLD.r, GOLD.g, GOLD.b);
 	c.greed:SetText("GREED");
-	c.greed:SetTextColor(0.1, 0.07, 0.02);
-	c.greed:SetShadowOffset(0, 0);
 
+	-- who else in the party is looking at this card: their initial, class-coloured
 	c.watch = {};
 	for k = 1, 5 do
 		local w = Text(c, 10);
-		w:SetPoint("BOTTOMRIGHT", c, "TOPRIGHT", -8 - (k - 1) * 16, -104);
+		w:SetPoint("BOTTOMRIGHT", c, "TOPRIGHT", -8 - (k - 1) * 12, -54);
 		c.watch[k] = w;
 	end
 
-	c.name = Text(c, 14);
-	c.name:SetPoint("TOPLEFT", c, "TOPLEFT", 12, -118);
-	c.name:SetWidth(CARD_W - 24);
-	c.name:SetJustifyH("LEFT");
-	c.name:SetTextColor(0.97, 0.94, 1.0);
+	c.name = Text(c, 12);
+	c.name:SetPoint("TOP", c, "TOP", 0, -68);
+	c.name:SetWidth(CARD_W - 16);
+	c.name:SetTextColor(0.95, 0.95, 0.97);
 
-	c.headline = Text(c, 22);
-	c.headline:SetPoint("TOPLEFT", c.name, "BOTTOMLEFT", 0, -6);
-	c.headline:SetJustifyH("LEFT");
+	c.headline = Text(c, 20);
+	c.headline:SetPoint("TOP", c.name, "BOTTOM", 0, -4);
 
-	c.text = Text(c, 11);
-	c.text:SetPoint("TOPLEFT", c.headline, "BOTTOMLEFT", 0, -6);
-	c.text:SetWidth(CARD_W - 24);
-	c.text:SetJustifyH("LEFT");
+	c.text = Text(c, 10);
+	c.text:SetPoint("TOP", c.headline, "BOTTOM", 0, -4);
+	c.text:SetWidth(CARD_W - 20);
 	c.text:SetJustifyV("TOP");
-	c.text:SetTextColor(0.83, 0.79, 0.89);
+	c.text:SetTextColor(0.62, 0.62, 0.68);
 
 	c.barBg = c:CreateTexture(nil, "ARTWORK");
 	c.barBg:SetTexture(WHITE);
-	c.barBg:SetVertexColor(1, 1, 1, 0.10);
-	c.barBg:SetPoint("BOTTOMLEFT", c, "BOTTOMLEFT", 12, 40);
-	c.barBg:SetWidth(CARD_W - 24);
-	c.barBg:SetHeight(6);
+	c.barBg:SetVertexColor(1, 1, 1, 0.08);
+	c.barBg:SetPoint("BOTTOMLEFT", c, "BOTTOMLEFT", 10, 24);
+	c.barBg:SetWidth(CARD_W - 20);
+	c.barBg:SetHeight(2);
 	c.barHave = c:CreateTexture(nil, "OVERLAY");
 	c.barHave:SetTexture(WHITE);
-	c.barHave:SetVertexColor(0.56, 0.51, 0.65);
+	c.barHave:SetVertexColor(0.55, 0.55, 0.62);
 	c.barHave:SetPoint("TOPLEFT", c.barBg, "TOPLEFT", 0, 0);
-	c.barHave:SetHeight(6);
+	c.barHave:SetHeight(2);
 	c.barGain = c:CreateTexture(nil, "OVERLAY");
 	c.barGain:SetTexture(WHITE);
 	c.barGain:SetPoint("TOPLEFT", c.barHave, "TOPRIGHT", 0, 0);
-	c.barGain:SetHeight(6);
-	c.stack = Text(c, 10);
-	c.stack:SetPoint("BOTTOMLEFT", c.barBg, "TOPLEFT", 0, 4);
-	c.stack:SetTextColor(0.77, 0.72, 0.85);
-	c.cap = Text(c, 10);
-	c.cap:SetPoint("BOTTOMRIGHT", c.barBg, "TOPRIGHT", 0, 4);
-	c.cap:SetTextColor(0.77, 0.72, 0.85);
+	c.barGain:SetHeight(2);
+	c.stack = Text(c, 9);
+	c.stack:SetPoint("TOPLEFT", c.barBg, "BOTTOMLEFT", 0, -4);
+	c.stack:SetTextColor(0.62, 0.62, 0.68);
+	c.cap = Text(c, 9);
+	c.cap:SetPoint("TOPRIGHT", c.barBg, "BOTTOMRIGHT", 0, -4);
+	c.cap:SetTextColor(0.45, 0.45, 0.52);
 
-	c.rule = c:CreateTexture(nil, "ARTWORK");
-	c.rule:SetTexture(WHITE);
-	c.rule:SetVertexColor(1, 1, 1, 0.08);
-	c.rule:SetPoint("BOTTOMLEFT", c, "BOTTOMLEFT", 12, 28);
-	c.rule:SetWidth(CARD_W - 24);
-	c.rule:SetHeight(1);
-	c.rarity = Text(c, 10);
-	c.rarity:SetPoint("BOTTOMLEFT", c, "BOTTOMLEFT", 12, 11);
-	c.forWho = Text(c, 10);
-	c.forWho:SetPoint("BOTTOMRIGHT", c, "BOTTOMRIGHT", -12, 11);
-	c.forWho:SetTextColor(0.77, 0.72, 0.85);
-
+	-- why it is not yours, over the bottom of the card
 	c.ribbon = c:CreateTexture(nil, "OVERLAY");
 	c.ribbon:SetTexture(WHITE);
-	c.ribbon:SetVertexColor(0.05, 0.04, 0.08, 0.92);
-	c.ribbon:SetPoint("TOPLEFT", c, "TOPLEFT", 2, -96);
-	c.ribbon:SetPoint("TOPRIGHT", c, "TOPRIGHT", -2, -96);
-	c.ribbon:SetHeight(22);
-	c.ribbonText = Text(c, 11);
+	c.ribbon:SetVertexColor(0, 0, 0, 0.75);
+	c.ribbon:SetPoint("BOTTOMLEFT", c, "BOTTOMLEFT", 1, 1);
+	c.ribbon:SetPoint("BOTTOMRIGHT", c, "BOTTOMRIGHT", -1, 1);
+	c.ribbon:SetHeight(18);
+	c.ribbonText = Text(c, 10);
 	c.ribbonText:SetPoint("CENTER", c.ribbon, "CENTER", 0, 0);
-	c.ribbonText:SetWidth(CARD_W - 16);
-	c.ribbonText:SetTextColor(0.97, 0.94, 1.0);
+	c.ribbonText:SetTextColor(0.85, 0.85, 0.9);
 
-	c.dim = c:CreateTexture(nil, "OVERLAY");
-	c.dim:SetTexture(WHITE);
-	c.dim:SetVertexColor(0.05, 0.04, 0.08, 0.6);
-	c.dim:SetAllPoints(c);
-	c.stamp = Text(c, 26, TITLE_FONT);
-	c.stamp:SetPoint("CENTER", c, "CENTER", 0, 10);
+	-- kept for the deal-over state; the frame closes first, so it rarely shows
+	c.stamp = Text(c, 14);
+	c.stamp:SetPoint("CENTER", c, "CENTER", 0, 0);
 	c.stamp:SetTextColor(GOLD.r, GOLD.g, GOLD.b);
 	c.stamp:SetText("TAKEN");
+	c.stamp:Hide();
 
 	c:SetScript("OnClick", function(self) if ( self.data ) then Select(self.data.code); end end);
 	c:SetScript("OnDoubleClick", function(self) if ( self.data ) then Select(self.data.code); Take(); end end);
@@ -340,84 +304,63 @@ end
 local function DrawCard(c, card, index, count)
 	local rarity = RARITY[card.tier] or RARITY[1];
 	local selected = (draft.selected == card.code) and not draft.taken;
-	local taken = draft.taken and draft.taken.code == card.code;
 	c.data = card;
 
-	local mid = (count + 1) / 2;
-	local y = -HAND_TOP - math.abs(index - mid) * FAN_DROP + ((selected or taken) and LIFT or 0);
-	local x = (index - 1) * (CARD_W + CARD_GAP) - ((count * CARD_W + (count - 1) * CARD_GAP) / 2) + CARD_W / 2;
+	local x = PAD + (index - 1) * (CARD_W + CARD_GAP);
 	c:ClearAllPoints();
-	c:SetPoint("TOP", frame, "TOP", x, y);
-	c:SetFrameLevel(frame:GetFrameLevel() + ((selected or taken) and 10 or 2));
+	c:SetPoint("TOPLEFT", frame, "TOPLEFT", x, -HAND_TOP + (selected and LIFT or 0));
+	c:SetFrameLevel(frame:GetFrameLevel() + (selected and 10 or 2));
 
-	if ( selected or taken ) then
+	if ( selected ) then
 		c:SetBackdropBorderColor(GOLD.r, GOLD.g, GOLD.b, 1);
 	else
-		c:SetBackdropBorderColor(rarity.r, rarity.g, rarity.b, 1);
+		c:SetBackdropBorderColor(rarity.r, rarity.g, rarity.b, 0.30);
 	end
-	c.art:SetVertexColor(rarity.r, rarity.g, rarity.b, 0.14);
-	c.glow:SetVertexColor(rarity.r, rarity.g, rarity.b, selected and 0.9 or 0.5);
+	c.strip:SetVertexColor(rarity.r, rarity.g, rarity.b, 0.9);
 	c.icon:SetTexture(IconOf(card));
 
 	-- Only what sets a card apart; a plain boon needs no label.
 	local kinds = { S = "CLASS SPELL", I = "LEGENDARY" };
 	c.kind:SetText(card.runWide and "RUN-WIDE" or kinds[card.kind] or "");
 	c.kind:SetTextColor(rarity.r, rarity.g, rarity.b);
-	if ( card.greedCard ) then c.greedBg:Show(); c.greed:Show(); else c.greedBg:Hide(); c.greed:Hide(); end
+	if ( card.greedCard ) then c.greed:Show(); else c.greed:Hide(); end
 
 	c.name:SetText(card.name);
-	if ( card.headline ~= "" ) then
-		c.headline:SetFont(BODY_FONT, 22);
-		c.headline:SetText(card.headline);
-	else
-		c.headline:SetFont(BODY_FONT, 14);
-		c.headline:SetText("Unique");
-	end
+	c.headline:SetText(card.headline ~= "" and card.headline or "Unique");
+	c.headline:SetFont(BODY_FONT, card.headline ~= "" and 20 or 13);
 	c.headline:SetTextColor(rarity.r, rarity.g, rarity.b);
 	c.text:SetText(card.text);
-	c.text:SetHeight(math.max(CARD_H - 118 - c.name:GetStringHeight() - c.headline:GetStringHeight() - 12 - 72, 24));
+	c.text:SetHeight(math.max(CARD_H - 68 - c.name:GetStringHeight() - c.headline:GetStringHeight() - 8 - 44, 12));
 
 	if ( card.cap and card.cap > 1 ) then
-		local width = CARD_W - 24;
+		local width = CARD_W - 20;
 		local have = math.min(card.held / card.cap, 1);
 		local gain = math.min((card.after - card.held) / card.cap, 1 - have);
 		c.barHave:SetWidth(math.max(have > 0 and 2 or 0.01, width * have));
 		c.barGain:SetWidth(math.max(gain > 0 and 3 or 0.01, width * gain));
 		c.barGain:SetVertexColor(rarity.r, rarity.g, rarity.b);
-		c.stack:SetText(Unit(card, card.held) .. "  >  |cffffffff" .. Unit(card, card.after) .. "|r");
+		c.stack:SetText(Unit(card, card.held) .. " > |cffffffff" .. Unit(card, card.after) .. "|r");
 		c.cap:SetText("max " .. Unit(card, card.cap));
 		c.barBg:Show(); c.barHave:Show(); c.barGain:Show(); c.stack:Show(); c.cap:Show();
 	else
 		c.barBg:Hide(); c.barHave:Hide(); c.barGain:Hide(); c.stack:Hide(); c.cap:Hide();
 	end
 
-	-- The border already says the rarity, and the ribbon says when a card is
-	-- not yours: nothing to repeat down here.
-	c.rarity:SetText("");
-	c.forWho:SetText("");
-
-	if ( card.status ~= 0 and not draft.taken ) then
+	if ( card.status ~= 0 ) then
 		local why = (card.status == 1 and #card.owners > 0) and (table.concat(card.owners, ", ") .. " only")
 			or STATUS_TEXT[card.status] or STATUS_TEXT[8];
 		c.ribbonText:SetText(why);
 		c.ribbon:Show(); c.ribbonText:Show();
-		c:SetAlpha(0.78);
+		c:SetAlpha(0.6);
 	else
 		c.ribbon:Hide(); c.ribbonText:Hide();
 		c:SetAlpha(1);
 	end
+	c.stamp:Hide();
 
-	if ( draft.taken ) then
-		if ( taken ) then c.dim:Hide(); c.stamp:Show(); c:SetAlpha(1);
-		else c.dim:Show(); c.stamp:Hide(); c:SetAlpha(0.45); end
-	else
-		c.dim:Hide(); c.stamp:Hide();
-	end
-
-	-- Who else is looking at this one.
 	local k = 0;
 	for name, code in pairs(draft.looks) do
-		if ( code == card.code and k < #c.watch and not draft.taken ) then
+		if ( code == card.code and k < #c.watch ) then
 			k = k + 1;
 			local w = c.watch[k];
 			w:SetText(string.sub(name, 1, 1));
@@ -431,103 +374,12 @@ local function DrawCard(c, card, index, count)
 end
 
 -- ---------------------------------------------------------------------------
--- Actions and the bottom panels
-
-local leave = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate");
-leave:SetWidth(120);
-leave:SetHeight(26);
-leave:SetText("Close");
-leave:SetScript("OnClick", function() frame:Hide(); end);
+-- The one button
 
 local take = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate");
-take:SetWidth(160);
-take:SetHeight(26);
-take:SetPoint("LEFT", leave, "RIGHT", 12, 0);
-
-local takenText = Text(frame, 13);
-takenText:SetTextColor(0.9, 0.86, 0.96);
-
-local hint = Text(frame, 11);
-hint:SetTextColor(0.66, 0.61, 0.75);
-
-local deckPanel = CreateFrame("Frame", nil, frame);
-deckPanel:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 });
-deckPanel:SetBackdropColor(0.04, 0.03, 0.06, 0.7);
-deckPanel:SetBackdropBorderColor(1, 1, 1, 0.10);
-deckPanel:SetHeight(92);
-local deckLabel = Text(deckPanel, 10);
-deckLabel:SetPoint("TOPLEFT", deckPanel, "TOPLEFT", 12, -10);
-deckLabel:SetTextColor(0.73, 0.66, 0.84);
-local deckCount = Text(deckPanel, 10);
-deckCount:SetPoint("TOPRIGHT", deckPanel, "TOPRIGHT", -12, -10);
-deckCount:SetTextColor(0.66, 0.61, 0.75);
-
-local runPanel = CreateFrame("Frame", nil, frame);
-runPanel:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 });
-runPanel:SetBackdropColor(0.04, 0.03, 0.06, 0.7);
-runPanel:SetBackdropBorderColor(1, 1, 1, 0.10);
-runPanel:SetWidth(250);
-runPanel:SetHeight(92);
-local runLabel = Text(runPanel, 10);
-runLabel:SetPoint("TOPLEFT", runPanel, "TOPLEFT", 12, -10);
-runLabel:SetTextColor(0.73, 0.66, 0.84);
-runLabel:SetText("RUN-WIDE");
-local runLines = {};
-for i = 1, 3 do
-	local fs = Text(runPanel, 11);
-	fs:SetPoint("TOPLEFT", runPanel, "TOPLEFT", 12, -12 - i * 18);
-	fs:SetTextColor(0.9, 0.86, 0.96);
-	runLines[i] = fs;
-end
-
-local chips = {};
-local function Chip(i)
-	local chip = chips[i];
-	if ( not chip ) then
-		chip = CreateFrame("Frame", nil, deckPanel);
-		chip:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 });
-		chip:SetBackdropColor(1, 1, 1, 0.05);
-		chip:SetBackdropBorderColor(1, 1, 1, 0.10);
-		chip:SetHeight(22);
-		chip.dot = chip:CreateTexture(nil, "OVERLAY");
-		chip.dot:SetTexture(WHITE);
-		chip.dot:SetWidth(6);
-		chip.dot:SetHeight(6);
-		chip.dot:SetPoint("LEFT", chip, "LEFT", 8, 0);
-		chip.text = Text(chip, 11);
-		chip.text:SetPoint("LEFT", chip.dot, "RIGHT", 6, 0);
-		chips[i] = chip;
-	end
-	return chip;
-end
-
-local function DrawDeck(width)
-	local x, y, row = 12, -28, 0;
-	for i, entry in ipairs(draft.deck) do
-		local rarity = RARITY[entry.tier] or RARITY[1];
-		local chip = Chip(i);
-		chip.dot:SetVertexColor(rarity.r, rarity.g, rarity.b);
-		local value = entry.value ~= "" and string.format("  |cff%s%s|r", Hex(rarity.r, rarity.g, rarity.b), entry.value) or "";
-		chip.text:SetText(entry.name .. value);
-		local w = chip.text:GetStringWidth() + 28;
-		chip:SetWidth(w);
-		if ( x + w > width - 12 and x > 12 ) then
-			x, row = 12, row + 1;
-			y = -28 - row * 28;
-		end
-		chip:ClearAllPoints();
-		if ( row < 2 ) then
-			chip:SetPoint("TOPLEFT", deckPanel, "TOPLEFT", x, y);
-			chip:Show();
-		else
-			chip:Hide();   -- a third row would leave the panel; the count still says how many
-		end
-		x = x + w + 6;
-	end
-	for i = #draft.deck + 1, #chips do chips[i]:Hide(); end
-	deckLabel:SetText("YOUR BOONS");
-	deckCount:SetText(#draft.deck);
-end
+take:SetWidth(120);
+take:SetHeight(22);
+take:SetPoint("BOTTOM", frame, "BOTTOM", 0, PAD);
 
 -- Taking a card ends the deal: the hand goes the moment you pick.
 Take = function()
@@ -545,64 +397,28 @@ take:SetScript("OnClick", Take);
 Refresh = function()
 	if ( not draft ) then return; end
 	local count = #draft.cards;
-	local handWidth = count * CARD_W + (count - 1) * CARD_GAP;
-	local width = math.max(handWidth + 64, 820);
-	local height = HAND_TOP + CARD_H + 2 * FAN_DROP + 128 + 92 + 20;
+	local width = math.max(PAD * 2 + count * CARD_W + (count - 1) * CARD_GAP, 320);
 	frame:SetWidth(width);
-	frame:SetHeight(height);
+	frame:SetHeight(HAND_TOP + CARD_H + 16 + 22 + PAD);
 	local room = (UIParent:GetWidth() or width) - 40;
 	frame:SetScale(width > room and room / width or 1);
 
-	waveText:SetText(string.format("WAVE %d / %d", draft.wave, draft.final));
-	local names = {};
-	for _, member in ipairs(draft.party) do
-		local r, g, b = ClassColor(member.class);
-		names[#names + 1] = string.format("|cff%s%s|r", Hex(r, g, b), member.name);
-	end
-	partyText:SetText(table.concat(names, "   "));
+	waveText:SetText(string.format("Wave %d / %d", draft.wave, draft.final));
 
 	for i, card in ipairs(draft.cards) do
 		DrawCard(cards[i] or MakeCard(i), card, i, count);
 	end
 	for i = count + 1, #cards do cards[i]:Hide(); cards[i].data = nil; end
 
-	local actionsY = -(HAND_TOP + CARD_H + 2 * FAN_DROP + 28);
-	leave:ClearAllPoints();
-	leave:SetPoint("TOPLEFT", frame, "TOP", -(120 + 12 + 160) / 2, actionsY);
-	hint:ClearAllPoints();
-	hint:SetPoint("TOP", frame, "TOP", 0, actionsY - 36);
-	takenText:ClearAllPoints();
-	takenText:SetPoint("TOP", frame, "TOP", 0, actionsY + 2);
-
-	-- A taken deal closes the frame at once (Take, TAKEN), so there is no
-	-- after-the-deal state to draw.
-	takenText:Hide();
-	hint:SetText("");
-	if ( draft.taken ) then
-		leave:Hide(); take:Hide();
-	else
-		leave:Show(); take:Show();
-		local card = CardByCode(draft.selected);
-		if ( card and card.status == 0 ) then
-			take:SetText("Take");
-			take:Enable();
-		elseif ( card ) then
-			take:SetText((card.status == 1 and #card.owners > 0) and (card.owners[1] .. " only")
-				or STATUS_TEXT[card.status] or STATUS_TEXT[8]);
-			take:Disable();
-		end
+	local card = CardByCode(draft.selected);
+	if ( card and card.status == 0 ) then
+		take:SetText("Take");
+		take:Enable();
+	elseif ( card ) then
+		take:SetText((card.status == 1 and #card.owners > 0) and (card.owners[1] .. " only")
+			or STATUS_TEXT[card.status] or STATUS_TEXT[8]);
+		take:Disable();
 	end
-
-	deckPanel:ClearAllPoints();
-	deckPanel:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 20);
-	deckPanel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20 - 250 - 12, 20);
-	runPanel:ClearAllPoints();
-	runPanel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 20);
-	DrawDeck(width - 40 - 250 - 12);
-
-	runLines[1]:SetText(string.format("Greed  %d / 3", draft.greed));
-	runLines[2]:SetText(string.format("Abundance  %d / 3", draft.abundance));
-	runLines[3]:SetText(string.format("Hoarder  %d / 1", draft.hoarder));
 end
 
 frame:SetScript("OnShow", function() if ( PlaySound ) then PlaySound("igCharacterInfoOpen"); end end);
