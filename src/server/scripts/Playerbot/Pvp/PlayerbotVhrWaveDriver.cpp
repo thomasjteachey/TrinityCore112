@@ -529,11 +529,18 @@ void DressWaveClone(BattlegroundVHR* bg, Player* clone, Player* source, bool isA
     }
 }
 
+// The champion wave's slot 0, when it is the Warchief's clone (the request's
+// championSource), walks out as "Warchief <name>".
+std::string ChampionPrefix(ObjectGuid championSource, size_t slot, ObjectGuid source)
+{
+    return championSource && slot == 0 && source == championSource ? "Warchief " : "";
+}
+
 // Seats every wave slot whose source is in the world right now. The indices of
 // the slots whose source is not are appended to unseated, when one is given.
 uint32 SeatOnlineWaveSlots(BattlegroundVHR* bg, uint32 waveNumber, uint32 enemyTeam,
     std::vector<ObjectGuid> const& sources, std::vector<Position> const& positions,
-    std::vector<uint8> const& handicap, std::vector<size_t>* unseated)
+    std::vector<uint8> const& handicap, std::vector<size_t>* unseated, ObjectGuid championSource)
 {
     TeamId const enemyTeamIndex = Battleground::GetTeamIndexByTeamId(enemyTeam);
 
@@ -568,7 +575,9 @@ uint32 SeatOnlineWaveSlots(BattlegroundVHR* bg, uint32 waveNumber, uint32 enemyT
         WorldSession const* sourceSession = source->GetSession();
         bool const isActualHuman = sourceSession && !sourceSession->IsVirtualSession() &&
             !sourceSession->IsTransientPlayerSession() && !playerbot::IsManagedRandomBot(source);
-        std::string const displayPrefix = isActualHuman ? "Dark " : "";
+        std::string displayPrefix = ChampionPrefix(championSource, i, sources[i]);
+        if (displayPrefix.empty() && isActualHuman)
+            displayPrefix = "Dark ";
 
         Player* clone = playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, enemyTeam, displayPrefix);
         if (!clone)
@@ -659,7 +668,9 @@ bool AdvanceWaveAwaitingLoads(BattlegroundVHR* bg, VhrWaveSpawnRequest const& re
         std::vector<ObjectGuid> const partySources = request.sourceGuids;
         std::vector<Position> const positions = request.spawnPositions;
         std::vector<uint8> const handicap = request.diminishedStacks;
-        finished.spawned = SeatOnlineWaveSlots(bg, finished.waveNumber, enemyTeam, partySources, positions, handicap, nullptr);
+        ObjectGuid const championSource = request.championSource;
+        finished.spawned = SeatOnlineWaveSlots(bg, finished.waveNumber, enemyTeam, partySources, positions, handicap, nullptr,
+            championSource);
     }
 
     TC_LOG_DEBUG("playerbots", "PlayerbotVhrWaveDriver: wave {} of instance {} fielded {}/{} clones.",
@@ -698,6 +709,7 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
     std::vector<ObjectGuid> sources = request->sourceGuids;
     std::vector<Position> const positions = request->spawnPositions;
     std::vector<uint8> const handicap = request->diminishedStacks;
+    ObjectGuid const championSource = request->championSource;
 
     ObjectGuid loadOwnerGuid;
     WorldSession* const loadSession = FindPartyLoadSession(bg, loadOwnerGuid);
@@ -726,8 +738,14 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
                 waveNumber, instanceId);
     }
 
+    // The champion wave's champion is the Warchief's clone, whoever the rest
+    // of the wave is drawn from. Loaded below like any offline bot when the
+    // Warchief is not in the world.
+    if (championSource && !sources.empty())
+        sources[0] = championSource;
+
     std::vector<size_t> unseated;
-    uint32 const spawned = SeatOnlineWaveSlots(bg, waveNumber, enemyTeam, sources, positions, handicap, &unseated);
+    uint32 const spawned = SeatOnlineWaveSlots(bg, waveNumber, enemyTeam, sources, positions, handicap, &unseated, championSource);
     uint32 const slotCount = uint32(std::min(sources.size(), positions.size()));
 
     // The slots dealt to offline bots: one load per character, however many
@@ -766,14 +784,16 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
         std::vector<size_t> const slotIndices = entry.second;
         std::vector<Position> slotPositions;
         std::vector<uint8> slotHandicap;
+        std::vector<std::string> slotPrefixes;
         for (size_t index : slotIndices)
         {
             slotPositions.push_back(positions[index]);
             slotHandicap.push_back(index < handicap.size() ? handicap[index] : 0);
+            slotPrefixes.push_back(ChampionPrefix(championSource, index, entry.first));
         }
 
         bool const queued = playerbot::PlayerbotObcCloneManager::LoadOfflineCloneSource(entry.first, loadSession,
-            [instanceId, bgType, waveNumber, enemyTeam, loadOwnerGuid, slotIndices, slotPositions, slotHandicap](Player* loaded)
+            [instanceId, bgType, waveNumber, enemyTeam, loadOwnerGuid, slotIndices, slotPositions, slotHandicap, slotPrefixes](Player* loaded)
             {
                 uint32 fielded = 0;
                 BattlegroundVHR* target = loaded ? FindWaveAwaitingSpawn(instanceId, bgType, waveNumber) : nullptr;
@@ -781,8 +801,9 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
                 {
                     for (size_t slot = 0; slot < slotPositions.size(); ++slot)
                     {
-                        // A bot is never a copy of a party member: no "Dark", no boons.
-                        Player* clone = SeatClone(target, loaded, enemyTeam, slotPositions[slot], Position(), "");
+                        // A bot is never a copy of a party member: no "Dark", no
+                        // boons. The Warchief's clone is named for the title.
+                        Player* clone = SeatClone(target, loaded, enemyTeam, slotPositions[slot], Position(), slotPrefixes[slot]);
                         if (!clone)
                         {
                             TC_LOG_WARN("playerbots", "PlayerbotVhrWaveDriver: failed to clone offline bot {} for wave {} of instance {}.",

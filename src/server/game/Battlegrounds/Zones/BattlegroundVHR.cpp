@@ -3,6 +3,7 @@
 #include "BattlegroundMgr.h"
 #include "CharacterCache.h"
 #include "CombatManager.h"
+#include "DatabaseEnv.h"
 #include "Creature.h"
 #include "DBCStores.h"
 #include "GameObject.h"
@@ -304,6 +305,8 @@ void BattlegroundVHR::Reset()
     _menagerie.clear();
     _waveCloneSources.clear();
     _championGuid.Clear();
+    _warchiefGuid.Clear();
+    _warchiefName.clear();
     _runeFeedMask = 0;
     _runeFeedLocked = false;
     _bombFeedTimerMs = 0;
@@ -550,6 +553,8 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
 
     _pendingRequest.composition = composition;
     _pendingRequest.sourceGuids.reserve(enemyCount);
+    if (_waveNumber == BG_VHR_MIDBOSS_WAVE)
+        _pendingRequest.championSource = _warchiefGuid;
 
     switch (composition)
     {
@@ -740,6 +745,19 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
         held.release = _waveSlots[slot].release;
         _heldClones.push_back(held);
     }
+
+    // Slot 0 never arrived - the Warchief's load failed or timed out: the
+    // first clone that walks out with the gates is the champion instead, so
+    // the wave still has one.
+    if (_waveNumber == BG_VHR_MIDBOSS_WAVE && !_championGuid)
+        for (auto const& [slot, cloneGuid] : _waveSeatedSlots)
+            if (slot < _waveSlots.size() && _waveSlots[slot].release == VhrCloneRelease::WithGates &&
+                std::find(_waveEnemies.begin(), _waveEnemies.end(), cloneGuid) != _waveEnemies.end())
+                if (Player* champion = ObjectAccessor::FindPlayer(cloneGuid))
+                {
+                    MakeChampion(champion);
+                    break;
+                }
     _waveSeatedSlots.clear();
 
     if (_waveNumber == 1)
@@ -784,6 +802,50 @@ void BattlegroundVHR::MakeChampion(Player* champion)
 
     // A percentage Stamina aura raises the maximum, not the current health.
     champion->SetFullHealth();
+}
+
+void BattlegroundVHR::PickWarchief()
+{
+    _warchiefGuid.Clear();
+    _warchiefName.clear();
+
+    // Read once per run, the wave before the champion: the weekly race only
+    // changes hands on its reset, and this is a single-row primary-key lookup.
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT w.current_warchief_guid FROM warchief_honor w "
+        "JOIN characters c ON c.guid = w.current_warchief_guid "
+        "WHERE w.id = 1 AND c.deleteDate IS NULL");
+    if (!result)
+        return;   // no Warchief this week, or they deleted the character
+
+    ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>((*result)[0].GetUInt32());
+    // The clone loader needs the character cache entry anyway.
+    CharacterCacheEntry const* info = sCharacterCache->GetCharacterCacheByGuid(guid);
+    if (!info)
+        return;
+
+    // A level-60 Warchief walking into a level-20 party's Hold is not a
+    // champion, it is the end of the run - and the other way round no fight.
+    uint32 minLevel = 0, maxLevel = 0;
+    for (ObjectGuid member : GetHumanRoster(true))
+        if (Player const* player = ObjectAccessor::FindPlayer(member))
+        {
+            uint32 const level = player->GetLevel();
+            if (!minLevel || level < minLevel)
+                minLevel = level;
+            maxLevel = std::max(maxLevel, level);
+        }
+    uint32 const level = info->Level;
+    if (!maxLevel || level > maxLevel + BG_VHR_WARCHIEF_LEVEL_SPAN ||
+        level + BG_VHR_WARCHIEF_LEVEL_SPAN < minLevel)
+    {
+        TC_LOG_DEBUG("bg.battleground", "BattlegroundVHR: Warchief {} (level {}) is out of range of the party ({}-{}) in instance {}; plain champion.",
+            info->Name, level, minLevel, maxLevel, GetInstanceID());
+        return;
+    }
+
+    _warchiefGuid = guid;
+    _warchiefName = info->Name;
 }
 
 void BattlegroundVHR::EmpowerChampion(Player* champion)
@@ -1120,8 +1182,17 @@ void BattlegroundVHR::CompleteWave()
     uint32 const nextWave = _waveNumber + 1;
     if (nextWave == BG_VHR_MIDBOSS_WAVE)
     {
-        PSendMessageToAll(BG_VHR_STRING_CHAMPION_NEXT, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, nextWave, brokers);
-        PSendMessageToAll(BG_VHR_STRING_CHAMPION_NEXT, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, nextWave, brokers);
+        PickWarchief();
+        if (_warchiefGuid)
+        {
+            PSendMessageToAll(BG_VHR_STRING_WARCHIEF_NEXT, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, nextWave, _warchiefName.c_str(), brokers);
+            PSendMessageToAll(BG_VHR_STRING_WARCHIEF_NEXT, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, nextWave, _warchiefName.c_str(), brokers);
+        }
+        else
+        {
+            PSendMessageToAll(BG_VHR_STRING_CHAMPION_NEXT, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, nextWave, brokers);
+            PSendMessageToAll(BG_VHR_STRING_CHAMPION_NEXT, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, nextWave, brokers);
+        }
     }
     else if (nextWave == BG_VHR_FINAL_WAVE)
     {

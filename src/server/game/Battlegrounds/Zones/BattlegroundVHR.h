@@ -107,7 +107,11 @@ enum BG_VHR_TrinityStrings
     BG_VHR_STRING_CHAMPION_FREE = 20104,
     // "The next wave is the last. %u boon brokers answer the call." - cleared
     // the wave before BG_VHR_FINAL_WAVE.
-    BG_VHR_STRING_FINAL_NEXT = 20105
+    BG_VHR_STRING_FINAL_NEXT = 20105,
+    // "Wave %u is the Warchief, %s. %u boon brokers answer the call." - the
+    // champion wave when the champion is the weekly honor Warchief's clone
+    // (PickWarchief).
+    BG_VHR_STRING_WARCHIEF_NEXT = 20106
 };
 
 enum BG_VHR_Objects
@@ -253,6 +257,10 @@ enum BG_VHR_Constants
     BG_VHR_CHAMPION_DAMAGE_BASE = 50,
     BG_VHR_CHAMPION_DAMAGE_PER_PLAYER = 10,
     BG_VHR_CHAMPION_RESOLVE = 50,
+    // How far the Warchief's level may sit outside the party's range for the
+    // champion to be their clone - the widest ring the wave bots are drawn
+    // from. Further out, the champion is an ordinary clone.
+    BG_VHR_WARCHIEF_LEVEL_SPAN = 10,
 
     // Clearing the wave before the champion drops this many brokers on top
     // of the usual ones. Clearing the wave before the final one drops at
@@ -408,6 +416,13 @@ struct VhrWaveSpawnRequest
     uint32 hostBotMaxLevel = 0;
     std::vector<ObjectGuid> sourceGuids;
     std::vector<Position> spawnPositions;
+
+    // The champion wave's slot 0 is a clone of this character - the weekly
+    // honor Warchief - whatever the composition. The driver keeps it in slot 0
+    // when it re-sources a wave from the bots, loads it if it is offline and
+    // names the clone "Warchief <name>". Empty on every other wave, and on the
+    // champion wave when there is no usable Warchief (BattlegroundVHR::PickWarchief).
+    ObjectGuid championSource;
 
     // Diminished stacks per clone, parallel to sourceGuids. 0 means a clone at
     // full strength, which is every entry except - on three waves in four - the
@@ -673,6 +688,10 @@ private:
     // The champion wave's slot-0 clone grows into the champion as the wave is
     // fulfilled. Announced when its gates open.
     void MakeChampion(Player* champion);
+    // Who the champion wave clones: the weekly honor Warchief, when that
+    // character still exists and its level is within BG_VHR_WARCHIEF_LEVEL_SPAN
+    // of the party's. Nobody otherwise, and the wave is the plain champion.
+    void PickWarchief();
     // The champion's boons: at least its own Might and Resolve, whatever the
     // party member it copies was handed (RefreshWaveBoonCopies).
     void EmpowerChampion(Player* champion);
@@ -814,6 +833,9 @@ private:
     std::vector<std::pair<ObjectGuid, ObjectGuid>> _waveCloneSources;
     // The champion of the current wave, if it is the champion wave.
     ObjectGuid _championGuid;
+    // The Warchief the champion wave clones (PickWarchief), and their name.
+    ObjectGuid _warchiefGuid;
+    std::string _warchiefName;
     // Which rune slots the last rune feed reported standing.
     uint8 _runeFeedMask = 0;
     bool _runeFeedLocked = false;      // what the last feed said about IsWaveLive
