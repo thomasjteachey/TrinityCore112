@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: Centurion Violet Hold
+## Notes: A timer bar over every rune on the Violet Hold's floor, showing how long until it is taken back.
+## Author: Centurion
+## Version: 1.0
+## DefaultState: Enabled
+
+CENTURION_VioletHold.lua

@@ -285,9 +285,16 @@ enum BG_VHR_Constants
     BG_VHR_BUFF_MIN_CELL_DISTANCE = 12,
     BG_VHR_BUFF_MIN_DROP_DISTANCE = 12,
 
-    // The custom cooldown-reset rune, alongside stock Restoration and
-    // Berserking. Speed is deliberately not in the roll.
-    BG_VHR_GO_RECHARGE_BUFF = 300500,
+    // The rune pool, alongside stock Berserking: cooldown reset (a red Power
+    // Crystal), Bulwark -25% damage taken (yellow), Renewal 3% health every
+    // 3 sec (green), Precision +15% crit (blue) - each two minutes, so a rune
+    // taken during the gate window still runs through the fight. Speed is
+    // deliberately not in the roll, and neither is Restoration: the party is
+    // put back to full as every wave falls, so it healed nobody.
+    BG_VHR_GO_RECHARGE_BUFF  = 300500,
+    BG_VHR_GO_BULWARK_BUFF   = 300501,
+    BG_VHR_GO_RENEWAL_BUFF   = 300502,
+    BG_VHR_GO_PRECISION_BUFF = 300503,
 
     // Both end-of-run payouts share one shape: the matching arena-win payout,
     // times the wave the run ended on, divided by this. Honor additionally
@@ -635,6 +642,16 @@ private:
     // Returns how many boon brokers arrived with the drop.
     uint32 SpawnWaveRewardBuffs();
     void DespawnWaveRewardBuffs();
+
+    // The runes still on the floor, for the CENTURION_VioletHold addon, which
+    // draws a timer bar over each one (through the client DLL's world-point
+    // projection). One CCGAME line carries the whole state:
+    //   VHRUNE:<ms left>;<x>,<y>,<z>;<x>,<y>,<z>...   ("VHRUNE:0" = none)
+    // sent whenever the set of runes changes, and to anyone joining the run.
+    uint8 GetStandingRuneMask() const;
+    std::string BuildRuneFeed() const;
+    void SendRuneFeed(Player* player = nullptr);
+    void SendRuneFeedIfChanged();
     bool PickBuffPosition(std::vector<Position> const& taken, Position& out) const;
     // First free broker slot, or BG_VHR_CREATURE_BOON_BROKER_MAX when all are
     // standing. Also collects the standing brokers' positions so a new drop
@@ -718,6 +735,8 @@ private:
     std::vector<std::pair<ObjectGuid, ObjectGuid>> _waveCloneSources;
     // The champion of the current wave, if it is the champion wave.
     ObjectGuid _championGuid;
+    // Which rune slots the last rune feed reported standing.
+    uint8 _runeFeedMask = 0;
 };
 
 #endif

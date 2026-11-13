@@ -218,6 +218,10 @@ void BattlegroundVHR::AddPlayer(Player* player)
         _eliminated.erase(player->GetGUID());
 
     UpdateScoreWorldStates();
+
+    // Back into a run with runes on the floor: their timer bars.
+    if (player->GetBGTeam() == _humanTeam && _runeFeedMask)
+        SendRuneFeed(player);
 }
 
 void BattlegroundVHR::RemovePlayer(Player* player, ObjectGuid guid, uint32 team)
@@ -292,6 +296,7 @@ void BattlegroundVHR::Reset()
     _menagerie.clear();
     _waveCloneSources.clear();
     _championGuid.Clear();
+    _runeFeedMask = 0;
 }
 
 bool BattlegroundVHR::SetupBattleground()
@@ -1230,12 +1235,15 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
     if (!wanted)
         return 0;
 
-    // Speed is deliberately not in the roll - the party is not chasing anyone.
+    // Speed is deliberately not in the roll - the party is not chasing anyone -
+    // nor Restoration, whose health and mana the wave clear has just refilled.
     static uint32 const kBuffEntries[] =
     {
-        BG_OBJECTID_REGENBUFF_ENTRY,
         BG_OBJECTID_BERSERKERBUFF_ENTRY,
-        BG_VHR_GO_RECHARGE_BUFF
+        BG_VHR_GO_RECHARGE_BUFF,
+        BG_VHR_GO_BULWARK_BUFF,
+        BG_VHR_GO_RENEWAL_BUFF,
+        BG_VHR_GO_PRECISION_BUFF
     };
     uint32 const kBuffCount = uint32(sizeof(kBuffEntries) / sizeof(kBuffEntries[0]));
 
@@ -1309,6 +1317,7 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
     if (droppedRune)
         _buffLifetimeMs = BG_VHR_BUFF_LIFETIME_MS;
 
+    SendRuneFeedIfChanged();
     return brokersSpawned;
 }
 
@@ -1318,6 +1327,70 @@ void BattlegroundVHR::DespawnWaveRewardBuffs()
         DelObject(BG_VHR_OBJECT_BUFF_1 + i);
 
     _buffLifetimeMs = 0;
+    SendRuneFeedIfChanged();
+}
+
+uint8 BattlegroundVHR::GetStandingRuneMask() const
+{
+    uint8 mask = 0;
+    if (!_buffLifetimeMs)
+        return mask;
+
+    Map* map = FindBgMap();
+    if (!map)
+        return mask;
+
+    // A taken rune is despawned, not deleted (Battleground::HandleTriggerBuff),
+    // so it is the spawned state that says whether it is still there.
+    for (uint32 i = 0; i < BG_VHR_MAX_WAVE_BUFFS; ++i)
+        if (ObjectGuid const guid = BgObjects[BG_VHR_OBJECT_BUFF_1 + i])
+            if (GameObject const* rune = map->GetGameObject(guid))
+                if (rune->IsInWorld() && rune->isSpawned())
+                    mask |= uint8(1u << i);
+    return mask;
+}
+
+std::string BattlegroundVHR::BuildRuneFeed() const
+{
+    uint8 const mask = GetStandingRuneMask();
+    if (!mask)
+        return "VHRUNE:0";
+
+    Map* map = FindBgMap();
+    std::string line = "VHRUNE:" + std::to_string(_buffLifetimeMs);
+    for (uint32 i = 0; i < BG_VHR_MAX_WAVE_BUFFS; ++i)
+    {
+        if (!(mask & (1u << i)))
+            continue;
+        GameObject const* rune = map->GetGameObject(BgObjects[BG_VHR_OBJECT_BUFF_1 + i]);
+        line += Trinity::StringFormat(";{:.1f},{:.1f},{:.1f}", rune->GetPositionX(), rune->GetPositionY(), rune->GetPositionZ());
+    }
+    return line;
+}
+
+void BattlegroundVHR::SendRuneFeed(Player* player)
+{
+    std::string const line = BuildRuneFeed();
+    if (player)
+    {
+        SendSquadFeedLine(player, line);
+        return;
+    }
+
+    for (auto const& itr : GetPlayers())
+        if (itr.second.Team == _humanTeam)
+            if (Player* member = ObjectAccessor::FindPlayer(itr.first))
+                SendSquadFeedLine(member, line);
+}
+
+void BattlegroundVHR::SendRuneFeedIfChanged()
+{
+    uint8 const mask = GetStandingRuneMask();
+    if (mask == _runeFeedMask)
+        return;
+
+    _runeFeedMask = mask;
+    SendRuneFeed();
 }
 
 uint32 BattlegroundVHR::FindFreeBoonBrokerSlot(std::vector<Position>& occupied) const
@@ -1619,6 +1692,8 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
     _stateCheckTimerMs = 0;
     CheckRunState();
     UpdateScoreWorldStates();
+    // A rune taken since the last check loses its timer bar.
+    SendRuneFeedIfChanged();
 }
 
 void BattlegroundVHR::CheckRunState()

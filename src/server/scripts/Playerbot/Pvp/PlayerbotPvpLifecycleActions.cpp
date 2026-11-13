@@ -2100,6 +2100,47 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
     }
 
     void StopVirtualPlayerbotMovement(Player* player);
+    bool IsWalkableRoute(Player* player, GuidVector const& gates, Position const& destination);
+
+    // Whether a bot can walk to this soulwell without passing a gate its
+    // battleground still has standing. A soulwell set down behind one - a
+    // warlock clone's, inside a Violet Hold cell that has not opened yet -
+    // drew bots to the shut door, where the spline guard stops them and they
+    // stood waiting for a healthstone they could not reach. The answer is kept
+    // for a few seconds per bot and well: it costs a path search.
+    struct SoulwellRouteVerdict
+    {
+        ObjectGuid soulwell;
+        uint32 decidedMs = 0;
+        bool reachable = true;
+    };
+    std::unordered_map<uint64, SoulwellRouteVerdict> g_SoulwellRouteByBot;
+    constexpr uint32 PLAYERBOT_SOULWELL_ROUTE_RECHECK_MS = 3 * IN_MILLISECONDS;
+
+    bool IsSoulwellReachable(Player* player, GameObject const* soulwell)
+    {
+        Battleground* battleground = player->GetBattleground();
+        if (!battleground)
+            return true;
+
+        GuidVector gates;
+        battleground->GetStandingGates(gates);
+        if (gates.empty())
+            return true;
+
+        uint64 const botKey = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        SoulwellRouteVerdict verdict;
+        if (playerbot::LockedGetCopy(g_SoulwellRouteByBot, botKey, verdict) && verdict.soulwell == soulwell->GetGUID() &&
+            nowMs - verdict.decidedMs < PLAYERBOT_SOULWELL_ROUTE_RECHECK_MS)
+            return verdict.reachable;
+
+        verdict.soulwell = soulwell->GetGUID();
+        verdict.decidedMs = nowMs;
+        verdict.reachable = IsWalkableRoute(player, gates, soulwell->GetPosition());
+        playerbot::LockedSet(g_SoulwellRouteByBot, botKey, verdict);
+        return verdict.reachable;
+    }
 
     bool TryAcquireHealthstoneFromSoulwell(Player* player)
     {
@@ -2108,10 +2149,17 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         GameObject* soulwell = playerbot::PvpCore::FindUsableSoulwell(player, 60.0f);
         if (!soulwell)
+        {
+            playerbot::LockedErase(g_SoulwellRouteByBot, player->GetGUID().GetRawValue());
             return false;
+        }
 
         if (!soulwell->IsAtInteractDistance(player))
+        {
+            if (!IsSoulwellReachable(player, soulwell))
+                return false;
             return IssueMovePointThrottled(player, soulwell->GetPosition(), 4.0f, 500) || player->isMoving();
+        }
 
         Player* warlockOwner = soulwell->GetOwner() ? soulwell->GetOwner()->ToPlayer() : nullptr;
         if (!warlockOwner)
