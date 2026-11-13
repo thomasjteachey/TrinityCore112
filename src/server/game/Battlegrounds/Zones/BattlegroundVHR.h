@@ -21,7 +21,8 @@
  *
  * Wave BG_VHR_MIDBOSS_WAVE is a champion: one oversized clone with a party's
  * worth of health, extra damage and crowd-control resistance, walking out with
- * the wave's regular number of clones, none of them horde. The waves
+ * an escort halfway between one horde clone per player and the wave's regular
+ * count, half of it at full power. The waves
  * before the champion and before the final wave drop extra boon brokers.
  * Deeper waves also reinforce every clone that is not a copy of a party member
  * (BG_VHR_REINFORCE_FROM_WAVE), while clones OF a party member carry that
@@ -244,8 +245,9 @@ enum BG_VHR_Constants
     // health), BG_VHR_CHAMPION_DAMAGE_BASE + _PER_PLAYER per player
     // stacks of Boon of Might (+1% damage each), BG_VHR_CHAMPION_RESOLVE
     // stacks of Boon of Resolve (1% shorter crowd control each) and
-    // BG_VHR_CHAMPION_SCALE times the size, walking out with the wave's
-    // regular count of clones, every one at full power.
+    // BG_VHR_CHAMPION_SCALE times the size, walking out with an escort
+    // halfway between one horde clone per player and the wave's regular
+    // count (GetChampionEscortCount), half of it at full power.
     BG_VHR_MIDBOSS_WAVE = 15,
     BG_VHR_CHAMPION_REINFORCED_PER_PLAYER = 20,
     BG_VHR_CHAMPION_DAMAGE_BASE = 50,
@@ -657,6 +659,8 @@ private:
     // How many of the wave's clones fight at full power; every clone past it
     // is horde (GetHordeCloneStacks). All of them on the final wave.
     uint32 GetFullPowerCountForWave(uint32 wave) const;
+    // How many clones walk out with the wave-15 champion.
+    uint32 GetChampionEscortCount() const;
     static uint8 GetHordeCloneStacks();
     // The champion wave's slot-0 clone grows into the champion as the wave is
     // fulfilled. Announced when its gates open.

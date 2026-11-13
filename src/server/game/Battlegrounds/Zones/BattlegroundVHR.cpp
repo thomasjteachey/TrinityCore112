@@ -409,22 +409,33 @@ uint32 BattlegroundVHR::GetEnemyCountForWave(uint32 wave) const
     if (!wave)
         return 0;
 
-    // The champion on top of the wave's regular count of whole clones (the
-    // quarter-clone partial is left out: nothing in this wave is Diminished).
+    // The champion and its escort. The escort met the owner halfway
+    // (2026-11-13): between the old one horde clone per player and the
+    // wave's regular count of whole clones, rounded up. Half of it, rounded
+    // up, fights at full power (GetFullPowerCountForWave).
     if (wave == BG_VHR_MIDBOSS_WAVE)
-        return 1 + GetFullStrengthCountForWave(wave);
+        return 1 + GetChampionEscortCount();
 
     return GetFullStrengthCountForWave(wave) + (GetPartialCloneStacks(wave) ? 1 : 0);
+}
+
+uint32 BattlegroundVHR::GetChampionEscortCount() const
+{
+    return (_partySize + GetFullStrengthCountForWave(BG_VHR_MIDBOSS_WAVE) + 1) / 2;
 }
 
 uint32 BattlegroundVHR::GetFullPowerCountForWave(uint32 wave) const
 {
     uint32 const enemies = GetEnemyCountForWave(wave);
 
-    // The final wave is everything the run has been building to, and the
-    // champion's escort is its own: no horde in either.
-    if (wave >= BG_VHR_FINAL_WAVE || wave == BG_VHR_MIDBOSS_WAVE)
+    // The final wave is everything the run has been building to: no horde.
+    if (wave >= BG_VHR_FINAL_WAVE)
         return enemies;
+
+    // The champion, then half its escort (rounded up) at full power; the
+    // rest is horde.
+    if (wave == BG_VHR_MIDBOSS_WAVE)
+        return 1 + (GetChampionEscortCount() + 1) / 2;
 
     // 0 turns the horde off - every clone at full power, as before.
     uint32 const perPlayer = sWorld->getIntConfig(CONFIG_CENTURION_VHR_FULL_POWER_CLONES_PER_PLAYER);
@@ -575,8 +586,9 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
     // Past the party's full-power budget the wave is horde. The budget is
     // spent from slot 0, which is the opening group first, so the clones
     // that walk out with the gates are the real fight and the horde is
-    // what trickles out after. The champion wave (slot 0 the champion) has
-    // none. A slot already carrying the partial clone's stacks keeps them.
+    // what trickles out after. The champion wave is slot 0 the champion, then
+    // half its escort, then horde. A slot already carrying the partial
+    // clone's stacks keeps them.
     uint32 const fullPower = GetFullPowerCountForWave(_waveNumber);
     uint8 const hordeStacks = GetHordeCloneStacks();
     for (size_t i = fullPower; i < _pendingRequest.diminishedStacks.size(); ++i)
