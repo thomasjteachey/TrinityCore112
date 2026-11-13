@@ -14,12 +14,18 @@ local function Frame()
 	function f:SetScript(k, fn) self.scripts[k] = fn end
 	function f:RegisterEvent(e) self.events[e] = true end
 	function f:CreateTexture()
-		local t = {};
+		local t = { shown = false };
 		function t:SetTexture() end
 		function t:SetVertexColor(r, g, b) self.color = { r, g, b } end
 		function t:SetAllPoints() end
 		function t:SetPoint() end
+		function t:ClearAllPoints() end
 		function t:SetWidth(w) self.w = w end
+		function t:SetHeight(h) self.h = h end
+		function t:Show() self.shown = true end
+		function t:Hide() self.shown = false end
+		self.textures = self.textures or {};
+		table.insert(self.textures, t);
 		return t;
 	end
 	function f:CreateFontString()
@@ -59,6 +65,12 @@ local function bars()
 end
 local function fire(msg) events.scripts.OnEvent(events, "CHAT_MSG_ADDON", "CCGAME", msg, "WHISPER", "") end
 local function draw() layer.scripts.OnUpdate(layer, 0.016) end
+-- the ring's dots are textures on the layer itself
+local function ringDots()
+	local n = 0;
+	for _, t in ipairs(layer.textures or {}) do if t.shown then n = n + 1 end end
+	return n;
+end
 
 draw();
 check(bars() == 0, "no bars before any feed");
@@ -70,6 +82,18 @@ check(frames[3].text.text == 60, "60 seconds shown");
 check(frames[3].name.text == "Glacial Stasis", "first bar named Glacial Stasis (got " .. tostring(frames[3].name.text) .. ")");
 check(frames[4].name.text == "Recharge", "second bar named Recharge");
 check(frames[3].name.color and frames[3].name.color[3] == 1.00, "Glacial Stasis in blue");
+check(ringDots() == 80, "a Glacial Stasis rune gets its 80-dot ring (got " .. ringDots() .. ")");
+
+-- a Recharge alone: no ring
+fire("VHRUNE:45000;1900.0,780.0,38.4,300500");
+draw();
+check(ringDots() == 0, "no ring without a Glacial Stasis rune (got " .. ringDots() .. ")");
+-- two Glacial runes: two rings
+fire("VHRUNE:45000;1880.5,800.2,38.4,300501;1900.0,780.0,38.4,300501");
+draw();
+check(ringDots() == 160, "two Glacial Stasis runes, two rings (got " .. ringDots() .. ")");
+fire("VHRUNE:60000;1880.5,800.2,38.4,300501;1900.0,780.0,38.4,300500");
+draw();
 check(frames[3].fill.w and frames[3].fill.w > 30, "full bar at the start");
 
 now = now + 30;
@@ -87,6 +111,7 @@ check(math.abs(frames[3].fill.w - (w - 2) * 0.5) < 0.6, "the bar keeps its minut
 fire("VHRUNE:0");
 draw();
 check(bars() == 0, "VHRUNE:0 clears every bar");
+check(ringDots() == 0, "VHRUNE:0 clears the ring");
 
 fire("VHRUNE:60000;1.0,2.0,3.0");
 now = now + 61;

@@ -1,4 +1,5 @@
--- CENTURION_VioletHold - a timer bar over every rune on the Violet Hold's floor.
+-- CENTURION_VioletHold - a timer bar over every rune on the Violet Hold's floor,
+-- and Glacial Stasis's 30-yard reach drawn round it.
 --
 -- The runes dropped when a wave falls are taken back after a minute. The server
 -- (BattlegroundVHR::SendRuneFeed) tells the party where they are and how long is
@@ -34,6 +35,52 @@ layer:SetFrameStrata("BACKGROUND");
 
 local pool = {};
 
+-- Glacial Stasis freezes every enemy within 30 yards of whoever takes it, and
+-- they take it standing on the rune: a ring of dots on the floor that far out
+-- shows what it will catch (the same dots the Rift draws its turret range with).
+local RING_ENTRY = 300501;
+local RING_RADIUS = 30;       -- yards: spell 94313's radius (SpellRadius 10)
+local RING_DOTS = 80;
+local dots, dotsShown = {}, 0;
+
+local function Dot(i)
+	local dot = dots[i];
+	if ( not dot ) then
+		dot = layer:CreateTexture(nil, "ARTWORK");
+		dot:SetTexture(WHITE);
+		dot:SetVertexColor(0.45, 0.75, 1.00, 0.85);
+		dots[i] = dot;
+	end
+	return dot;
+end
+
+local function DrawRings(width, height)
+	local used = 0;
+	for _, rune in ipairs(runes) do
+		if ( rune.entry == RING_ENTRY ) then
+			for k = 0, RING_DOTS - 1 do
+				local a = 2 * math.pi * k / RING_DOTS;
+				local fx, fy, scale = CenturionUnitBar(0, rune.x + math.cos(a) * RING_RADIUS,
+					rune.y + math.sin(a) * RING_RADIUS, rune.z + 0.15);
+				if ( fx and fx > -0.05 and fx < 1.05 and fy > -0.05 and fy < 1.05 ) then
+					used = used + 1;
+					local dot = Dot(used);
+					local size = math.min(math.max((scale or 0) * height * 0.45, 2), 7);
+					dot:SetWidth(size);
+					dot:SetHeight(size);
+					dot:ClearAllPoints();
+					dot:SetPoint("CENTER", WorldFrame, "BOTTOMLEFT", fx * width, fy * height);
+					dot:Show();
+				end
+			end
+		end
+	end
+	for i = used + 1, dotsShown do
+		dots[i]:Hide();
+	end
+	dotsShown = used;
+end
+
 local function Bar(i)
 	local bar = pool[i];
 	if ( not bar ) then
@@ -65,10 +112,15 @@ local function Draw()
 	local left = expires - GetTime();
 	if ( #runes == 0 or left <= 0 or type(CenturionUnitBar) ~= "function" ) then
 		HideFrom(1);
+		for i = 1, dotsShown do
+			dots[i]:Hide();
+		end
+		dotsShown = 0;
 		return;
 	end
 	local share = math.min(math.max(left / total, 0), 1);
 	local width, height = WorldFrame:GetWidth(), WorldFrame:GetHeight();
+	DrawRings(width, height);
 	local used = 0;
 	for _, rune in ipairs(runes) do
 		local fx, fy, scale = CenturionUnitBar(0, rune.x, rune.y, rune.z + ABOVE);
