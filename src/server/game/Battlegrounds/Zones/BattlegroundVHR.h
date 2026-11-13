@@ -683,7 +683,8 @@ private:
     // The runes still on the floor, for the CENTURION_VioletHold addon, which
     // draws a timer bar over each one (through the client DLL's world-point
     // projection). One CCGAME line carries the whole state:
-    //   VHRUNE:<ms left>;<x>,<y>,<z>;<x>,<y>,<z>...   ("VHRUNE:0" = none)
+    //   VHRUNE:<ms left>;<x>,<y>,<z>,<entry>;...   ("VHRUNE:0" = none)
+    // where entry is the rune's gameobject entry, which the addon names.
     // sent whenever the set of runes changes, and to anyone joining the run.
     uint8 GetStandingRuneMask() const;
     std::string BuildRuneFeed() const;

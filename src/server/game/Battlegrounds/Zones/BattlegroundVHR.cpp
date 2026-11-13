@@ -1392,7 +1392,8 @@ std::string BattlegroundVHR::BuildRuneFeed() const
         if (!(mask & (1u << i)))
             continue;
         GameObject const* rune = map->GetGameObject(BgObjects[BG_VHR_OBJECT_BUFF_1 + i]);
-        line += Trinity::StringFormat(";{:.1f},{:.1f},{:.1f}", rune->GetPositionX(), rune->GetPositionY(), rune->GetPositionZ());
+        line += Trinity::StringFormat(";{:.1f},{:.1f},{:.1f},{}", rune->GetPositionX(), rune->GetPositionY(), rune->GetPositionZ(),
+            rune->GetEntry());
     }
     return line;
 }

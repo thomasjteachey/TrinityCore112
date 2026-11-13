@@ -26,6 +26,7 @@ local function Frame()
 		local s = {};
 		function s:SetPoint() end
 		function s:SetText(v) self.text = v end
+		function s:SetTextColor(r, g, b) self.color = { r, g, b } end
 		return s;
 	end
 	function f:SetWidth(w) self.w = w end
@@ -62,20 +63,24 @@ local function draw() layer.scripts.OnUpdate(layer, 0.016) end
 draw();
 check(bars() == 0, "no bars before any feed");
 
-fire("VHRUNE:60000;1880.5,800.2,38.4;1900.0,780.0,38.4");
+fire("VHRUNE:60000;1880.5,800.2,38.4,300501;1900.0,780.0,38.4,300500");
 draw();
 check(bars() == 2, "two runes, two bars (got " .. bars() .. ")");
 check(frames[3].text.text == 60, "60 seconds shown");
+check(frames[3].name.text == "Glacial Stasis", "first bar named Glacial Stasis (got " .. tostring(frames[3].name.text) .. ")");
+check(frames[4].name.text == "Recharge", "second bar named Recharge");
+check(frames[3].name.color and frames[3].name.color[3] == 1.00, "Glacial Stasis in blue");
 check(frames[3].fill.w and frames[3].fill.w > 30, "full bar at the start");
 
 now = now + 30;
 draw();
 check(frames[3].text.text == 30, "30 seconds after half a minute (got " .. tostring(frames[3].text.text) .. ")");
 
--- one taken: the server resends what is left
+-- one taken: the server resends what is left (old format, no entry: no name)
 fire("VHRUNE:30000;1900.0,780.0,38.4");
 draw();
 check(bars() == 1, "a taken rune loses its bar");
+check(frames[3].name.text == "", "a rune sent without its entry has no name");
 local w = frames[3].w;
 check(math.abs(frames[3].fill.w - (w - 2) * 0.5) < 0.6, "the bar keeps its minute scale after a pickup");
 

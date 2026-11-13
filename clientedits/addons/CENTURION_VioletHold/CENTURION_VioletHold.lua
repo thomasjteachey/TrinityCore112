@@ -4,7 +4,10 @@
 -- (BattlegroundVHR::SendRuneFeed) tells the party where they are and how long is
 -- left whenever that changes, on the CCGAME addon whisper:
 --
---    VHRUNE:<ms left>;<x>,<y>,<z>;<x>,<y>,<z>...      "VHRUNE:0" = none left
+--    VHRUNE:<ms left>;<x>,<y>,<z>,<entry>;...         "VHRUNE:0" = none left
+--
+-- (entry, the rune's gameobject, names it over the bar; a server too old to
+-- send it gets a bar with no name)
 --
 -- and the bars are placed with the client DLL - CenturionUnitBar(0, x, y, z)
 -- projects a world point to the screen and says how big a yard is there. With no
@@ -15,6 +18,15 @@ local ABOVE = 2.2;            -- yards above the rune's base the bar hangs
 local WHITE = "Interface\\Buttons\\WHITE8X8";
 
 local runes, expires, total = {}, 0, 60;
+
+-- What each rune is called over its bar, in its crystal's colour.
+local NAMES = {
+	[179905] = { "Berserking",        1.00, 0.55, 0.20 },
+	[300500] = { "Recharge",          1.00, 0.30, 0.30 },
+	[300501] = { "Glacial Stasis",    0.45, 0.75, 1.00 },
+	[300502] = { "Volatile Core",     1.00, 0.85, 0.25 },
+	[300503] = { "Bright Reflection", 0.45, 1.00, 0.45 },
+};
 
 local layer = CreateFrame("Frame", "CENTURION_VioletHoldRunes", WorldFrame);
 layer:SetAllPoints(WorldFrame);
@@ -35,7 +47,9 @@ local function Bar(i)
 		bar.fill:SetPoint("TOPLEFT", bar, "TOPLEFT", 1, -1);
 		bar.fill:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", 1, 1);
 		bar.text = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall");
-		bar.text:SetPoint("BOTTOM", bar, "TOP", 0, 1);
+		bar.text:SetPoint("LEFT", bar, "RIGHT", 3, 0);
+		bar.name = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall");
+		bar.name:SetPoint("BOTTOM", bar, "TOP", 0, 2);
 		pool[i] = bar;
 	end
 	return bar;
@@ -68,6 +82,13 @@ local function Draw()
 			bar.fill:SetWidth(math.max((w - 2) * share, 0.01));
 			bar.fill:SetVertexColor(1 - share, 0.35 + share * 0.5, 0.15);
 			bar.text:SetText(math.ceil(left));
+			local named = NAMES[rune.entry];
+			if ( named ) then
+				bar.name:SetText(named[1]);
+				bar.name:SetTextColor(named[2], named[3], named[4]);
+			else
+				bar.name:SetText("");
+			end
 			bar:ClearAllPoints();
 			bar:SetPoint("CENTER", WorldFrame, "BOTTOMLEFT", fx * width, fy * height);
 			bar:Show();
@@ -94,8 +115,11 @@ events:SetScript("OnEvent", function(self, event, prefix, message)
 		return;
 	end
 	runes = {};
-	for x, y, z in string.gmatch(list, ";(%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+)") do
-		runes[#runes + 1] = { x = tonumber(x), y = tonumber(y), z = tonumber(z) };
+	for item in string.gmatch(list, ";([^;]+)") do
+		local x, y, z, entry = string.match(item, "^(%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+),?(%d*)$");
+		if ( x ) then
+			runes[#runes + 1] = { x = tonumber(x), y = tonumber(y), z = tonumber(z), entry = tonumber(entry) };
+		end
 	end
 	local left = tonumber(ms) / 1000;
 	-- A pickup resends what is left, not a fresh minute; the bar keeps its scale.
