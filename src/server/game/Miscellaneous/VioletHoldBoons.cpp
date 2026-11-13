@@ -134,7 +134,10 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Abundance,    SPELL_BOON_ABUNDANCE,    1,   3, MASK_ALL,      3, "Boon of Abundance",    "extra rune after every wave from now on (run-wide)", "" },
     // The rarest roll in the pool, and only ever offered to a party of two
     // or more (CanTake).
-    { Boon::Communion,    SPELL_BOON_COMMUNION,    1,   1, MASK_ALL,      1, "Boon of Communion",    "every rune you take is given to your whole party too (unique)", "" }
+    { Boon::Communion,    SPELL_BOON_COMMUNION,    1,   1, MASK_ALL,      1, "Boon of Communion",    "every rune you take is given to your whole party too (unique)", "" },
+    // Rarer still (weight 0 = VERY_RARE_ROLL_QUARTERS, a quarter of
+    // Communion's odds), and only one member of a run may ever take it.
+    { Boon::Multitudes,   SPELL_BOON_MULTITUDES,   1,   1, MASK_ALL,      0, "Boon of Multitudes",   "every killing blow you land calls a copy of you at 25% strength for the rest of the wave (one per run)", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -668,6 +671,7 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_HEALTHSTONE
         || spellId == SPELL_BOON_ABUNDANCE
         || spellId == SPELL_BOON_COMMUNION
+        || spellId == SPELL_BOON_MULTITUDES
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
 }
@@ -675,6 +679,16 @@ bool IsBoonSpell(uint32 spellId)
 bool SharesRunes(Player const* player)
 {
     return player && player->HasAura(SPELL_BOON_COMMUNION);
+}
+
+bool IsRunUnique(Boon boon)
+{
+    return boon == Boon::Multitudes;
+}
+
+bool CallsMultitudes(Player const* player)
+{
+    return player && player->HasAura(SPELL_BOON_MULTITUDES);
 }
 
 bool Offer::Decode(uint32 code, Offer& out)
@@ -807,6 +821,17 @@ PickResult CanTake(Player const* player, Offer offer)
         // public).
         if (RunHeld(player, info.boon) >= 0 && !GetRunOf(player))
             return PickResult::Failed;
+
+        // One per run: somebody already took it, so nobody else can - and
+        // with nobody able to, it neither rolls nor stays on a board.
+        if (IsRunUnique(info.boon))
+        {
+            BattlegroundVHR const* run = GetRunOf(player);
+            if (!run)
+                return PickResult::Failed;
+            if (run->IsRunUniqueBoonClaimed(offer.index))
+                return PickResult::AtCap;
+        }
 
         return GetStacks(player, info.boon) < info.maxStacks ? PickResult::Ok : PickResult::AtCap;
     }
@@ -950,13 +975,19 @@ bool SuitsSpec(Player const* player, Offer const& offer)
 
 }
 
+// In quarters (ROLL_QUARTERS_PER_WEIGHT), so the very-rare tier can sit below
+// the rarest whole weight. Scaling everything by the same factor leaves every
+// other offer's odds exactly where they were.
 uint32 GetOfferWeight(Offer const& offer)
 {
     switch (offer.kind)
     {
-        case Offer::Kind::Boon:       return offer.index < uint8(Boon::Max) ? kBoons[offer.index].weight : 0;
-        case Offer::Kind::ClassSpell: return offer.index < CLASS_SPELL_COUNT ? CLASS_SPELL_WEIGHT : 0;
-        case Offer::Kind::Item:       return offer.index < ITEM_GRANT_COUNT ? kItemGrants[offer.index].weight : 0;
+        case Offer::Kind::Boon:
+            if (offer.index >= uint8(Boon::Max))
+                return 0;
+            return kBoons[offer.index].weight ? kBoons[offer.index].weight * ROLL_QUARTERS_PER_WEIGHT : VERY_RARE_ROLL_QUARTERS;
+        case Offer::Kind::ClassSpell: return offer.index < CLASS_SPELL_COUNT ? CLASS_SPELL_WEIGHT * ROLL_QUARTERS_PER_WEIGHT : 0;
+        case Offer::Kind::Item:       return offer.index < ITEM_GRANT_COUNT ? kItemGrants[offer.index].weight * ROLL_QUARTERS_PER_WEIGHT : 0;
     }
     return 0;
 }
@@ -1127,6 +1158,11 @@ PickResult Take(Player* player, Offer offer)
     }
     else
         aura->ModStackAmount(info.grantStacks);
+
+    // Taken for the whole run, whatever becomes of the aura from here.
+    if (IsRunUnique(info.boon))
+        if (BattlegroundVHR* run = GetRunOf(player))
+            run->ClaimRunUniqueBoon(offer.index);
 
     // Boons whose effect is not the aura itself.
     switch (info.boon)
@@ -1566,6 +1602,7 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Hoarder:
         case Boon::Overkill:
         case Boon::Communion:
+        case Boon::Multitudes:
             return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:
             return Trinity::StringFormat("{}: +1 {}{}", info.name, info.summary, blocked);
@@ -1844,6 +1881,9 @@ void CopyBoonsTo(Player const* source, Player* target)
             case Boon::Fellowship:
             case Boon::Abundance:
             case Boon::Menagerie:
+            // Calls copies onto the PARTY's side (BattlegroundVHR::
+            // RequestReflection refuses anyone else) - nothing on a clone.
+            case Boon::Multitudes:
             // The clone is built at the source's CURRENT level, borrowed
             // levels included, so the marker has nothing left to mark.
             case Boon::Level:

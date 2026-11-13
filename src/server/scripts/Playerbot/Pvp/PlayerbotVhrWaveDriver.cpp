@@ -384,15 +384,27 @@ void FulfilAllyRequests(BattlegroundVHR* bg)
 
         // A Bright Reflection is a copy of the one who took the rune, never a
         // bot. Its source gone (left the run), the request goes with it.
+        // Boon of Multitudes' "Lesser" copies come the same way, Diminished.
         if (request.source)
         {
             Player* self = ObjectAccessor::FindPlayer(request.source);
             Player* reflection = self && self->IsInWorld()
-                ? SeatClone(bg, self, bg->GetHumanTeam(), request.where, request.where, "Bright ")
+                ? SeatClone(bg, self, bg->GetHumanTeam(), request.where, request.where, request.namePrefix)
                 : nullptr;
             if (!reflection)
-                TC_LOG_WARN("playerbots", "PlayerbotVhrWaveDriver: could not field a Bright Reflection for instance {}.",
-                    instanceId);
+                TC_LOG_WARN("playerbots", "PlayerbotVhrWaveDriver: could not field a {}reflection for instance {}.",
+                    request.namePrefix, instanceId);
+            else if (request.diminishedStacks)
+            {
+                // The wave's partial clones' handicap: stacks are the percent
+                // of power removed. Applied, not cast, for the reason
+                // DressWaveClone gives.
+                if (Aura* diminished = reflection->AddAura(BG_VHR_SPELL_DIMINISHED, reflection))
+                    diminished->SetStackAmount(request.diminishedStacks);
+                else
+                    TC_LOG_WARN("playerbots", "PlayerbotVhrWaveDriver: could not apply Diminished to {} in instance {}.",
+                        reflection->GetName(), instanceId);
+            }
             bg->NotifyAllySpawned(request.id, reflection ? reflection->GetGUID() : ObjectGuid::Empty);
             continue;
         }

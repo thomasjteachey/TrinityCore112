@@ -125,6 +125,9 @@ namespace VioletHoldBoons
         Abundance,      // RUN-WIDE: an extra rune after every wave, up to 3
         Communion,      // rare, unique: a rune you take is given to the whole party too
 
+        // 2026-11-13, later.
+        Multitudes,     // very rare, one per RUN: every killing blow calls a 25% copy of you for the wave
+
         Max
     };
 
@@ -233,6 +236,9 @@ namespace VioletHoldBoons
         // Boon of Communion, Hoarder's shape (unique). BattlegroundVHR::
         // OnRuneTaken does the sharing.
         SPELL_BOON_COMMUNION    = 94316,
+        // Boon of Multitudes, the same record-aura shape. BattlegroundVHR::
+        // HandleKillPlayer calls the copies.
+        SPELL_BOON_MULTITUDES   = 94317,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -280,7 +286,9 @@ namespace VioletHoldBoons
         uint32 classMask;
         // Relative roll weight in the broker's pool (see RollOffers). Class
         // spells use CLASS_SPELL_WEIGHT, items their own; a plain useful boon
-        // sits around 8-10, the run-defining ones lower.
+        // sits around 8-10, the run-defining ones lower. 0 is the very-rare
+        // tier: a quarter of a 1 (VERY_RARE_ROLL_QUARTERS), shown on a
+        // legendary card frame.
         uint8 weight;
         char const* name;
         char const* summary;    // one line for the gossip menu, without numbers
@@ -396,6 +404,26 @@ namespace VioletHoldBoons
     // Boon of Communion: whether a rune this player takes goes to the whole
     // party as well.
     TC_GAME_API bool SharesRunes(Player const* player);
+
+    // Roll weights are counted in quarters, so a boon can be rarer than the
+    // rarest whole weight (1 = 4 quarters). A table weight of 0 rolls at this.
+    constexpr uint32 ROLL_QUARTERS_PER_WEIGHT = 4;
+    constexpr uint32 VERY_RARE_ROLL_QUARTERS = 1;
+
+    // Boons only one member of a run may ever hold: once taken, no broker in
+    // that run offers it again, even if its holder leaves.
+    TC_GAME_API bool IsRunUnique(Boon boon);
+
+    // Boon of Multitudes: each killing blow its holder lands on a wave clone
+    // calls a copy of the holder for the rest of the wave, at 25% power
+    // (MULTITUDES_DIMINISHED_STACKS of Diminished: 75% less damage and
+    // healing done, 75% more damage taken, a quarter of the size). The last
+    // kill of a wave calls nothing - the wave is over. At most
+    // MULTITUDES_MAX_PER_WAVE copies a wave, so a holder clearing a 40-clone
+    // wave alone does not seat 39 extra bots on the realm.
+    TC_GAME_API bool CallsMultitudes(Player const* player);
+    constexpr uint8 MULTITUDES_DIMINISHED_STACKS = 75;
+    constexpr uint8 MULTITUDES_MAX_PER_WAVE = 20;
 
     // The aura a boon puts on THIS player - the same for everyone except the
     // per-class spellmod variants (Alacrity).

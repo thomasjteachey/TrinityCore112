@@ -146,6 +146,7 @@ bool IsRunWideBoon(Boon boon)
 
 // The card's frame colour, read off the roll weight so a card that looks rare
 // is rare in the pool: 1 common, 2 uncommon, 3 rare, 4 class spell, 5 legendary.
+// A very-rare boon (weight 0, rarer than any legendary) wears the legendary frame.
 uint8 RarityTier(Offer offer)
 {
     if (offer.kind == Offer::Kind::Item)
@@ -153,6 +154,8 @@ uint8 RarityTier(Offer offer)
     if (offer.kind == Offer::Kind::ClassSpell)
         return 4;
     uint8 const weight = GetBoon(Boon(offer.index)).weight;
+    if (!weight)
+        return 5;
     return weight >= 8 ? 1 : weight >= 5 ? 2 : 3;
 }
 

@@ -302,6 +302,8 @@ void BattlegroundVHR::Reset()
     _allies.clear();
     _fleetingAllies.clear();
     _alliesToDismiss.clear();
+    _claimedRunUniqueBoons = 0;
+    _multitudesThisWave = 0;
     _menagerie.clear();
     _waveCloneSources.clear();
     _championGuid.Clear();
@@ -1174,6 +1176,7 @@ void BattlegroundVHR::CompleteWave()
     // clawed through a wave should be whole again when that happens.
     // Reflections last the wave they joined; they go before anyone is raised.
     DismissFleetingAllies();
+    _multitudesThisWave = 0;
     RestorePartyAfterWave();
     uint32 const brokers = SpawnWaveRewardBuffs();
 
@@ -1725,10 +1728,10 @@ void BattlegroundVHR::RequestAlly(Player const* requester)
     _allyRetryMs = 0;
 }
 
-void BattlegroundVHR::RequestReflection(Player const* requester)
+bool BattlegroundVHR::RequestReflection(Player const* requester, std::string const& namePrefix, uint8 diminishedStacks)
 {
     if (!requester || requester->GetBGTeam() != _humanTeam || IsAlly(requester->GetGUID()))
-        return;
+        return false;
 
     VhrAllyRequest request;
     request.id = ++_nextAllyRequestId;
@@ -1737,9 +1740,12 @@ void BattlegroundVHR::RequestReflection(Player const* requester)
     request.partyMinLevel = request.partyMaxLevel = requester->GetLevel();
     request.source = requester->GetGUID();
     request.fleeting = true;
+    request.namePrefix = namePrefix;
+    request.diminishedStacks = diminishedStacks;
 
     _allyRequests.push_back(request);
     _allyRetryMs = 0;
+    return true;
 }
 
 uint32 BattlegroundVHR::GetPendingAllyRequestCount() const
@@ -2088,6 +2094,19 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
 
         if (_waveState == WaveState::Fighting)
             ReleaseNextHeldClone(VhrCloneRelease::OnEnemyDeath);
+
+        // Boon of Multitudes: the holder's killing blow (their own, or their
+        // pet's - Unit::Kill credits the owner) calls a copy of them at 25%
+        // for the rest of the wave. Asked before CheckRunState below, and
+        // only while something is still standing: the wave's last kill
+        // would only seat a copy for DismissFleetingAllies to take straight
+        // back down. RequestReflection refuses clones and allies, so a copy
+        // never calls copies of its own.
+        if (_waveState == WaveState::Fighting && killer && killer != victim && CountAliveEnemies()
+            && _multitudesThisWave < VioletHoldBoons::MULTITUDES_MAX_PER_WAVE
+            && VioletHoldBoons::CallsMultitudes(killer)
+            && RequestReflection(killer, "Lesser ", VioletHoldBoons::MULTITUDES_DIMINISHED_STACKS))
+            ++_multitudesThisWave;
     }
 
     UpdateScoreWorldStates();

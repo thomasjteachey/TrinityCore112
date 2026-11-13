@@ -451,6 +451,11 @@ struct VhrAllyRequest
     // the run. Fleeting allies never count toward Fellowship's stacks.
     ObjectGuid source;
     bool fleeting = false;
+    // A reflection's name over its head is this + the source's name.
+    std::string namePrefix = "Bright ";
+    // Diminished stacks the copy is seated with (0 = full power). Boon of
+    // Multitudes' copies fight at 25%.
+    uint8 diminishedStacks = 0;
 };
 
 struct BattlegroundVHRScore final : public BattlegroundScore
@@ -592,8 +597,15 @@ public:
     // is how the driver spaces those retries.
     void RequestAlly(Player const* requester);
     // Bright Reflection rune: a copy of the taker fights beside them until
-    // the wave falls (VhrAllyRequest::fleeting).
-    void RequestReflection(Player const* requester);
+    // the wave falls (VhrAllyRequest::fleeting). Boon of Multitudes asks for
+    // the same thing, smaller and under another name.
+    // False when the requester cannot have one (not the party, or an ally).
+    bool RequestReflection(Player const* requester, std::string const& namePrefix = "Bright ", uint8 diminishedStacks = 0);
+
+    // Boons only one member of a run may ever take (VioletHoldBoons::
+    // IsRunUnique), by Boon index. Claimed when taken; never released.
+    bool IsRunUniqueBoonClaimed(uint8 boonIndex) const { return boonIndex < 64 && (_claimedRunUniqueBoons & (uint64(1) << boonIndex)); }
+    void ClaimRunUniqueBoon(uint8 boonIndex) { if (boonIndex < 64) _claimedRunUniqueBoons |= uint64(1) << boonIndex; }
     std::vector<VhrAllyRequest> const& GetPendingAllyRequests() const { return _allyRequests; }
     // Fellowship's own requests and allies only - the reflections are not its.
     uint32 GetPendingAllyRequestCount() const;
@@ -824,6 +836,10 @@ private:
     // take them down.
     GuidSet _fleetingAllies;
     std::vector<ObjectGuid> _alliesToDismiss;
+    // Run-unique boons already taken (bit = Boon index).
+    uint64 _claimedRunUniqueBoons = 0;
+    // Boon of Multitudes copies called this wave (MULTITUDES_MAX_PER_WAVE).
+    uint32 _multitudesThisWave = 0;
     // Menagerie guardians alive for the current wave.
     std::vector<ObjectGuid> _menagerie;
     // MenagerieTrace: the last line logged per guardian, and its sampling clock.
