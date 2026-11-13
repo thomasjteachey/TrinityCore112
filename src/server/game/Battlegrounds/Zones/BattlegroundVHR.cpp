@@ -305,6 +305,7 @@ void BattlegroundVHR::Reset()
     _waveCloneSources.clear();
     _championGuid.Clear();
     _runeFeedMask = 0;
+    _runeFeedLocked = false;
     _bombFeedTimerMs = 0;
     _bombFeedSent = false;
 }
@@ -488,6 +489,9 @@ void BattlegroundVHR::BeginWave()
     _waveState = WaveState::AwaitingSpawn;
     _prepTimerMs = GetPrepWindowMs();
     _lastCountdownSecond = 0;
+
+    // The runes the last wave dropped wait for this one: their labels dim.
+    SendRuneFeedIfChanged();
 
     UpdateScoreWorldStates();
 }
@@ -1077,12 +1081,8 @@ void BattlegroundVHR::OpenWaveCell()
     // on their reflections too, as of this moment (when copies inherit boons).
     RefreshWaveBoonCopies();
 
-    // The brokers trade from now on. Any hand of cards already up was dealt
-    // locked; this lights it.
-    for (auto const& itr : GetPlayers())
-        if (itr.second.Team == _humanTeam)
-            if (Player* member = ObjectAccessor::FindPlayer(itr.first))
-                SendSquadFeedLine(member, "VHBOON:OPEN:");
+    // The runes can be taken from now on: their labels light up.
+    SendRuneFeedIfChanged();
 
     // The Menagerie walks out with the wave: last wave's guardians go, this
     // wave's arrive beside their owners.
@@ -1454,8 +1454,11 @@ std::string BattlegroundVHR::BuildRuneFeed() const
     if (!mask)
         return "VHRUNE:0";
 
+    // The number was the milliseconds runes had left when they still expired;
+    // now it is 1 while they cannot be taken yet (the wave is not out), 0
+    // once they can.
     Map* map = FindBgMap();
-    std::string line = "VHRUNE:0";
+    std::string line = IsWaveLive() ? "VHRUNE:0" : "VHRUNE:1";
     for (uint32 i = 0; i < BG_VHR_RUNE_SLOTS; ++i)
     {
         if (!(mask & (1u << i)))
@@ -1510,10 +1513,12 @@ void BattlegroundVHR::SendBombFeed()
 void BattlegroundVHR::SendRuneFeedIfChanged()
 {
     uint8 const mask = GetStandingRuneMask();
-    if (mask == _runeFeedMask)
+    bool const locked = !IsWaveLive();
+    if (mask == _runeFeedMask && (!mask || locked == _runeFeedLocked))
         return;
 
     _runeFeedMask = mask;
+    _runeFeedLocked = locked;
     SendRuneFeed();
 }
 

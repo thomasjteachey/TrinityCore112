@@ -548,8 +548,9 @@ public:
     uint32 GetHumanTeam() const { return _humanTeam; }
     uint32 GetWaveNumber() const { return _waveNumber; }
     bool IsWavePreparing() const { return _waveState == WaveState::Preparing; }
-    // Cells open and the wave out: the brokers only trade now
-    // (violet_hold_boons.cpp), not in the lull between waves.
+    // Cells open and the wave out. The runes can only be taken now
+    // (GameObject::Update's battleground trap branch), not in the lull
+    // between waves.
     bool IsWaveLive() const { return _waveState == WaveState::Fighting; }
 
     // --- run-wide boons ----------------------------------------------------
@@ -805,6 +806,7 @@ private:
     ObjectGuid _championGuid;
     // Which rune slots the last rune feed reported standing.
     uint8 _runeFeedMask = 0;
+    bool _runeFeedLocked = false;      // what the last feed said about IsWaveLive
     // The bomb feed's clock, and whether its last line named anybody.
     uint32 _bombFeedTimerMs = 0;
     bool _bombFeedSent = false;

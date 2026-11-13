@@ -107,8 +107,6 @@ BattlegroundVHR* RunOfPlayer(Player const* player)
 //   VHBOON:LOOK:<broker>^<name>^<code>                   a party member is looking at a card
 //   VHBOON:TAKEN:<broker>^<name>^<code>                  the deal is over
 //   VHBOON:GONE:<broker>                                 the broker left with nothing taken
-//   VHBOON:WAIT:<broker>                                 (before SHOW) dealt before the wave is out: locked
-//   VHBOON:OPEN:                                         the wave is out: every broker trades now
 // Addon -> server, CCGAMEREQ whispers to self:
 //   VHBOON:PICK:<broker>:<code>
 //   VHBOON:LOOK:<broker>:<code>
@@ -395,15 +393,6 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         if (std::find(offers.begin(), offers.end(), offer) == offers.end())
             return;
 
-        // Boons are bought under fire: nothing changes hands until the wave
-        // is out (owner 2026-11-13). The cards show it; this enforces it.
-        if (!run->IsWaveLive())
-        {
-            if (WorldSession* session = player->GetSession())
-                session->SendNotification("The broker trades once the wave is out.");
-            return;
-        }
-
         PickResult const result = Take(player, offer);
         if (result != PickResult::Ok)
         {
@@ -479,10 +468,6 @@ private:
         }
 
         SendDeck(viewer, tag);
-        // Dealt before the wave is out: the cards come up locked, and
-        // VHBOON:OPEN (BattlegroundVHR::OpenWaveCell) lights them.
-        if (!run->IsWaveLive())
-            Battleground::SendSquadFeedLine(viewer, "VHBOON:WAIT:" + tag);
         Battleground::SendSquadFeedLine(viewer, "VHBOON:SHOW:" + tag);
 
         // Where everyone else's cursor already is.

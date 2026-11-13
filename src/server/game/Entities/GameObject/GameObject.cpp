@@ -831,6 +831,19 @@ void GameObject::Update(uint32 diff)
                             break;
                         }
 
+                        // A Violet Hold rune waits for the wave: dropped as one
+                        // falls, it cannot be taken until the next is out
+                        // (owner 2026-11-13). Battleground runes are the traps
+                        // with data2 == 0 && data5 == 3, as below.
+                        if (!goInfo->trap.diameter && goInfo->trap.cooldown == 3)
+                            if (Player* targetPlayer = target->ToPlayer())
+                                if (Battleground* bg = targetPlayer->GetBattleground(); bg && bg->GetTypeID() == BATTLEGROUND_VHR &&
+                                    !static_cast<BattlegroundVHR*>(bg)->IsWaveLive())
+                                {
+                                    SetLootState(GO_READY);
+                                    break;
+                                }
+
                         // Some traps do not have a spell but should be triggered
                         // Trap spells should still activate even if their owner is in a state
                         // that normally prevents casting (for example Feign Death).  Ignore

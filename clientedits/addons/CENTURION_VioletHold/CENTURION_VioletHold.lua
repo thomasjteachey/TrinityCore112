@@ -6,10 +6,12 @@
 -- (BattlegroundVHR::SendRuneFeed) tells the party where they are whenever that
 -- changes, on the CCGAME addon whisper:
 --
---    VHRUNE:0;<x>,<y>,<z>,<entry>;...         "VHRUNE:0" alone = none left
+--    VHRUNE:<locked>;<x>,<y>,<z>,<entry>;...  "VHRUNE:0" alone = none left
 --
--- (the number was the milliseconds left when runes expired; they no longer do,
--- and it is ignored), and the labels are placed with the client DLL -
+-- <locked> is 1 while the runes cannot be taken yet - they wait for the next
+-- wave to be out - and their names are faded and grey until then; 0 once they
+-- can (it was the milliseconds left back when runes expired, and any other
+-- number reads as taken-able). The labels are placed with the client DLL -
 -- CenturionUnitBar(0, x, y, z) projects a world point to the screen and says how
 -- big a yard is there. With no DLL there are no labels. Nothing is sent outside
 -- the Hold, so nothing shows there.
@@ -19,6 +21,7 @@ local ABOVE = 2.2;            -- yards above the rune's base the name hangs
 local WHITE = "Interface\\Buttons\\WHITE8X8";
 
 local runes = {};
+local runesLocked = false;    -- the wave is not out: names faded and grey
 local bombs = {};             -- carriers of a Volatile Core: { guid, x, y, z }
 
 -- What each rune does, said over it in its crystal's colour.
@@ -142,7 +145,13 @@ local function Draw()
 			used = used + 1;
 			local label = Label(used);
 			label.name:SetText(named[1]);
-			label.name:SetTextColor(named[2], named[3], named[4]);
+			if ( runesLocked ) then
+				label.name:SetTextColor(0.5, 0.5, 0.5);
+				label:SetAlpha(0.5);
+			else
+				label.name:SetTextColor(named[2], named[3], named[4]);
+				label:SetAlpha(1);
+			end
 			label:ClearAllPoints();
 			label:SetPoint("CENTER", WorldFrame, "BOTTOMLEFT", fx * width, fy * height);
 			label:Show();
@@ -161,6 +170,7 @@ events:RegisterEvent("PLAYER_ENTERING_WORLD");
 events:SetScript("OnEvent", function(self, event, prefix, message)
 	if ( event == "PLAYER_ENTERING_WORLD" ) then
 		runes = {};
+		runesLocked = false;
 		bombs = {};
 		return;
 	end
@@ -178,10 +188,11 @@ events:SetScript("OnEvent", function(self, event, prefix, message)
 		end
 		return;
 	end
-	local list = string.match(message, "^VHRUNE:%d+(.*)$");
+	local state, list = string.match(message, "^VHRUNE:(%d+)(.*)$");
 	if ( not list ) then
 		return;
 	end
+	runesLocked = (state == "1");
 	runes = {};
 	for item in string.gmatch(list, ";([^;]+)") do
 		local x, y, z, entry = string.match(item, "^(%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+),?(%d*)$");

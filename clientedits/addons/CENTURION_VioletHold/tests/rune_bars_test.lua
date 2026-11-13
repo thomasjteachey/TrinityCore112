@@ -41,6 +41,7 @@ local function Frame()
 	function f:SetPoint(a, rel, b, x, y) self.points = { x, y } end
 	function f:Show() self.shown = true end
 	function f:Hide() self.shown = false end
+	function f:SetAlpha(a) self.alpha = a end
 	function f:GetWidth() return 1000 end
 	function f:GetHeight() return 500 end
 	return f;
@@ -131,6 +132,18 @@ check(projected[1] and math.abs(projected[1][1] - 120) < 0.01 and math.abs(proje
 fire("VHBOMB");
 draw();
 check(ringDots() == 0, "a bare VHBOMB clears the carriers' rings");
+
+-- dropped as a wave falls, the runes wait for the next: faded, grey names
+fire("VHRUNE:1;1880.5,800.2,38.4,300501;1900.0,780.0,38.4,300500");
+draw();
+check(labels() == 2, "locked runes are still named");
+check(frames[3].alpha == 0.5 and frames[3].name.color[1] == 0.5 and frames[3].name.color[3] == 0.5,
+	"a locked rune's name is faded and grey");
+check(ringDots() == 80, "a locked Glacial Stasis rune still shows its reach");
+fire("VHRUNE:0;1880.5,800.2,38.4,300501;1900.0,780.0,38.4,300500");
+draw();
+check(frames[3].alpha == 1 and frames[3].name.color[3] == 1.00, "the wave out: names back in colour");
+fire("VHRUNE:0");
 
 -- a server still sending a lifetime: the number is ignored, the runes shown
 fire("VHRUNE:60000;1.0,2.0,3.0,179905");
