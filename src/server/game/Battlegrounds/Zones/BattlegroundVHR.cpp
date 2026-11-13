@@ -1510,8 +1510,32 @@ void BattlegroundVHR::SendBombFeed()
             SendSquadFeedLine(member, line);
 }
 
+void BattlegroundVHR::UpdateRuneDisplays()
+{
+    Map* map = FindBgMap();
+    if (!map)
+        return;
+
+    bool const locked = !IsWaveLive();
+    for (uint32 i = 0; i < BG_VHR_RUNE_SLOTS; ++i)
+    {
+        GameObject* rune = map->GetGameObject(BgObjects[BG_VHR_OBJECT_BUFF_1 + i]);
+        if (!rune)
+            continue;
+
+        uint32 const wanted = !locked ? rune->GetGOInfo()->displayId
+            : rune->GetEntry() == BG_OBJECTID_BERSERKERBUFF_ENTRY ? uint32(BG_VHR_DISPLAY_BERSERKING_RUNE_LOCKED)
+            : uint32(BG_VHR_DISPLAY_CRYSTAL_RUNE_LOCKED);
+        if (rune->GetDisplayId() != wanted)
+            rune->SetDisplayId(wanted);
+    }
+}
+
 void BattlegroundVHR::SendRuneFeedIfChanged()
 {
+    // The runes' own look follows the lock the feed reports.
+    UpdateRuneDisplays();
+
     uint8 const mask = GetStandingRuneMask();
     bool const locked = !IsWaveLive();
     if (mask == _runeFeedMask && (!mask || locked == _runeFeedLocked))

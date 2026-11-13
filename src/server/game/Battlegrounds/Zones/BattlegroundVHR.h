@@ -314,6 +314,13 @@ enum BG_VHR_Constants
     BG_VHR_GO_VOLATILE_CORE_BUFF     = 300502,
     BG_VHR_GO_BRIGHT_REFLECTION_BUFF = 300503,
 
+    // What a rune looks like while it waits for the wave (UpdateRuneDisplays):
+    // grey, see-through copies of the rune models (tools/violet_hold/
+    // make_dim_rune.py), in GameObjectDisplayInfo and patch-enUS-A. Every
+    // crystal rune shares the one crystal; Berserking keeps its own shape.
+    BG_VHR_DISPLAY_CRYSTAL_RUNE_LOCKED    = 11204,
+    BG_VHR_DISPLAY_BERSERKING_RUNE_LOCKED = 11205,
+
     // Both end-of-run payouts share one shape: the matching arena-win payout,
     // times the wave the run ended on, divided by this. Honor additionally
     // compounds BG_VHR_HONOR_COMPOUND_PERCENT per wave (see
@@ -711,6 +718,9 @@ private:
     std::string BuildRuneFeed() const;
     void SendRuneFeed(Player* player = nullptr);
     void SendRuneFeedIfChanged();
+    // Every standing rune in its locked (grey, see-through) or its own look,
+    // by IsWaveLive. Only touches a rune whose look is wrong.
+    void UpdateRuneDisplays();
     // Who is carrying a Volatile Core, and where, so the addon can draw the
     // blast's reach round them: "VHBOMB;<guid>,<x>,<y>,<z>;..." to the party
     // every BG_VHR_BOMB_FEED_INTERVAL while anyone is, then a bare "VHBOMB"
