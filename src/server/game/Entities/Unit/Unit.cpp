@@ -12666,10 +12666,13 @@ void Unit::AddComboPoints(Unit* target, int8 count)
 
     if (target && target != m_comboTarget)
     {
+        // Unfinished Business: the points are the rogue's, so building on a new
+        // target adds to them instead of starting over.
+        bool const keepPoints = HasOwnedComboPoints();
         if (m_comboTarget)
             m_comboTarget->RemoveComboPointHolder(this);
         m_comboTarget = target;
-        m_comboPoints = count;
+        m_comboPoints = keepPoints ? std::max<int8>(std::min<int8>(m_comboPoints + count, 5), 0) : count;
         target->AddComboPointHolder(this);
     }
     else
@@ -12733,10 +12736,45 @@ void Unit::SendComboPoints()
     }
 }
 
+// Rogue Assassination talent "Unfinished Business": combo points are the rogue's own.
+static constexpr uint32 SPELL_ROGUE_UNFINISHED_BUSINESS = 81500;
+
+bool Unit::HasOwnedComboPoints() const
+{
+    return GetTypeId() == TYPEID_PLAYER && HasAura(SPELL_ROGUE_UNFINISHED_BUSINESS);
+}
+
+void Unit::MoveComboPoints(Unit* target)
+{
+    if (!target || target == m_comboTarget || !m_comboPoints)
+        return;
+
+    if (m_comboTarget)
+        m_comboTarget->RemoveComboPointHolder(this);
+    m_comboTarget = target;
+    target->AddComboPointHolder(this);
+    SendComboPoints();
+}
+
 void Unit::ClearComboPointHolders()
 {
     while (!m_ComboPointHolders.empty())
-        (*m_ComboPointHolders.begin())->ClearComboPoints(); // this also removes it from m_comboPointHolders
+    {
+        Unit* holder = *m_ComboPointHolders.begin();
+        // Every exit below must take the holder out of the set, or this spins.
+        if (holder->GetComboTarget() != this)
+        {
+            m_ComboPointHolders.erase(holder);
+            continue;
+        }
+
+        // Owned points (Unfinished Business) outlive the unit they were on: they
+        // go back onto the rogue, ready for the next target.
+        if (holder != this && holder->IsInWorld() && holder->IsAlive() && holder->HasOwnedComboPoints() && holder->GetComboPoints())
+            holder->MoveComboPoints(holder);
+        else
+            holder->ClearComboPoints();                     // this also removes it from m_comboPointHolders
+    }
 }
 
 void Unit::ClearAllReactives()

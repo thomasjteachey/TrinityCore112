@@ -1733,8 +1733,18 @@ class TC_GAME_API Unit : public WorldObject
 
         ///-----------Combo point system-------------------
         // This unit having CP on other units
-        uint8 GetComboPoints(Unit const* who = nullptr) const { return (who && m_comboTarget != who) ? 0 : m_comboPoints; }
-        uint8 GetComboPoints(ObjectGuid const& guid) const { return (m_comboTarget && m_comboTarget->GetGUID() == guid) ? m_comboPoints : 0; }
+        // A holder of Unfinished Business (HasOwnedComboPoints) owns its points: any
+        // target asks for them gets them, not just the unit they were built on.
+        uint8 GetComboPoints(Unit const* who = nullptr) const { return (who && m_comboTarget != who && !HasOwnedComboPoints()) ? 0 : m_comboPoints; }
+        uint8 GetComboPoints(ObjectGuid const& guid) const { return (m_comboTarget && (m_comboTarget->GetGUID() == guid || HasOwnedComboPoints())) ? m_comboPoints : 0; }
+        // Assassination talent Unfinished Business: combo points belong to the
+        // rogue, not the target. They follow the rogue's selection (the client
+        // only lets a finisher go at the unit it was told holds the points) and
+        // park on the rogue itself while nothing hostile is selected or after the
+        // unit they were on dies.
+        bool HasOwnedComboPoints() const;
+        // Re-point existing combo points at another unit, keeping the count.
+        void MoveComboPoints(Unit* target);
         Unit* GetComboTarget() const { return m_comboTarget; }
         ObjectGuid GetComboTargetGUID() const { return m_comboTarget ? m_comboTarget->GetGUID() : ObjectGuid::Empty; }
         void AddComboPoints(Unit* target, int8 count);

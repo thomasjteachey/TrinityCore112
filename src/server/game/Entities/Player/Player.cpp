@@ -26587,6 +26587,36 @@ void Player::ResetSpells(bool myClassOnly)
     LearnQuestRewardedSpells();
 }
 
+void Player::SetSelection(ObjectGuid guid)
+{
+    SetGuidValue(UNIT_FIELD_TARGET, guid);
+    UpdateOwnedComboTarget();
+}
+
+void Player::UpdateOwnedComboTarget()
+{
+    if (!IsInWorld() || !GetComboPoints())
+        return;
+
+    if (!HasOwnedComboPoints())
+    {
+        // The talent went away (reset, spec swap) while the points sat on the
+        // rogue itself: nothing can spend them there.
+        if (GetComboTarget() == this)
+            ClearComboPoints();
+        return;
+    }
+
+    // The client refuses a finisher unless the unit it was last told holds the
+    // points is the one being hit, so the points follow the selection. With
+    // nothing hostile selected they rest on the rogue, which also lets the
+    // player frame read them (GetComboPoints("player", "player")).
+    Unit* holder = ObjectAccessor::GetUnit(*this, GetTarget());
+    if (!holder || holder == this || !holder->IsInWorld() || !holder->IsAlive() || !IsValidAttackTarget(holder))
+        holder = this;
+    MoveComboPoints(holder);
+}
+
 void Player::ResetNonQuestAndMountSpells()
 {
     if (HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS))

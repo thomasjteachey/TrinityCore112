@@ -2434,10 +2434,10 @@ namespace
         TrimOutclassedPoisons(bot);
     }
 
-    // Seal Fate rank 5. Only the highest learned rank of a talent survives in
+    // Seal Fate rank 4 (of 4 since 2026-11-13). Only the highest learned rank of a talent survives in
     // character_spell - lower ranks are superseded away - so simply holding this
-    // spell IS five of five, and there are no talent points to count.
-    constexpr uint32 kSealFateMaxRank = 14195;
+    // spell IS four of four, and there are no talent points to count.
+    constexpr uint32 kSealFateMaxRank = 14194;
 
     // Coat the blades. Instant on the mainhand and Deadly on the offhand is the
     // classic damage pairing, but it only earns its place once Seal Fate is turning
