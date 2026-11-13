@@ -733,6 +733,7 @@ Player::Player(WorldSession* session) : Unit(true)
 
     m_baseSpellPower = 0;
     m_baseFeralAP = 0;
+    m_bearArmsAP = 0.0f;
     m_baseManaRegen = 0;
     m_baseHealthRegen = 0;
     m_spellPenetrationItemMod = 0;
@@ -9656,6 +9657,17 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
     if (attType != MAX_ATTACK)
         _ApplyWeaponDamage(slot, proto, apply);
 
+    // Bear Arms (talent 81505): the main hand's DPS is added as attack power
+    // in feral forms, one for one (owner: 73 DPS = 73 feral attack power).
+    // Kept for every druid; UpdateAttackPowerAndDamage
+    // only adds it while the talent is up. Set on apply/unapply because the
+    // item is still in its slot while its mods come off.
+    if (GetClass() == CLASS_DRUID && slot == EQUIPMENT_SLOT_MAINHAND && proto->Class == ITEM_CLASS_WEAPON)
+    {
+        m_bearArmsAP = apply ? proto->getDPS() : 0.0f;
+        UpdateAttackPowerAndDamage();
+    }
+
     // Druids get feral AP bonus from weapon dps (also use DPS from ScalingStatValue)
     /*
     if (GetClass() == CLASS_DRUID)
@@ -10077,8 +10089,14 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             else if (chance > 100.0f)
                 chance = GetWeaponProcChance();
 
+            // Bear Arms (talent 81505): the weapon's own chance on hit
+            // effects stay live in Bear and Dire Bear Form.
+            bool const bearProcs = (GetShapeshiftForm() == FORM_BEAR || GetShapeshiftForm() == FORM_DIREBEAR)
+                && HasAura(SPELL_DRUID_BEAR_ARMS);
+
             if (roll_chance_f(chance)
-                && GetShapeshiftForm() != FORM_CAT && GetShapeshiftForm() != FORM_BEAR && GetShapeshiftForm() != FORM_DIREBEAR
+                && GetShapeshiftForm() != FORM_CAT
+                && (bearProcs || (GetShapeshiftForm() != FORM_BEAR && GetShapeshiftForm() != FORM_DIREBEAR))
                 && GetShapeshiftForm() != FORM_AQUA && GetShapeshiftForm() != FORM_TRAVEL && GetShapeshiftForm() != FORM_MOONKIN
                 && GetShapeshiftForm() != FORM_GHOSTWOLF
                 && sScriptMgr->OnCastItemCombatSpell(this, damageInfo.GetVictim(), spellInfo, item)

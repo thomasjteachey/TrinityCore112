@@ -119,6 +119,10 @@ enum BuyBankSlotResult
     ERR_BANKSLOT_OK                 = 3
 };
 
+// Druid Feral talent "Bear Arms": weapon DPS as attack power in feral
+// forms, and the weapon's chance on hit effects in Bear/Dire Bear Form.
+constexpr uint32 SPELL_DRUID_BEAR_ARMS = 81505;
+
 enum PlayerSpellState : uint8
 {
     PLAYERSPELL_UNCHANGED = 0,
@@ -2853,6 +2857,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         int16 m_baseRatingValue[MAX_COMBAT_RATING];
         uint32 m_baseSpellPower;
         uint32 m_baseFeralAP;
+        // Bear Arms (druid talent 81505): the main hand's DPS, one for one as
+        // attack power; set by _ApplyItemMods, added in feral forms with the talent.
+        float m_bearArmsAP;
         uint32 m_baseManaRegen;
         uint32 m_baseHealthRegen;
         int32 m_spellPenetrationItemMod;

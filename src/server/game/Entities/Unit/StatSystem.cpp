@@ -422,6 +422,11 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
                     */
                 }
 
+                // Bear Arms (talent 81505): the main hand's DPS as attack
+                // power in Cat, Bear and Dire Bear Form (not while disarmed).
+                if (IsInFeralForm() && HasAura(SPELL_DRUID_BEAR_ARMS) && CanUseAttackType(BASE_ATTACK))
+                    weaponBonus += m_bearArmsAP;
+
                 switch (GetShapeshiftForm())
                 {
                     case FORM_CAT:
