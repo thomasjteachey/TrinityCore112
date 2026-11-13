@@ -239,6 +239,8 @@ void BattlegroundVHR::RemovePlayer(Player* player, ObjectGuid guid, uint32 team)
     // next one out.
     _heldClones.erase(std::remove_if(_heldClones.begin(), _heldClones.end(),
         [guid](VhrHeldClone const& held) { return held.guid == guid; }), _heldClones.end());
+    // Their Undying clock stops with them; the state is never saved.
+    EndUndying(guid);
     UpdateScoreWorldStates();
 
     // Boons are a Violet Hold thing. Every way out of the run - the leave
@@ -304,6 +306,7 @@ void BattlegroundVHR::Reset()
     _alliesToDismiss.clear();
     _claimedRunUniqueBoons = 0;
     _multitudesThisWave = 0;
+    _undying.clear();
     _menagerie.clear();
     _waveCloneSources.clear();
     _championGuid.Clear();
@@ -1177,6 +1180,9 @@ void BattlegroundVHR::CompleteWave()
     // Reflections last the wave they joined; they go before anyone is raised.
     DismissFleetingAllies();
     _multitudesThisWave = 0;
+    // Undying runs out on the wave, not on the holder: ended here without a
+    // death, so the restore below finds them standing and fills them up.
+    EndUndying();
     RestorePartyAfterWave();
     uint32 const brokers = SpawnWaveRewardBuffs();
 
@@ -1776,6 +1782,69 @@ void BattlegroundVHR::DismissFleetingAllies()
     _fleetingAllies.clear();
 }
 
+void BattlegroundVHR::StartUndying(Player const* player, uint32 ms)
+{
+    _undying[player->GetGUID()] = ms;
+}
+
+void BattlegroundVHR::UpdateUndying(uint32 diff)
+{
+    std::vector<ObjectGuid> due;
+    for (auto itr = _undying.begin(); itr != _undying.end(); ++itr)
+    {
+        if (itr->second <= diff)
+            due.push_back(itr->first);
+        else
+            itr->second -= diff;
+    }
+
+    for (ObjectGuid guid : due)
+    {
+        _undying.erase(guid);
+
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player || !player->IsInWorld() || player->GetBattleground() != this)
+            continue;
+
+        // The state goes first: it is what keeps them standing, and a
+        // Phoenix rescue below would otherwise leave them immune for its
+        // last second.
+        player->RemoveAurasDueToSpell(VioletHoldBoons::SPELL_UNDYING_STATE);
+        if (!player->IsAlive())
+            continue;
+
+        // "Then you die" - unless Phoenix is held, whose turn comes after
+        // Undying's. No attacker: the clock killed them, and HandleKillPlayer
+        // takes the death from here like any other.
+        if (VioletHoldBoons::TryPhoenixRescue(player))
+        {
+            VioletHoldBoons::CompletePhoenixRescue(player);
+            continue;
+        }
+        Unit::Kill(nullptr, player);
+    }
+}
+
+void BattlegroundVHR::EndUndying(ObjectGuid only)
+{
+    std::vector<ObjectGuid> ending;
+    if (only)
+    {
+        if (_undying.erase(only))
+            ending.push_back(only);
+    }
+    else
+    {
+        for (auto const& entry : _undying)
+            ending.push_back(entry.first);
+        _undying.clear();
+    }
+
+    for (ObjectGuid guid : ending)
+        if (Player* player = ObjectAccessor::FindPlayer(guid))
+            player->RemoveAurasDueToSpell(VioletHoldBoons::SPELL_UNDYING_STATE);
+}
+
 void BattlegroundVHR::NotifyAllySpawned(uint32 requestId, ObjectGuid allyGuid)
 {
     bool fleeting = false;
@@ -1922,6 +1991,9 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
 
     if (_allyRetryMs)
         _allyRetryMs = _allyRetryMs <= diff ? 0 : _allyRetryMs - diff;
+
+    if (!_undying.empty())
+        UpdateUndying(diff);
 
     _bombFeedTimerMs += diff;
     if (_bombFeedTimerMs >= BG_VHR_BOMB_FEED_INTERVAL)
@@ -2377,6 +2449,8 @@ void BattlegroundVHR::EndBattleground(uint32 winner)
 {
     UpdateScoreWorldStates();
     DespawnMenagerie();
+    // Nobody dies to a clock after the run is over.
+    EndUndying();
 
     // Borrowed levels go back BEFORE the base class pays out. Below the cap the
     // payout is experience (Player::RewardHonor), which has to be sized by and

@@ -127,6 +127,7 @@ namespace VioletHoldBoons
 
         // 2026-11-13, later.
         Multitudes,     // very rare, one per RUN: every killing blow calls a 25% copy of you for the wave
+        Undying,        // one per RUN: a killing blow leaves you immune to everything for 30 sec instead, then you die
 
         Max
     };
@@ -239,6 +240,13 @@ namespace VioletHoldBoons
         // Boon of Multitudes, the same record-aura shape. BattlegroundVHR::
         // HandleKillPlayer calls the copies.
         SPELL_BOON_MULTITUDES   = 94317,
+        // Boon of the Undying (record aura, Communion's shape) and the state it
+        // puts its holder in: "Undying", Divine Shield's school immunity and
+        // bubble without its penalty, cooldown or Forbearance, uncancellable,
+        // 31 sec on the client. BattlegroundVHR's own 30-sec clock ends it.
+        // 94330 is not a boon aura.
+        SPELL_BOON_UNDYING      = 94329,   // Unit::DealDamage -> TryUndying, before Phoenix
+        SPELL_UNDYING_STATE     = 94330,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -541,6 +549,20 @@ namespace VioletHoldBoons
     // been applied. True when the boon was spent.
     TC_GAME_API bool TryPhoenixRescue(Unit* victim);
     TC_GAME_API void CompletePhoenixRescue(Unit* victim);
+
+    // Boon of the Undying, checked in Unit::DealDamage BEFORE Phoenix: a blow
+    // that would kill a holder (or anyone already Undying) is clamped to leave
+    // one health; BeginUndying then puts the holder in the Undying state -
+    // immune to all damage, hostile effects and healing - for UNDYING_MS, and
+    // the run's clock (BattlegroundVHR::UpdateUndying) kills them when it runs
+    // out. Phoenix gets its turn at that death. Clearing the wave first ends
+    // the state and the party restore puts them at full health. Every lethal
+    // blow does this again; it is not spent.
+    TC_GAME_API bool TryUndying(Unit* victim);
+    TC_GAME_API void BeginUndying(Unit* victim);
+    // Unit::DealHeal: healing on someone Undying lands as nothing.
+    TC_GAME_API bool BlocksHealing(Unit const* target);
+    constexpr uint32 UNDYING_MS = 30000;
     constexpr uint8 PHOENIX_RESTORE_PCT = 100;
 
     // Unit::DealDamage, on a killing blow: Overkill splashes `overkill` (the

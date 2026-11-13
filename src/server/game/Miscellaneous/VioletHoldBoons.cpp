@@ -137,7 +137,9 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Communion,    SPELL_BOON_COMMUNION,    1,   1, MASK_ALL,      1, "Boon of Communion",    "every rune you take is given to your whole party too (unique)", "" },
     // Rarer still (weight 0 = VERY_RARE_ROLL_QUARTERS, a quarter of
     // Communion's odds), and only one member of a run may ever take it.
-    { Boon::Multitudes,   SPELL_BOON_MULTITUDES,   1,   1, MASK_ALL,      0, "Boon of Multitudes",   "every killing blow you land calls a copy of you at 25% strength for the rest of the wave (one per run)", "" }
+    { Boon::Multitudes,   SPELL_BOON_MULTITUDES,   1,   1, MASK_ALL,      0, "Boon of Multitudes",   "every killing blow you land calls a copy of you at 25% strength for the rest of the wave (one per run)", "" },
+    // Phoenix's weight; one per run (IsRunUnique). TryUndying, before Phoenix.
+    { Boon::Undying,      SPELL_BOON_UNDYING,      1,   1, MASK_ALL,      2, "Boon of the Undying",  "a blow that would kill you leaves you immune to all damage, effects and healing for 30 sec instead - then you die, unless the wave falls first (one per run)", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -672,6 +674,7 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_ABUNDANCE
         || spellId == SPELL_BOON_COMMUNION
         || spellId == SPELL_BOON_MULTITUDES
+        || spellId == SPELL_BOON_UNDYING
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
 }
@@ -683,7 +686,7 @@ bool SharesRunes(Player const* player)
 
 bool IsRunUnique(Boon boon)
 {
-    return boon == Boon::Multitudes;
+    return boon == Boon::Multitudes || boon == Boon::Undying;
 }
 
 bool CallsMultitudes(Player const* player)
@@ -1355,6 +1358,7 @@ void StripAll(Player* player)
     for (uint32 id = SPELL_BOON_CLEARCAST_CLASS_FIRST; id <= SPELL_BOON_CLEARCAST_CLASS_LAST; ++id)
         player->RemoveAurasDueToSpell(id);
     player->RemoveAurasDueToSpell(SPELL_DIVINITY_SHIELD);
+    player->RemoveAurasDueToSpell(SPELL_UNDYING_STATE);
     player->RemoveAurasDueToSpell(SPELL_KNOWLEDGE_MARKER);
     player->RemoveAurasDueToSpell(SPELL_CACHE_MARKER);
 
@@ -1603,6 +1607,7 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Overkill:
         case Boon::Communion:
         case Boon::Multitudes:
+        case Boon::Undying:
             return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:
             return Trinity::StringFormat("{}: +1 {}{}", info.name, info.summary, blocked);
@@ -1777,6 +1782,65 @@ bool TryPhoenixRescue(Unit* victim)
     return true;
 }
 
+namespace
+{
+// The run a party member holding the Undying boon or state is fighting in.
+// Clones and allies are not the party, and the clock that ends the state
+// belongs to the run - outside one, nothing would ever end it.
+BattlegroundVHR* UndyingRunOf(Player const* player)
+{
+    BattlegroundVHR* run = GetRunOf(player);
+    if (!run || player->GetBGTeam() != run->GetHumanTeam() || run->IsAlly(player->GetGUID()))
+        return nullptr;
+    return run;
+}
+}
+
+bool TryUndying(Unit* victim)
+{
+    Player* player = victim ? victim->ToPlayer() : nullptr;
+    if (!player || !player->IsAlive())
+        return false;
+
+    // Already Undying: whatever got through the immunity (a fall, lava)
+    // is clamped too, and the clock that is already running decides.
+    if (!player->HasAura(SPELL_BOON_UNDYING) && !player->HasAura(SPELL_UNDYING_STATE))
+        return false;
+
+    return UndyingRunOf(player) != nullptr;
+}
+
+void BeginUndying(Unit* victim)
+{
+    Player* player = victim ? victim->ToPlayer() : nullptr;
+    if (!player || !player->IsAlive() || player->HasAura(SPELL_UNDYING_STATE))
+        return;
+
+    BattlegroundVHR* run = UndyingRunOf(player);
+    if (!run)
+        return;
+
+    // Triggered: it is an aura the boon puts on, not a spell the holder can be
+    // stopped from casting. Its own 31-sec duration is only the client's
+    // countdown; the run's 30-sec clock ends it first and does the killing.
+    player->CastSpell(player, SPELL_UNDYING_STATE, TRIGGERED_FULL_MASK);
+    if (!player->HasAura(SPELL_UNDYING_STATE))
+    {
+        TC_LOG_ERROR("bg.battleground", "VioletHoldBoons::BeginUndying: {} did not take {}; they live on at 1 health.",
+            player->GetGUID().ToString(), uint32(SPELL_UNDYING_STATE));
+        return;
+    }
+
+    run->StartUndying(player, UNDYING_MS);
+    if (WorldSession* session = player->GetSession())
+        session->SendNotification("You refuse to die - for 30 seconds.");
+}
+
+bool BlocksHealing(Unit const* target)
+{
+    return target && target->GetTypeId() == TYPEID_PLAYER && target->HasAura(SPELL_UNDYING_STATE);
+}
+
 void CompletePhoenixRescue(Unit* victim)
 {
     Player* player = victim ? victim->ToPlayer() : nullptr;
@@ -1884,6 +1948,9 @@ void CopyBoonsTo(Player const* source, Player* target)
             // Calls copies onto the PARTY's side (BattlegroundVHR::
             // RequestReflection refuses anyone else) - nothing on a clone.
             case Boon::Multitudes:
+            // Its clock lives on the party's run, and TryUndying ignores
+            // anyone who is not the party.
+            case Boon::Undying:
             // The clone is built at the source's CURRENT level, borrowed
             // levels included, so the marker has nothing left to mark.
             case Boon::Level:

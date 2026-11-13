@@ -3062,6 +3062,12 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
     if (SpellInfo* spellInfo = _GetSpellInfo(90287))
         spellInfo->AttributesCu |= SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED;
 
+    // Violet Hold "Undying" (94330) only means anything while the run's own
+    // clock is counting it down; saved, it would come back on a relog as 31
+    // sec of immunity with nothing to end it.
+    if (SpellInfo* spellInfo = _GetSpellInfo(94330))
+        spellInfo->AttributesCu |= SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED;
+
     // Alliance/Horde flag visuals (32609/32610) are used by the custom game
     // lobbies and clone mannequins purely as a team-colour cosmetic. They are
     // self-cast, non-passive auras, so by default they persist to

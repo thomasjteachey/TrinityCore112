@@ -1585,8 +1585,19 @@ static bool IsDuelOpponentsBlow(Unit const* attacker, Player const* opponent)
     // clamped to leave one health, exactly the way a duel-ending blow is, and
     // the rescue (30% health and mana) is applied once the damage has landed
     // below. Spent on use.
+    // Violet Hold "Boon of the Undying" comes first: the same clamp, and the
+    // holder goes into its 30-sec immunity once the damage has landed below.
+    // Phoenix is not touched here - its turn is the death the Undying clock
+    // brings (BattlegroundVHR::UpdateUndying).
+    bool undying = false;
+    if (!duel_hasEnded && damage >= health && VioletHoldBoons::TryUndying(victim))
+    {
+        damage = health - 1;
+        undying = true;
+    }
+
     bool phoenixRescue = false;
-    if (!duel_hasEnded && damage >= health && VioletHoldBoons::TryPhoenixRescue(victim))
+    if (!duel_hasEnded && !undying && damage >= health && VioletHoldBoons::TryPhoenixRescue(victim))
     {
         damage = health - 1;
         phoenixRescue = true;
@@ -1731,6 +1742,9 @@ static bool IsDuelOpponentsBlow(Unit const* attacker, Player const* opponent)
 
     if (phoenixRescue)
         VioletHoldBoons::CompletePhoenixRescue(victim);
+
+    if (undying)
+        VioletHoldBoons::BeginUndying(victim);
 
     return damage;
 }
@@ -7881,6 +7895,10 @@ void Unit::SetCharm(Unit* charm, bool apply)
     Unit* healer = healInfo.GetHealer();
     Unit* victim = healInfo.GetTarget();
     uint32 addhealth = healInfo.GetHeal();
+
+    // Violet Hold "Undying": immune to healing too. Lands as nothing.
+    if (addhealth && VioletHoldBoons::BlocksHealing(victim))
+        addhealth = 0;
 
     if (UnitAI* victimAI = victim->GetAI())
         victimAI->HealReceived(healer, addhealth);

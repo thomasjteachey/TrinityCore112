@@ -618,6 +618,11 @@ public:
     // the list.
     std::vector<ObjectGuid> TakeAlliesToDismiss();
 
+    // Boon of the Undying: `player` is Undying for `ms` from now. When the
+    // clock runs out UpdateUndying ends the state and kills them (Phoenix
+    // permitting); the wave falling first ends it without a death.
+    void StartUndying(Player const* player, uint32 ms);
+
 private:
     enum class WaveState : uint8
     {
@@ -726,6 +731,11 @@ private:
     // As a wave falls its reflections go, alive or not, before anyone is
     // restored.
     void DismissFleetingAllies();
+    // Boon of the Undying: count the clocks down and kill whoever's ran out.
+    void UpdateUndying(uint32 diff);
+    // End every Undying state without a death (the wave fell, the run ended)
+    // - or just `only`'s (they left).
+    void EndUndying(ObjectGuid only = ObjectGuid::Empty);
 
     // Called once as a wave falls: the party's dead stand back up, and every
     // player on its side - and their pets - is put at full health and mana.
@@ -840,6 +850,8 @@ private:
     uint64 _claimedRunUniqueBoons = 0;
     // Boon of Multitudes copies called this wave (MULTITUDES_MAX_PER_WAVE).
     uint32 _multitudesThisWave = 0;
+    // Boon of the Undying: who is Undying, and the milliseconds they have left.
+    std::unordered_map<ObjectGuid, uint32> _undying;
     // Menagerie guardians alive for the current wave.
     std::vector<ObjectGuid> _menagerie;
     // MenagerieTrace: the last line logged per guardian, and its sampling clock.
