@@ -201,7 +201,7 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
             SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(info.enchantId);
             if (enchant && *enchant->Name[LOCALE_enUS])
                 headline = enchant->Name[LOCALE_enUS];
-            text = "Yours for this run, soulbound. Destroyed when you leave the Hold.";
+            text = "Lost when you leave the Hold.";
             break;
         }
         case Offer::Kind::ClassSpell:
@@ -211,10 +211,7 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
             icon = "S" + std::to_string(ResolveRank(info.spellId, viewer->GetLevel()));
             name = info.name;
             headline = "Learn";
-            char const* className = "Class";
-            if (ChrClassesEntry const* entry = sChrClassesStore.LookupEntry(info.classId))
-                className = entry->Name[LOCALE_enUS];
-            text = Trinity::StringFormat("{} spell, taught at the best rank your level allows. Forgotten when you leave the Hold.", className);
+            text = "Lost when you leave the Hold.";
             break;
         }
         default:

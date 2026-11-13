@@ -51,13 +51,13 @@ local CLASS_TOKEN = {
 
 -- PickResult (VioletHoldBoons.h) as the card and the Take button say it.
 local STATUS_TEXT = {
-	[1] = "Not for your class",
-	[2] = "You already have this",
-	[3] = "Already at your cap",
-	[4] = "You can go no higher",
-	[5] = "Your level is too low",
-	[6] = "Your bags are full",
-	[7] = "Weapon skill not trained",
+	[1] = "Wrong class",
+	[2] = "Owned",
+	[3] = "Maxed",
+	[4] = "Max level",
+	[5] = "Level too low",
+	[6] = "Bags full",
+	[7] = "Weapon untrained",
 	[8] = "Unavailable",
 };
 
@@ -156,20 +156,11 @@ waveText:SetTextColor(0.73, 0.66, 0.84);
 local title = Text(frame, 26, TITLE_FONT);
 title:SetPoint("TOPLEFT", waveText, "BOTTOMLEFT", 0, -6);
 title:SetTextColor(0.96, 0.93, 1.0);
-title:SetText("The Ethereal Broker deals");
+title:SetText("Choose a boon");
 
-local subtitle = Text(frame, 12);
-subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6);
-subtitle:SetTextColor(0.77, 0.72, 0.85);
-subtitle:SetText("Your party sees the same hand. The first card anyone takes ends the deal.");
-
-local partyLabel = Text(frame, 10);
-partyLabel:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -28, -TOP_PAD);
-partyLabel:SetTextColor(0.73, 0.66, 0.84);
-partyLabel:SetText("PARTY AT THE TABLE");
-
+-- The party, in class colours: the key to the initials on the cards.
 local partyText = Text(frame, 13);
-partyText:SetPoint("TOPRIGHT", partyLabel, "BOTTOMRIGHT", 0, -8);
+partyText:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -36, -TOP_PAD);
 partyText:SetJustifyH("RIGHT");
 
 local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton");
@@ -368,8 +359,9 @@ local function DrawCard(c, card, index, count)
 	c.glow:SetVertexColor(rarity.r, rarity.g, rarity.b, selected and 0.9 or 0.5);
 	c.icon:SetTexture(IconOf(card));
 
-	local kinds = { B = "BOON", S = "CLASS SPELL", I = "LEGENDARY" };
-	c.kind:SetText(card.runWide and "RUN-WIDE BOON" or kinds[card.kind] or "BOON");
+	-- Only what sets a card apart; a plain boon needs no label.
+	local kinds = { S = "CLASS SPELL", I = "LEGENDARY" };
+	c.kind:SetText(card.runWide and "RUN-WIDE" or kinds[card.kind] or "");
 	c.kind:SetTextColor(rarity.r, rarity.g, rarity.b);
 	if ( card.greedCard ) then c.greedBg:Show(); c.greed:Show(); else c.greedBg:Hide(); c.greed:Hide(); end
 
@@ -393,24 +385,19 @@ local function DrawCard(c, card, index, count)
 		c.barGain:SetWidth(math.max(gain > 0 and 3 or 0.01, width * gain));
 		c.barGain:SetVertexColor(rarity.r, rarity.g, rarity.b);
 		c.stack:SetText(Unit(card, card.held) .. "  >  |cffffffff" .. Unit(card, card.after) .. "|r");
-		c.cap:SetText("cap " .. Unit(card, card.cap));
+		c.cap:SetText("max " .. Unit(card, card.cap));
 		c.barBg:Show(); c.barHave:Show(); c.barGain:Show(); c.stack:Show(); c.cap:Show();
 	else
 		c.barBg:Hide(); c.barHave:Hide(); c.barGain:Hide(); c.stack:Hide(); c.cap:Hide();
 	end
 
-	c.rarity:SetText(rarity.name);
-	c.rarity:SetTextColor(rarity.r, rarity.g, rarity.b);
-	if ( card.status == 0 ) then
-		c.forWho:SetText("For you");
-	elseif ( #card.owners > 0 ) then
-		c.forWho:SetText("For " .. table.concat(card.owners, ", "));
-	else
-		c.forWho:SetText("Nobody right now");
-	end
+	-- The border already says the rarity, and the ribbon says when a card is
+	-- not yours: nothing to repeat down here.
+	c.rarity:SetText("");
+	c.forWho:SetText("");
 
 	if ( card.status ~= 0 and not draft.taken ) then
-		local why = (card.status == 1 and #card.owners > 0) and ("Meant for " .. table.concat(card.owners, ", "))
+		local why = (card.status == 1 and #card.owners > 0) and (table.concat(card.owners, ", ") .. " only")
 			or STATUS_TEXT[card.status] or STATUS_TEXT[8];
 		c.ribbonText:SetText(why);
 		c.ribbon:Show(); c.ribbonText:Show();
@@ -447,13 +434,13 @@ end
 -- Actions and the bottom panels
 
 local leave = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate");
-leave:SetWidth(190);
+leave:SetWidth(120);
 leave:SetHeight(26);
-leave:SetText("Leave it for the party");
+leave:SetText("Close");
 leave:SetScript("OnClick", function() frame:Hide(); end);
 
 local take = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate");
-take:SetWidth(270);
+take:SetWidth(160);
 take:SetHeight(26);
 take:SetPoint("LEFT", leave, "RIGHT", 12, 0);
 
@@ -484,7 +471,7 @@ runPanel:SetHeight(92);
 local runLabel = Text(runPanel, 10);
 runLabel:SetPoint("TOPLEFT", runPanel, "TOPLEFT", 12, -10);
 runLabel:SetTextColor(0.73, 0.66, 0.84);
-runLabel:SetText("RUN-WIDE  -  WHOLE PARTY");
+runLabel:SetText("RUN-WIDE");
 local runLines = {};
 for i = 1, 3 do
 	local fs = Text(runPanel, 11);
@@ -538,21 +525,20 @@ local function DrawDeck(width)
 		x = x + w + 6;
 	end
 	for i = #draft.deck + 1, #chips do chips[i]:Hide(); end
-	deckLabel:SetText("YOUR DECK THIS RUN");
-	deckCount:SetText(#draft.deck .. " held  -  all of it goes when you leave the Hold");
+	deckLabel:SetText("YOUR BOONS");
+	deckCount:SetText(#draft.deck);
 end
 
+-- Taking a card ends the deal: the hand goes the moment you pick.
 Take = function()
 	if ( not draft or draft.taken ) then return; end
 	local card = CardByCode(draft.selected);
 	if ( not card or card.status ~= 0 ) then return; end
-	if ( demo ) then
-		draft.taken = { name = Me(), code = card.code };
-		draft.closeAt = GetTime() + 5;
-		Refresh();
-		return;
+	if ( not demo ) then
+		Request("PICK", card.code);
 	end
-	Request("PICK", card.code);
+	draft.taken = { name = Me(), code = card.code };
+	frame:Hide();
 end
 take:SetScript("OnClick", Take);
 
@@ -567,12 +553,11 @@ Refresh = function()
 	local room = (UIParent:GetWidth() or width) - 40;
 	frame:SetScale(width > room and room / width or 1);
 
-	waveText:SetText(string.format("VIOLET HOLD  -  WAVE %d OF %d", draft.wave, draft.final));
+	waveText:SetText(string.format("WAVE %d / %d", draft.wave, draft.final));
 	local names = {};
 	for _, member in ipairs(draft.party) do
 		local r, g, b = ClassColor(member.class);
-		names[#names + 1] = string.format("|cff%s%s%s|r", Hex(r, g, b), member.name,
-			member.name == Me() and " (you)" or "");
+		names[#names + 1] = string.format("|cff%s%s|r", Hex(r, g, b), member.name);
 	end
 	partyText:SetText(table.concat(names, "   "));
 
@@ -583,35 +568,29 @@ Refresh = function()
 
 	local actionsY = -(HAND_TOP + CARD_H + 2 * FAN_DROP + 28);
 	leave:ClearAllPoints();
-	leave:SetPoint("TOPLEFT", frame, "TOP", -(190 + 12 + 270) / 2, actionsY);
+	leave:SetPoint("TOPLEFT", frame, "TOP", -(120 + 12 + 160) / 2, actionsY);
 	hint:ClearAllPoints();
 	hint:SetPoint("TOP", frame, "TOP", 0, actionsY - 36);
 	takenText:ClearAllPoints();
 	takenText:SetPoint("TOP", frame, "TOP", 0, actionsY + 2);
 
+	-- A taken deal closes the frame at once (Take, TAKEN), so there is no
+	-- after-the-deal state to draw.
+	takenText:Hide();
+	hint:SetText("");
 	if ( draft.taken ) then
-		leave:Hide(); take:Hide(); hint:SetText("");
-		local card = CardByCode(draft.taken.code);
-		local what = card and card.name or "a card";
-		if ( draft.taken.name == Me() ) then
-			takenText:SetText("You took " .. what .. ". The broker fades for the whole party.");
-		else
-			takenText:SetText(draft.taken.name .. " took " .. what .. ". The broker fades.");
-		end
-		takenText:Show();
+		leave:Hide(); take:Hide();
 	else
-		takenText:Hide();
 		leave:Show(); take:Show();
 		local card = CardByCode(draft.selected);
 		if ( card and card.status == 0 ) then
-			take:SetText("Take " .. card.name);
+			take:SetText("Take");
 			take:Enable();
 		elseif ( card ) then
-			take:SetText((card.status == 1 and #card.owners > 0) and ("Only " .. card.owners[1] .. " can take this")
+			take:SetText((card.status == 1 and #card.owners > 0) and (card.owners[1] .. " only")
 				or STATUS_TEXT[card.status] or STATUS_TEXT[8]);
 			take:Disable();
 		end
-		hint:SetText("Click a card to look at it. Taking one is final for the whole party.");
 	end
 
 	deckPanel:ClearAllPoints();
@@ -621,9 +600,9 @@ Refresh = function()
 	runPanel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 20);
 	DrawDeck(width - 40 - 250 - 12);
 
-	runLines[1]:SetText(string.format("Greed  %d / 3  |cffc4b8d8+%d card%s per broker|r", draft.greed, draft.greed, draft.greed == 1 and "" or "s"));
-	runLines[2]:SetText(string.format("Abundance  %d / 3  |cffc4b8d8+%d rune%s per wave|r", draft.abundance, draft.abundance, draft.abundance == 1 and "" or "s"));
-	runLines[3]:SetText(string.format("Hoarder  %d / 1  |cffc4b8d8+%d broker%s per wave|r", draft.hoarder, draft.hoarder, draft.hoarder == 1 and "" or "s"));
+	runLines[1]:SetText(string.format("Greed  %d / 3", draft.greed));
+	runLines[2]:SetText(string.format("Abundance  %d / 3", draft.abundance));
+	runLines[3]:SetText(string.format("Hoarder  %d / 1", draft.hoarder));
 end
 
 frame:SetScript("OnShow", function() if ( PlaySound ) then PlaySound("igCharacterInfoOpen"); end end);
@@ -719,11 +698,11 @@ function handlers.LOOK(f)
 	Refresh();
 end
 
+-- Somebody took a card - you or a party member: the deal is over, the hand goes.
 function handlers.TAKEN(f)
 	if ( not draft or not SameGuid(draft.tag, f[1]) ) then return; end
 	draft.taken = { name = f[2], code = tonumber(f[3]) };
-	draft.closeAt = GetTime() + 5;
-	Refresh();
+	frame:Hide();
 end
 
 function handlers.GONE(f)
@@ -778,10 +757,10 @@ local function Demo()
 			{ code = 27, kind = "B", tier = 3, icon = "S90291", name = "Boon of the Vampire", headline = "+3%",
 			  text = "of damage dealt returned as health", held = 0, after = 3, cap = 30, unit = "%", status = 0, owners = {} },
 			{ code = 108, kind = "S", tier = 4, icon = "S51690", name = "Killing Spree", headline = "Learn",
-			  text = "Rogue spell, taught at the best rank your level allows. Forgotten when you leave the Hold.",
+			  text = "Lost when you leave the Hold.",
 			  held = 0, after = 0, cap = 0, unit = "", status = myClass == 4 and 0 or 1, owners = myClass == 4 and {} or { "Kaelen" } },
 			{ code = 208, kind = "I", tier = 5, icon = "I160807", name = "Shard of the Defiler", headline = "Crusader", greedCard = true,
-			  text = "Yours for this run, soulbound. Destroyed when you leave the Hold.",
+			  text = "Lost when you leave the Hold.",
 			  held = 0, after = 0, cap = 0, unit = "", status = 1, owners = { "Ysolde" } },
 		},
 		deck = {

@@ -83,7 +83,7 @@ local function button(prefix)
 end
 local function takeButton()
 	for _, f in ipairs(frames) do
-		if f.template == "UIPanelButtonTemplate" and f.text ~= "Leave it for the party" then return f end
+		if f.template == "UIPanelButtonTemplate" and f.text ~= "Close" then return f end
 	end
 end
 
@@ -109,7 +109,7 @@ check(#cards() == 5, "five cards dealt (got " .. #cards() .. ")");
 check(sent[#sent].prefix == "CCGAMEREQ" and sent[#sent].target == "Baku", "requests whisper yourself on CCGAMEREQ");
 check(lastSent() == "VHBOON:LOOK:" .. TAG .. ":1", "opening says which card you look at (got " .. tostring(lastSent()) .. ")");
 local take = takeButton();
-check(take and take.text == "Take Boon of Might" and take.enabled, "Take names the selected card (got " .. tostring(take and take.text) .. ")");
+check(take and take.text == "Take" and take.enabled, "Take is enabled for a card you can take (got " .. tostring(take and take.text) .. ")");
 check(card(1).data.held == 6 and card(1).data.after == 9 and card(1).data.cap == 255, "stacks parsed");
 check(card(206).data.greedCard and not card(1).data.greedCard, "the Greed card is marked");
 check(card(29).data.runWide, "run-wide boon flagged");
@@ -128,11 +128,11 @@ check(gossipClosed == 1, "talking to the broker later, without a new deal, keeps
 -- somebody else's card
 card(121).scripts.OnClick(card(121));
 check(lastSent() == "VHBOON:LOOK:" .. TAG .. ":121", "selecting a card tells the party");
-check(not take.enabled and take.text == "Only Kaelen can take this", "a card for Kaelen cannot be taken (got " .. tostring(take.text) .. ")");
+check(not take.enabled and take.text == "Kaelen only", "a card for Kaelen cannot be taken (got " .. tostring(take.text) .. ")");
 local lava = card(121);
 local ribbon;
 for k, v in pairs(lava) do if k == "ribbonText" then ribbon = v end end
-check(ribbon and ribbon.text == "Meant for Kaelen" and ribbon.shown, "its ribbon says whose it is");
+check(ribbon and ribbon.text == "Kaelen only" and ribbon.shown, "its ribbon says whose it is");
 
 -- a party member is looking
 fire("VHBOON:LOOK:" .. TAG .. "^Kaelen^1");
@@ -147,20 +147,25 @@ local count = #sent;
 card(206).scripts.OnClick(card(206));
 take.scripts.OnClick(take);
 check(lastSent() == "VHBOON:PICK:" .. TAG .. ":206", "Take sends the pick (got " .. tostring(lastSent()) .. ")");
-fire("VHBOON:TAKEN:" .. TAG .. "^Baku^206");
-check(card(206).stamp.shown and not card(1).stamp.shown, "the taken card is stamped");
-check(not take.shown, "no Take button once the deal is over");
+check(not frame.shown, "the hand goes the moment you take a card");
 local before = #sent;
-now = now + 6;
-frame.scripts.OnUpdate(frame, 0.1);
-check(not frame.shown, "the hand goes away by itself after the deal");
+fire("VHBOON:TAKEN:" .. TAG .. "^Baku^206");
+check(not frame.shown and #sent == before, "the server's TAKEN after your own pick changes nothing");
+
+-- a party member takes one while your hand is up
+deal();
+fire("VHBOON:SHOW:" .. TAG);
+check(frame.shown, "a new hand is up");
+before = #sent;
+fire("VHBOON:TAKEN:" .. TAG .. "^Kaelen^121");
+check(not frame.shown, "the hand goes the moment a party member takes a card");
 check(#sent == before, "nothing is sent after the deal is over");
 
 -- leaving it for the party
 deal();
 fire("VHBOON:SHOW:" .. TAG);
 check(frame.shown and not card(206).stamp.shown, "a fresh deal starts clean");
-button("Leave it for the party").scripts.OnClick(button("Leave it for the party"));
+button("Close").scripts.OnClick(button("Close"));
 check(not frame.shown and lastSent() == "VHBOON:LOOK:" .. TAG .. ":999", "leaving puts the cards down for the party");
 
 -- gone
