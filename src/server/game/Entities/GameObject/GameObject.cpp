@@ -19,6 +19,7 @@
 #include "Configuration/Config.h"
 #include <algorithm>
 #include "Battleground.h"
+#include "BattlegroundVHR.h"
 #include "CellImpl.h"
 #include "Containers.h"
 #include "CreatureAISelector.h"
@@ -923,7 +924,13 @@ void GameObject::Update(uint32 diff)
                                 bg = player->GetBattleground();
 
                             if (bg)
+                            {
+                                // Boon of Communion shares a Violet Hold rune with the
+                                // taker's party; checked before the rune is despawned.
+                                if (bg->GetTypeID() == BATTLEGROUND_VHR)
+                                    static_cast<BattlegroundVHR*>(bg)->OnRuneTaken(target->ToPlayer(), goInfo->trap.spellId);
                                 bg->HandleTriggerBuff(GetGUID());
+                            }
                             else if (IsArenaShadowSightObject(GetEntry()))
                             {
                                 DespawnOrUnsummon();

@@ -130,7 +130,10 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Healthstone,  SPELL_BOON_HEALTHSTONE,  1,   1, MASK_ALL,      4, "Boon of the Healthstone", "never used up, lasts the run (unique)", "" },
 
     // Run-wide like Hoarder, counted against the run (RunHeld).
-    { Boon::Abundance,    SPELL_BOON_ABUNDANCE,    1,   3, MASK_ALL,      3, "Boon of Abundance",    "extra rune after every wave from now on (run-wide)", "" }
+    { Boon::Abundance,    SPELL_BOON_ABUNDANCE,    1,   3, MASK_ALL,      3, "Boon of Abundance",    "extra rune after every wave from now on (run-wide)", "" },
+    // The rarest roll in the pool, and only ever offered to a party of two
+    // or more (CanTake).
+    { Boon::Communion,    SPELL_BOON_COMMUNION,    1,   1, MASK_ALL,      1, "Boon of Communion",    "every rune you take is given to your whole party too (unique)", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -703,8 +706,14 @@ bool IsBoonSpell(uint32 spellId)
         || (spellId >= SPELL_BOON_BATCH3_FIRST && spellId <= SPELL_BOON_BATCH3_LAST)
         || spellId == SPELL_BOON_HEALTHSTONE
         || spellId == SPELL_BOON_ABUNDANCE
+        || spellId == SPELL_BOON_COMMUNION
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
+}
+
+bool SharesRunes(Player const* player)
+{
+    return player && player->HasAura(SPELL_BOON_COMMUNION);
 }
 
 bool Offer::Decode(uint32 code, Offer& out)
@@ -819,6 +828,18 @@ PickResult CanTake(Player const* player, Offer offer)
 
         if (info.boon == Boon::Level)
             return player->GetLevel() < LEVEL_BOON_CEILING ? PickResult::Ok : PickResult::LevelCeiling;
+
+        // Sharing with nobody is nothing: Communion is for a party of two or more.
+        if (info.boon == Boon::Communion)
+        {
+            BattlegroundVHR const* run = GetRunOf(player);
+            if (!run)
+                return PickResult::Failed;
+            std::vector<Player const*> party;
+            run->CollectHumanPlayers(party);
+            if (party.size() < 2)
+                return PickResult::Failed;
+        }
 
         // Run-wide boons live on the battleground; without one there is nothing
         // to apply them to (never the case for a broker offer, but CanTake is
@@ -1570,6 +1591,7 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Phoenix:
         case Boon::Hoarder:
         case Boon::Overkill:
+        case Boon::Communion:
             return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:
             return Trinity::StringFormat("{}: +1 {}{}", info.name, info.summary, blocked);

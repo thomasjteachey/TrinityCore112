@@ -1083,6 +1083,26 @@ void BattlegroundVHR::CompleteWave()
     BeginWave();
 }
 
+void BattlegroundVHR::OnRuneTaken(Player* taker, uint32 runeSpellId)
+{
+    if (!taker || !runeSpellId || !VioletHoldBoons::SharesRunes(taker))
+        return;
+
+    // Each member casts the rune on themselves, so whatever it does happens
+    // around them - their own freeze, their own core, their own reflection.
+    // Cast by the member, not the trap, so nothing here can trip another
+    // pickup.
+    for (ObjectGuid guid : GetHumanRoster(true))
+    {
+        if (guid == taker->GetGUID())
+            continue;
+        Player* member = ObjectAccessor::FindPlayer(guid);
+        if (!member || !member->IsInWorld() || !member->IsAlive() || member->GetMap() != taker->GetMap())
+            continue;
+        member->CastSpell(member, runeSpellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+}
+
 bool BattlegroundVHR::CanPickUpPowerup(Player const* player) const
 {
     // The clones are Players on the enemy team and walk right over the drop on

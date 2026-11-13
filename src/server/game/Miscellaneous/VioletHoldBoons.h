@@ -123,6 +123,7 @@ namespace VioletHoldBoons
 
         // 2026-11-13.
         Abundance,      // RUN-WIDE: an extra rune after every wave, up to 3
+        Communion,      // rare, unique: a rune you take is given to the whole party too
 
         Max
     };
@@ -229,6 +230,9 @@ namespace VioletHoldBoons
         // Boon of Abundance, a run-wide record aura like Hoarder's (StackAmount
         // 3). Past the Violet Hold runes 94310-94314.
         SPELL_BOON_ABUNDANCE    = 94315,
+        // Boon of Communion, Hoarder's shape (unique). BattlegroundVHR::
+        // OnRuneTaken does the sharing.
+        SPELL_BOON_COMMUNION    = 94316,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -388,6 +392,10 @@ namespace VioletHoldBoons
     TC_GAME_API ItemGrantInfo const& GetItemGrant(uint8 index);
     TC_GAME_API BoonInfo const* FindBySpell(uint32 spellId);
     TC_GAME_API bool IsBoonSpell(uint32 spellId);
+
+    // Boon of Communion: whether a rune this player takes goes to the whole
+    // party as well.
+    TC_GAME_API bool SharesRunes(Player const* player);
 
     // The aura a boon puts on THIS player - the same for everyone except the
     // per-class spellmod variants (Alacrity).

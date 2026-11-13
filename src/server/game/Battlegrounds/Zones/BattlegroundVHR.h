@@ -467,6 +467,11 @@ public:
     // enemy team and would otherwise walk over them on the way in.
     bool CanPickUpPowerup(Player const* player) const override;
 
+    // A party member just took a rune whose spell is runeSpellId (called by
+    // the rune trap, GameObject.cpp). With Boon of Communion the rest of the
+    // living party gets the same rune.
+    void OnRuneTaken(Player* taker, uint32 runeSpellId);
+
     // Called by the boon broker's script once a player has taken a boon from
     // him: the broker leaves and his slot is freed. Unknown guids are ignored.
     void ConsumeBoonBroker(ObjectGuid brokerGuid);
