@@ -16,6 +16,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "Random.h"
+#include "SpellAuras.h"
 #include "StringFormat.h"
 #include "VioletHoldBoons.h"
 #include "Miscellaneous/VioletHoldBars.h"
@@ -290,6 +291,7 @@ void BattlegroundVHR::Reset()
     _allies.clear();
     _menagerie.clear();
     _waveCloneSources.clear();
+    _championGuid.Clear();
 }
 
 bool BattlegroundVHR::SetupBattleground()
@@ -355,21 +357,27 @@ uint32 BattlegroundVHR::GetFullStrengthCountForWave(uint32 wave) const
     if (wave <= BG_VHR_QUARTER_RAMP_LAST_WAVE)
         return _partySize + (wave - 1) / BG_VHR_QUARTERS_PER_CLONE;
 
-    // Past the ramp: an even climb from where the ramp left off to
-    // BG_VHR_MAX_ENEMIES on BG_VHR_FINAL_WAVE, whatever the party size. A solo
-    // run climbs 36 clones over 15 waves (2-3 a wave), a full ten 27 (1-2 a
-    // wave). Rounded up, so the last wave is exactly the cap.
+    // Past the ramp: a climb from where the ramp left off to
+    // BG_VHR_MAX_ENEMIES on BG_VHR_FINAL_WAVE, whatever the party size, along
+    // the square of the waves climbed. An even climb went from a quarter of a
+    // clone per wave to two or three overnight - a duo met twelve clones on
+    // wave 18 - while this one adds about one a wave at first and saves the
+    // big steps for the last waves, where most of what it adds is horde
+    // (GetFullPowerCountForWave). Rounded up, so the last wave is exactly
+    // the cap.
     uint32 const atRampEnd = _partySize + (BG_VHR_QUARTER_RAMP_LAST_WAVE - 1) / BG_VHR_QUARTERS_PER_CLONE;
     uint32 const finalCount = std::max<uint32>(BG_VHR_MAX_ENEMIES, atRampEnd);
     uint32 const climbWaves = BG_VHR_FINAL_WAVE - BG_VHR_QUARTER_RAMP_LAST_WAVE;
     uint32 const climbed = std::min<uint32>(wave, BG_VHR_FINAL_WAVE) - BG_VHR_QUARTER_RAMP_LAST_WAVE;
-    return atRampEnd + ((finalCount - atRampEnd) * climbed + climbWaves - 1) / climbWaves;
+    uint32 const span = climbWaves * climbWaves;
+    return atRampEnd + ((finalCount - atRampEnd) * climbed * climbed + span - 1) / span;
 }
 
 uint8 BattlegroundVHR::GetPartialCloneStacks(uint32 wave)
 {
-    // Past the ramp every clone is a full one.
-    if (!wave || wave > BG_VHR_QUARTER_RAMP_LAST_WAVE)
+    // Past the ramp every clone is a full one, and the champion wave has a
+    // make-up of its own.
+    if (!wave || wave > BG_VHR_QUARTER_RAMP_LAST_WAVE || wave == BG_VHR_MIDBOSS_WAVE)
         return 0;
 
     uint32 const quarter = (wave - 1) % BG_VHR_QUARTERS_PER_CLONE;
@@ -386,7 +394,32 @@ uint32 BattlegroundVHR::GetEnemyCountForWave(uint32 wave) const
     if (!wave)
         return 0;
 
+    // The champion and one horde clone per player.
+    if (wave == BG_VHR_MIDBOSS_WAVE)
+        return 1 + _partySize;
+
     return GetFullStrengthCountForWave(wave) + (GetPartialCloneStacks(wave) ? 1 : 0);
+}
+
+uint32 BattlegroundVHR::GetFullPowerCountForWave(uint32 wave) const
+{
+    uint32 const enemies = GetEnemyCountForWave(wave);
+
+    // The final wave is everything the run has been building to: no horde.
+    if (wave >= BG_VHR_FINAL_WAVE)
+        return enemies;
+
+    // 0 turns the horde off - every clone at full power, as before.
+    uint32 const perPlayer = sWorld->getIntConfig(CONFIG_CENTURION_VHR_FULL_POWER_CLONES_PER_PLAYER);
+    if (!perPlayer)
+        return enemies;
+
+    return std::min(enemies, _partySize * perPlayer);
+}
+
+uint8 BattlegroundVHR::GetHordeCloneStacks()
+{
+    return uint8(std::clamp<uint32>(sWorld->getIntConfig(CONFIG_CENTURION_VHR_HORDE_DIMINISHED_STACKS), 1, 99));
 }
 
 uint32 BattlegroundVHR::GetOpeningCountForWave(uint32 wave) const
@@ -417,6 +450,7 @@ void BattlegroundVHR::BeginWave()
     _waveNumber = nextWave;
     _waveEnemies.clear();
     _waveCloneSources.clear();
+    _championGuid.Clear();
     _waveSeatedSlots.clear();
     _heldClones.clear();
     _timedReleaseMs = 0;
@@ -520,6 +554,18 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
     if (uint8 const stacks = GetPartialCloneStacks(_waveNumber))
         if (!_pendingRequest.diminishedStacks.empty())
             _pendingRequest.diminishedStacks.back() = stacks;
+
+    // Past the party's full-power budget the wave is horde. The budget is
+    // spent from slot 0, which is the opening group first, so the clones
+    // that walk out with the gates are the real fight and the horde is
+    // what trickles out after. The champion wave is slot 0 the champion and
+    // the rest horde. A slot already carrying the partial clone's stacks
+    // keeps them.
+    uint32 const fullPower = _waveNumber == BG_VHR_MIDBOSS_WAVE ? 1u : GetFullPowerCountForWave(_waveNumber);
+    uint8 const hordeStacks = GetHordeCloneStacks();
+    for (size_t i = fullPower; i < _pendingRequest.diminishedStacks.size(); ++i)
+        if (!_pendingRequest.diminishedStacks[i])
+            _pendingRequest.diminishedStacks[i] = hordeStacks;
 
     // The opening group, then the held-back extras split in half, in slot
     // order. The odd extra waits on a death rather than the clock.
@@ -643,6 +689,13 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
     _heldClones.clear();
     for (auto const& [slot, cloneGuid] : _waveSeatedSlots)
     {
+        // Slot 0 of the champion wave grows into the champion before the
+        // preparation hold goes on it, so it walks out already at size.
+        if (_waveNumber == BG_VHR_MIDBOSS_WAVE && slot == 0 && !_championGuid &&
+            std::find(_waveEnemies.begin(), _waveEnemies.end(), cloneGuid) != _waveEnemies.end())
+            if (Player* champion = ObjectAccessor::FindPlayer(cloneGuid))
+                MakeChampion(champion);
+
         if (slot >= _waveSlots.size() || _waveSlots[slot].release == VhrCloneRelease::WithGates)
             continue;
 
@@ -678,6 +731,33 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
     }
 
     UpdateScoreWorldStates();
+}
+
+void BattlegroundVHR::MakeChampion(Player* champion)
+{
+    _championGuid = champion->GetGUID();
+
+    // Health: Reinforced is +5% Stamina a stack, so 20 a player puts the
+    // champion at about (party size + 1) times a clone's health.
+    uint32 const reinforced = std::min<uint32>(BG_VHR_CHAMPION_REINFORCED_PER_PLAYER * _partySize, 255);
+    if (Aura* aura = champion->AddAura(BG_VHR_SPELL_REINFORCED, champion))
+        aura->SetStackAmount(uint8(reinforced));
+    else
+        TC_LOG_WARN("bg.battleground", "BattlegroundVHR: could not reinforce champion {} in instance {}.",
+            champion->GetName(), GetInstanceID());
+
+    // Damage: Boon of Might is +1% damage done a stack.
+    uint32 const might = std::min<uint32>(BG_VHR_CHAMPION_DAMAGE_BASE + BG_VHR_CHAMPION_DAMAGE_PER_PLAYER * _partySize, 255);
+    if (Aura* aura = champion->AddAura(VioletHoldBoons::SPELL_BOON_DAMAGE, champion))
+        aura->SetStackAmount(uint8(might));
+    else
+        TC_LOG_WARN("bg.battleground", "BattlegroundVHR: could not empower champion {} in instance {}.",
+            champion->GetName(), GetInstanceID());
+
+    champion->SetObjectScale(champion->GetObjectScale() * BG_VHR_CHAMPION_SCALE);
+
+    // A percentage Stamina aura raises the maximum, not the current health.
+    champion->SetFullHealth();
 }
 
 void BattlegroundVHR::NotifyCloneSeated(uint32 waveNumber, uint32 slot, ObjectGuid cloneGuid)
@@ -951,6 +1031,14 @@ void BattlegroundVHR::OpenWaveCell()
     // wave's arrive beside their owners.
     DespawnMenagerie();
     SummonMenagerie();
+
+    if (_championGuid)
+        if (Player const* champion = ObjectAccessor::FindPlayer(_championGuid))
+        {
+            std::string const name = champion->GetName();
+            PSendMessageToAll(BG_VHR_STRING_CHAMPION_FREE, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, name.c_str());
+            PSendMessageToAll(BG_VHR_STRING_CHAMPION_FREE, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, name.c_str());
+        }
 }
 
 void BattlegroundVHR::CompleteWave()
@@ -966,7 +1054,21 @@ void BattlegroundVHR::CompleteWave()
     // draws its source characters from the living roster, and a party that just
     // clawed through a wave should be whole again when that happens.
     RestorePartyAfterWave();
-    SpawnWaveRewardBuffs();
+    uint32 const brokers = SpawnWaveRewardBuffs();
+
+    // The waves before the champion and before the last one are worth a
+    // warning: centre screen so it is seen, and in chat so it stays.
+    uint32 const nextWave = _waveNumber + 1;
+    if (nextWave == BG_VHR_MIDBOSS_WAVE)
+    {
+        PSendMessageToAll(BG_VHR_STRING_CHAMPION_NEXT, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, nextWave, brokers);
+        PSendMessageToAll(BG_VHR_STRING_CHAMPION_NEXT, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, nextWave, brokers);
+    }
+    else if (nextWave == BG_VHR_FINAL_WAVE)
+    {
+        PSendMessageToAll(BG_VHR_STRING_FINAL_NEXT, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, brokers);
+        PSendMessageToAll(BG_VHR_STRING_FINAL_NEXT, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, brokers);
+    }
 
     BeginWave();
 }
@@ -1111,7 +1213,7 @@ bool BattlegroundVHR::PickBuffPosition(std::vector<Position> const& taken, Posit
     return true;
 }
 
-void BattlegroundVHR::SpawnWaveRewardBuffs()
+uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
 {
     // One drop per three players, rounded UP - 1-3 players get one, 4-6 get
     // two, 7-9 get three, ten get four. Rounded up rather than down so a small
@@ -1126,7 +1228,7 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
     DespawnWaveRewardBuffs();
 
     if (!wanted)
-        return;
+        return 0;
 
     // Speed is deliberately not in the roll - the party is not chasing anyone.
     static uint32 const kBuffEntries[] =
@@ -1178,7 +1280,16 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
     // broker is per wave, not per player, so it closes the gap without turning
     // a duo into the best way to play.
     uint32 const shortHandedBrokers = GetPartyStrength() < BG_VHR_SHORT_HANDED_PARTY ? 1u : 0u;
-    uint32 const brokersWanted = wanted + _bonusBrokersPerWave + shortHandedBrokers;
+    uint32 brokersWanted = wanted + _bonusBrokersPerWave + shortHandedBrokers;
+
+    // Before the champion, a few more; before the final wave, ten at least.
+    uint32 const nextWave = _waveNumber + 1;
+    if (nextWave == BG_VHR_MIDBOSS_WAVE)
+        brokersWanted += BG_VHR_MIDBOSS_EXTRA_BROKERS;
+    else if (nextWave == BG_VHR_FINAL_WAVE)
+        brokersWanted = std::max<uint32>(brokersWanted, BG_VHR_FINALE_BROKERS);
+
+    uint32 brokersSpawned = 0;
     for (uint32 i = 0; i < brokersWanted && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
     {
         Position spot;
@@ -1189,6 +1300,7 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
             break;
 
         placed.push_back(spot);
+        ++brokersSpawned;
 
         std::vector<Position> ignored;
         brokerSlot = FindFreeBoonBrokerSlot(ignored);
@@ -1196,6 +1308,8 @@ void BattlegroundVHR::SpawnWaveRewardBuffs()
 
     if (droppedRune)
         _buffLifetimeMs = BG_VHR_BUFF_LIFETIME_MS;
+
+    return brokersSpawned;
 }
 
 void BattlegroundVHR::DespawnWaveRewardBuffs()

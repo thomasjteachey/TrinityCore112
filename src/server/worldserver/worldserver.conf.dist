@@ -6693,6 +6693,20 @@ Centurion.Marks.HonorCostMultiplier = 0
 #                     from the playerbot population.
 #        Default:     10
 #
+#    Centurion.VioletHold.FullPowerClonesPerPlayer
+#        Description: How many of a wave's clones fight at full power, per player in the
+#                     party. Every clone past that is "horde" and carries
+#                     HordeDiminishedStacks. The final wave (30) is always all full power.
+#                     Live: `.reload config` applies to the next wave.
+#        Default:     4
+#                     0 - (No horde, every clone at full power)
+#
+#    Centurion.VioletHold.HordeDiminishedStacks
+#        Description: Diminished stacks on a horde clone, 1-99. Each stack is -1% damage and
+#                     healing done and +1% damage taken, so at 70 a horde clone hits for 30%
+#                     and dies to about 60% of the damage a full one takes.
+#        Default:     70
+#
 #    Centurion.VioletHold.CopiesInheritBoons
 #        Description: Whether a party member's "Dark" wave copy carries that member's boons.
 #                     Off, the copy is the bare character, so every boon is an edge over it.
@@ -6715,6 +6729,8 @@ Centurion.Marks.HonorCostMultiplier = 0
 Centurion.VioletHold.PrepSeconds = 30
 Centurion.VioletHold.CountdownFromSeconds = 15
 Centurion.VioletHold.PartyWaveChancePercent = 10
+Centurion.VioletHold.FullPowerClonesPerPlayer = 4
+Centurion.VioletHold.HordeDiminishedStacks = 70
 Centurion.VioletHold.CopiesInheritBoons = 0
 Centurion.VioletHold.MenagerieTrace = 0
 Centurion.VioletHold.ExperienceMultiplier = 1.5

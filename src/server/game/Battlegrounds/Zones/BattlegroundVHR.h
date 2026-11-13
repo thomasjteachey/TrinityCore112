@@ -8,10 +8,20 @@
  * BG_VHR_QUARTER_RAMP_LAST_WAVE every cleared wave adds a QUARTER of a clone,
  * expressed as one extra clone carrying the Diminished debuff at 75, 50 or 25
  * stacks before it finally joins at full strength on the fourth step; from the
- * wave after that the partial clone is gone and the wave climbs evenly to
- * BG_VHR_MAX_ENEMIES clones on BG_VHR_FINAL_WAVE, whatever the party size.
- * See BG_VHR_QUARTERS_PER_CLONE for the table. Clearing BG_VHR_FINAL_WAVE (30)
- * wins the run.
+ * wave after that the partial clone is gone and the wave climbs - slowly at
+ * first, faster towards the end - to BG_VHR_MAX_ENEMIES clones on
+ * BG_VHR_FINAL_WAVE, whatever the party size. See BG_VHR_QUARTERS_PER_CLONE for
+ * the table. Clearing BG_VHR_FINAL_WAVE (30) wins the run.
+ *
+ * Only so many of a wave's clones fight at full power: four per player
+ * (Centurion.VioletHold.FullPowerClonesPerPlayer). The rest are a horde of
+ * Diminished clones, so a small party faces the same forty bodies as a full
+ * one without facing forty of itself. The final wave has no horde - every
+ * clone in it is at full power.
+ *
+ * Wave BG_VHR_MIDBOSS_WAVE is a champion: one oversized clone with a party's
+ * worth of health and extra damage, walking out with a horde escort. The waves
+ * before the champion and before the final wave drop extra boon brokers.
  * Deeper waves also reinforce every clone that is not a copy of a party member
  * (BG_VHR_REINFORCE_FROM_WAVE), while clones OF a party member carry that
  * member's boons.
@@ -87,7 +97,15 @@ enum BG_VHR_TrinityStrings
     BG_VHR_STRING_NEXT_WAVE_COUNTDOWN = 20100,
     // "%s answers the call and joins your side." - Boon of Fellowship ally
     // arrival. See sql/custom/world/2026_08_16_01_world_violet_hold_boons2.sql.
-    BG_VHR_STRING_ALLY_JOINED = 20102
+    BG_VHR_STRING_ALLY_JOINED = 20102,
+    // "Wave %u is a champion. %u boon brokers answer the call." - cleared the
+    // wave before BG_VHR_MIDBOSS_WAVE.
+    BG_VHR_STRING_CHAMPION_NEXT = 20103,
+    // "%s, champion of the Hold, breaks free!" - the champion's gates open.
+    BG_VHR_STRING_CHAMPION_FREE = 20104,
+    // "The next wave is the last. %u boon brokers answer the call." - cleared
+    // the wave before BG_VHR_FINAL_WAVE.
+    BG_VHR_STRING_FINAL_NEXT = 20105
 };
 
 enum BG_VHR_Objects
@@ -125,11 +143,12 @@ enum BG_VHR_Creatures
     // Several can therefore be up at once, so he gets his own slots rather
     // than sharing the per-drop object slots. When every slot is occupied no
     // further broker comes until one is used.
-    // 16: four runes' worth of brokers per wave plus the Hoarder's extra,
-    // with room for a couple of waves to go untouched before it fills.
+    // 32: four runes' worth of brokers per wave plus the Hoarder's extra,
+    // with room for a couple of waves to go untouched before it fills - and
+    // for the BG_VHR_FINALE_BROKERS drop before the last wave on top of that.
     BG_VHR_CREATURE_BOON_BROKER_1  = 0,
-    BG_VHR_CREATURE_BOON_BROKER_MAX = 16,
-    BG_VHR_CREATURE_MAX            = 16
+    BG_VHR_CREATURE_BOON_BROKER_MAX = 32,
+    BG_VHR_CREATURE_MAX            = 32
 };
 
 enum BG_VHR_Constants
@@ -198,15 +217,38 @@ enum BG_VHR_Constants
     //
     // That quarter-step ramp only runs to BG_VHR_QUARTER_RAMP_LAST_WAVE, where
     // the wave stands at party + 3 and a 50% clone. From the wave after it
-    // there is no partial clone any more and the wave climbs evenly to
-    // BG_VHR_MAX_ENEMIES on BG_VHR_FINAL_WAVE (GetFullStrengthCountForWave):
+    // there is no partial clone any more and the wave climbs to
+    // BG_VHR_MAX_ENEMIES on BG_VHR_FINAL_WAVE along a square curve - gentle
+    // just past the ramp, steep at the end (GetFullStrengthCountForWave):
     //
-    //   solo      wave 16: 7    wave 20: 16    wave 25: 28    wave 30: 40
-    //   party 5   wave 16: 11   wave 20: 19    wave 25: 30    wave 30: 40
-    //   party 10  wave 16: 15   wave 20: 22    wave 25: 31    wave 30: 40
+    //   solo      wave 16: 5    wave 20: 8     wave 25: 20    wave 29: 36    wave 30: 40
+    //   party 2   wave 16: 6    wave 20: 9     wave 25: 21    wave 29: 36    wave 30: 40
+    //   party 5   wave 16: 9    wave 20: 12    wave 25: 23    wave 29: 36    wave 30: 40
+    //   party 10  wave 16: 14   wave 20: 16    wave 25: 25    wave 29: 37    wave 30: 40
+    //
+    // (Wave 15 itself is the champion - see BG_VHR_MIDBOSS_WAVE.) Of those,
+    // only Centurion.VioletHold.FullPowerClonesPerPlayer per player fight at
+    // full power before the final wave; the rest are the horde.
     BG_VHR_QUARTERS_PER_CLONE = 4,
     BG_VHR_SPELL_DIMINISHED   = 90201,
     BG_VHR_QUARTER_RAMP_LAST_WAVE = 15,
+
+    // The champion wave: one clone in slot 0 carrying
+    // BG_VHR_CHAMPION_REINFORCED_PER_PLAYER Reinforced stacks per player
+    // (+5% Stamina each, so about (party size + 1) times a clone's
+    // health), BG_VHR_CHAMPION_DAMAGE_BASE + _PER_PLAYER per player
+    // stacks of Boon of Might (+1% damage each) and BG_VHR_CHAMPION_SCALE
+    // times the size, walking out with one horde clone per player.
+    BG_VHR_MIDBOSS_WAVE = 15,
+    BG_VHR_CHAMPION_REINFORCED_PER_PLAYER = 20,
+    BG_VHR_CHAMPION_DAMAGE_BASE = 50,
+    BG_VHR_CHAMPION_DAMAGE_PER_PLAYER = 10,
+
+    // Clearing the wave before the champion drops this many brokers on top
+    // of the usual ones. Clearing the wave before the final one drops at
+    // least BG_VHR_FINALE_BROKERS in all.
+    BG_VHR_MIDBOSS_EXTRA_BROKERS = 3,
+    BG_VHR_FINALE_BROKERS = 10,
 
     // Past this wave every clone that is NOT a copy of a party member walks in
     // carrying BG_VHR_SPELL_REINFORCED at (wave - this) stacks - +5% Stamina
@@ -270,6 +312,9 @@ static_assert((BG_VHR_MAX_ENEMIES + BG_VHR_CLONES_PER_CELL - 1) / BG_VHR_CLONES_
 // mid-wave would stall the run. Anyone below this has fallen out of the map
 // and is put back by RescueFallenPlayers.
 constexpr float BG_VHR_MIN_SAFE_Z = 20.0f;
+
+// How much bigger the champion stands than the clone it was made from.
+constexpr float BG_VHR_CHAMPION_SCALE = 1.5f;
 
 // Which characters a wave's clones are copied from. Every wave is made of
 // clones either way; these only change how the sources are chosen.
@@ -554,8 +599,15 @@ private:
     uint32 GetOpeningCountForWave(uint32 wave) const;
     // Diminished stacks for the wave's partial clone. 0 when the wave is made
     // entirely of full-strength clones: every fourth wave during the quarter
-    // ramp, and every wave past BG_VHR_QUARTER_RAMP_LAST_WAVE.
+    // ramp, the champion wave, and every wave past BG_VHR_QUARTER_RAMP_LAST_WAVE.
     static uint8 GetPartialCloneStacks(uint32 wave);
+    // How many of the wave's clones fight at full power; every clone past it
+    // is horde (GetHordeCloneStacks). All of them on the final wave.
+    uint32 GetFullPowerCountForWave(uint32 wave) const;
+    static uint8 GetHordeCloneStacks();
+    // The champion wave's slot-0 clone grows into the champion as the wave is
+    // fulfilled. Announced when its gates open.
+    void MakeChampion(Player* champion);
 
     // Re-copy every party member's boons onto the clones made from them, as
     // the cells open - or onto just `onlyClone`, as a held-back one comes out.
@@ -580,7 +632,8 @@ private:
 
     // Reward powerups, dropped when a wave is cleared and taken back after
     // BG_VHR_BUFF_LIFETIME_MS.
-    void SpawnWaveRewardBuffs();
+    // Returns how many boon brokers arrived with the drop.
+    uint32 SpawnWaveRewardBuffs();
     void DespawnWaveRewardBuffs();
     bool PickBuffPosition(std::vector<Position> const& taken, Position& out) const;
     // First free broker slot, or BG_VHR_CREATURE_BOON_BROKER_MAX when all are
@@ -663,6 +716,8 @@ private:
     uint32 _menagerieTraceTimerMs = 0;
     // clone -> the party member it was copied from, for the current wave only.
     std::vector<std::pair<ObjectGuid, ObjectGuid>> _waveCloneSources;
+    // The champion of the current wave, if it is the champion wave.
+    ObjectGuid _championGuid;
 };
 
 #endif

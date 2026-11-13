@@ -1586,6 +1586,13 @@ void World::LoadConfigSettings(bool reload)
     // the next wave. Sanitised: window >= 1s, countdown start clamped to it.
     m_int_configs[CONFIG_CENTURION_VHR_PREP_SECONDS] = std::max<int32>(1, sConfigMgr->GetIntDefault("Centurion.VioletHold.PrepSeconds", 30));
     m_int_configs[CONFIG_CENTURION_VHR_COUNTDOWN_FROM_SECONDS] = std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.CountdownFromSeconds", 15), 0, int32(m_int_configs[CONFIG_CENTURION_VHR_PREP_SECONDS]));
+    // How many of a Violet Hold wave's clones fight at full power, per player
+    // (0 = all of them); the rest carry this many Diminished stacks (each one
+    // is -1% damage and healing done, +1% damage taken). The final wave ignores
+    // both. Read as each wave is composed, so `.reload config` applies to the
+    // next wave.
+    m_int_configs[CONFIG_CENTURION_VHR_FULL_POWER_CLONES_PER_PLAYER] = std::max<int32>(0, sConfigMgr->GetIntDefault("Centurion.VioletHold.FullPowerClonesPerPlayer", 4));
+    m_int_configs[CONFIG_CENTURION_VHR_HORDE_DIMINISHED_STACKS] = std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.HordeDiminishedStacks", 70), 1, 99);
     // Whether a party member's wave copy carries that member's boons. Off, a
     // copy is the bare character, so every boon the party buys is an edge over
     // its own reflections. Read as each wave is dressed and as its cells open.
