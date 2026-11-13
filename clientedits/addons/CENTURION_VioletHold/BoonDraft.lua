@@ -14,6 +14,8 @@
 --    VHBOON:LOOK:<broker>^<name>^<code>         (999 = looking at nothing)
 --    VHBOON:TAKEN:<broker>^<name>^<code>
 --    VHBOON:GONE:<broker>
+--    VHBOON:WAIT:<broker>       (before SHOW) dealt before the wave is out: locked
+--    VHBOON:OPEN:               the wave is out: every hand can be taken from
 --
 -- and the addon answers on CCGAMEREQ, whispering itself:
 --
@@ -21,6 +23,8 @@
 --
 -- The hand is shared: the party sees the same cards, and the first one anybody
 -- takes ends the deal. <status> is the server's PickResult for this character.
+-- Nothing can be taken until the wave is out: a hand dealt before then is shown
+-- faded with grey names, and lights up on OPEN.
 --
 -- /vhdraft demo  deals a made-up hand, to look at the frame outside the Hold.
 
@@ -351,10 +355,15 @@ local function DrawCard(c, card, index, count)
 			or STATUS_TEXT[card.status] or STATUS_TEXT[8];
 		c.ribbonText:SetText(why);
 		c.ribbon:Show(); c.ribbonText:Show();
-		c:SetAlpha(0.6);
+		c:SetAlpha(draft.locked and 0.35 or 0.6);
 	else
 		c.ribbon:Hide(); c.ribbonText:Hide();
-		c:SetAlpha(1);
+		c:SetAlpha(draft.locked and 0.45 or 1);
+	end
+	if ( draft.locked ) then
+		c.name:SetTextColor(0.5, 0.5, 0.5);
+	else
+		c.name:SetTextColor(0.95, 0.95, 0.97);
 	end
 	c.stamp:Hide();
 
@@ -383,7 +392,7 @@ take:SetPoint("BOTTOM", frame, "BOTTOM", 0, PAD);
 
 -- Taking a card ends the deal: the hand goes the moment you pick.
 Take = function()
-	if ( not draft or draft.taken ) then return; end
+	if ( not draft or draft.taken or draft.locked ) then return; end
 	local card = CardByCode(draft.selected);
 	if ( not card or card.status ~= 0 ) then return; end
 	if ( not demo ) then
@@ -411,7 +420,10 @@ Refresh = function()
 	for i = count + 1, #cards do cards[i]:Hide(); cards[i].data = nil; end
 
 	local card = CardByCode(draft.selected);
-	if ( card and card.status == 0 ) then
+	if ( draft.locked ) then
+		take:SetText("Wave not out");
+		take:Disable();
+	elseif ( card and card.status == 0 ) then
 		take:SetText("Take");
 		take:Enable();
 	elseif ( card ) then
@@ -505,6 +517,21 @@ function handlers.SHOW(f)
 	suppress = { tag = hand.tag, untilTime = GetTime() + 2 };
 	Show(hand);
 	CloseBrokerGossip();
+end
+
+function handlers.WAIT(f)
+	if ( pending and SameGuid(pending.tag, f[1]) ) then
+		pending.locked = true;
+	end
+end
+
+-- The wave is out: every broker trades.
+function handlers.OPEN()
+	if ( pending ) then pending.locked = nil; end
+	if ( draft and draft.locked ) then
+		draft.locked = nil;
+		Refresh();
+	end
 end
 
 function handlers.LOOK(f)

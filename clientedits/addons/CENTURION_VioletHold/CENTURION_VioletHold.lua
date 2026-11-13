@@ -1,5 +1,5 @@
 -- CENTURION_VioletHold - every rune on the Violet Hold's floor named over it, the
--- freeze's 30-yard reach and the timebomb's 10-yard blast drawn round theirs, and
+-- freeze's 30-yard reach and the timebomb's 20-yard blast drawn round theirs, and
 -- the blast round anyone carrying a ticking core.
 --
 -- The runes dropped when a wave falls stay until the next wave falls. The server
@@ -67,8 +67,8 @@ local function Ring(used, ring, x, y, z, width, height)
 		if ( fx and fx > -0.05 and fx < 1.05 and fy > -0.05 and fy < 1.05 ) then
 			used = used + 1;
 			local dot = Dot(used);
-			local size = math.min(math.max((scale or 0) * height * 0.45, 2), 7);
-			dot:SetVertexColor(ring.r, ring.g, ring.b, 0.85);
+			local size = math.min(math.max((scale or 0) * height * 0.3, 1.5), 4);
+			dot:SetVertexColor(ring.r, ring.g, ring.b, 0.35);
 			dot:SetWidth(size);
 			dot:SetHeight(size);
 			dot:ClearAllPoints();

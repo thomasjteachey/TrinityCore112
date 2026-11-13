@@ -182,6 +182,30 @@ check(not frame.shown, "an empty hand never shows");
 events.scripts.OnEvent(events, "CHAT_MSG_ADDON", "OTHER", "VHBOON:SHOW:" .. TAG);
 check(not frame.shown, "other prefixes are ignored");
 
+-- dealt before the wave is out: locked, faded, grey names, nothing taken
+deal();
+fire("VHBOON:WAIT:" .. TAG);
+fire("VHBOON:SHOW:" .. TAG);
+check(frame.shown, "a locked hand still shows");
+check(not take.enabled and take.text == "Wave not out", "Take is off until the wave is out (got " .. tostring(take.text) .. ")");
+check(card(1).alpha < 0.6 and card(1).name.color[1] == 0.5, "locked cards are faded with grey names");
+before = #sent;
+take.scripts.OnClick(take);
+card(1).scripts.OnDoubleClick(card(1));
+check(frame.shown and not string.find(lastSent() or "", "PICK", 1, true), "no pick goes out while locked");
+fire("VHBOON:OPEN:");
+check(take.enabled and take.text == "Take", "OPEN lights the hand (got " .. tostring(take.text) .. ")");
+check(card(1).alpha == 1 and card(1).name.color[1] == 0.95, "cards back to full colour");
+take.scripts.OnClick(take);
+check(lastSent() == "VHBOON:PICK:" .. TAG .. ":1", "and now Take picks (got " .. tostring(lastSent()) .. ")");
+-- an OPEN before the hand ever showed leaves no lock behind
+deal();
+fire("VHBOON:WAIT:" .. TAG);
+fire("VHBOON:OPEN:");
+fire("VHBOON:SHOW:" .. TAG);
+check(take.enabled and take.text == "Take", "OPEN between WAIT and SHOW unlocks the pending hand");
+frame:Hide();
+
 -- one button, no side panels
 deal();
 fire("VHBOON:SHOW:" .. TAG);

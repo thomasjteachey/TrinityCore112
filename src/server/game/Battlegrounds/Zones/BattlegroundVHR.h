@@ -542,6 +542,9 @@ public:
     uint32 GetHumanTeam() const { return _humanTeam; }
     uint32 GetWaveNumber() const { return _waveNumber; }
     bool IsWavePreparing() const { return _waveState == WaveState::Preparing; }
+    // Cells open and the wave out: the brokers only trade now
+    // (violet_hold_boons.cpp), not in the lull between waves.
+    bool IsWaveLive() const { return _waveState == WaveState::Fighting; }
 
     // --- run-wide boons ----------------------------------------------------
     // Greed: every broker rolled from now on shows this many extra options.

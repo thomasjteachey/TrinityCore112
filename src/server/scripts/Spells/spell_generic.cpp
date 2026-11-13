@@ -3291,9 +3291,9 @@ class spell_gen_restoration : public AuraScript
 
 // 90200 - Recharge
 // The fourth battleground power rune, alongside Speed / Restoration /
-// Berserking. All of the work happens the instant it is picked up; the aura
-// itself is inert and exists only so the buff is visible in the frame, which
-// is what lets the other team see who took the rune and react.
+// Berserking. All of the work happens the instant it is picked up, and nothing
+// stays on the player: the DBC's inert aura is turned into a dummy effect in
+// SpellMgr (owner 2026-11-13: "these things aren't buffs").
 //
 // Everything resets, deliberately - no exemption list. That includes the PvP
 // trinket, Bloodlust/Heroism and consumables, so a player can trinket twice or
@@ -3377,7 +3377,7 @@ class spell_gen_recharge : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_gen_recharge::HandleReset, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+        OnEffectHitTarget += SpellEffectFn(spell_gen_recharge::HandleReset, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 
@@ -3390,7 +3390,8 @@ enum VioletHoldRunes
     SPELL_VHR_VOLATILE_CORE_RUNE    = 94311,
     SPELL_VHR_BRIGHT_REFLECTION     = 94312,
     SPELL_VHR_GLACIAL_STASIS_FREEZE = 94313,  // stun, enemies within 20 yd, 5 sec
-    SPELL_VHR_VOLATILE_CORE_BLAST   = 94314,  // enemies within 10 yd, knocked back
+    SPELL_VHR_VOLATILE_CORE_BLAST   = 94314,  // enemies within 20 yd, knocked up
+    SPELL_VISUAL_KIT_VOLATILE_CORE_EXPLOSION = 1424,  // SpellVisualKit: Goblin Sapper Charge's detonation (visual 2899's cast kit)
 };
 
 // 94310 - Glacial Stasis: the taker freezes every enemy around them. The runes
@@ -3412,7 +3413,7 @@ class spell_vhr_glacial_stasis_rune : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_vhr_glacial_stasis_rune::HandleHit, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_glacial_stasis_rune::HandleHit, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 
@@ -3434,8 +3435,14 @@ class spell_vhr_volatile_core_rune : public AuraScript
             return;
 
         Unit* carrier = GetTarget();
-        if (carrier->IsAlive())
-            carrier->CastSpell(carrier, SPELL_VHR_VOLATILE_CORE_BLAST, true);
+        if (!carrier->IsAlive())
+            return;
+
+        // The blast's own visual only lands on whoever it hits. The Goblin
+        // Sapper Charge's detonation goes off on the carrier every time, so
+        // the explosion is plain to see even with nobody in reach.
+        carrier->SendPlaySpellVisual(SPELL_VISUAL_KIT_VOLATILE_CORE_EXPLOSION);
+        carrier->CastSpell(carrier, SPELL_VHR_VOLATILE_CORE_BLAST, true);
     }
 
     void Register() override
@@ -3480,7 +3487,7 @@ class spell_vhr_bright_reflection : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_vhr_bright_reflection::HandleHit, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_bright_reflection::HandleHit, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 

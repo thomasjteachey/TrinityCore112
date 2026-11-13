@@ -1038,9 +1038,16 @@ void BattlegroundVHR::OpenWaveCell()
         [](VhrHeldClone const& held) { return held.release == VhrCloneRelease::AfterDelay; });
     _timedReleaseMs = anyTimed ? uint32(BG_VHR_TIMED_RESERVE_DELAY_MS) : 0;
 
-    // Anything the party bought from the brokers during the countdown is on
-    // their reflections too, as of this moment (when copies inherit boons).
+    // Anything the party bought from the brokers since the last wave opened is
+    // on their reflections too, as of this moment (when copies inherit boons).
     RefreshWaveBoonCopies();
+
+    // The brokers trade from now on. Any hand of cards already up was dealt
+    // locked; this lights it.
+    for (auto const& itr : GetPlayers())
+        if (itr.second.Team == _humanTeam)
+            if (Player* member = ObjectAccessor::FindPlayer(itr.first))
+                SendSquadFeedLine(member, "VHBOON:OPEN:");
 
     // The Menagerie walks out with the wave: last wave's guardians go, this
     // wave's arrive beside their owners.

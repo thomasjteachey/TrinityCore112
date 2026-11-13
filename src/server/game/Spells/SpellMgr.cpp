@@ -3173,6 +3173,17 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_HIT_RESULT | SPELL_ATTR3_NO_INITIAL_AGGRO;
     });
 
+    // Recharge, Glacial Stasis and Bright Reflection do all their work on the
+    // hit (spell_generic.cpp); their DBC aura did nothing but put a buff icon
+    // up for something that is not a buff. A dummy effect instead: the same
+    // hit, the same scripts, and nothing left on the player. Volatile Core
+    // keeps its aura - that one is the fuse.
+    ApplySpellFix({ 90200, 94310, 94312 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->_GetEffect(EFFECT_0).Effect = SPELL_EFFECT_DUMMY;
+        spellInfo->_GetEffect(EFFECT_0).ApplyAuraName = SPELL_AURA_NONE;
+    });
+
     // What those runes do once taken - 94313 Glacial Stasis's freeze, 94314 the
     // Volatile Core's blast - must not pull the taker into combat either. They
     // are also listed in Spell.cpp's IsNoCombatSpell; this keeps them off threat
