@@ -109,7 +109,7 @@ draw();
 check(labels() == 0, "VHRUNE:0 clears every label");
 check(ringDots() == 0, "VHRUNE:0 clears the ring");
 
--- the timebomb rune: named, with its 20-yard blast ring
+-- the timebomb rune: named, with its 15-yard blast ring
 fire("VHRUNE:0;1880.5,800.2,38.4,300502;1900.0,780.0,38.4,300503");
 draw();
 check(frames[3].name.text == "You're a Timebomb" and frames[4].name.text == "Spawn a Clone of You", "timebomb and clone named");
@@ -121,13 +121,13 @@ fire("VHBOMB;0x0000000000000042,500.0,600.0,38.0");
 projected = {};
 draw();
 check(ringDots() == 60, "a carrier gets the blast ring (got " .. ringDots() .. ")");
-check(projected[1] and math.abs(projected[1][1] - 520) < 0.01 and math.abs(projected[1][2] - 600) < 0.01,
-	"ring 20 yards round the reported position");
+check(projected[1] and math.abs(projected[1][1] - 515) < 0.01 and math.abs(projected[1][2] - 600) < 0.01,
+	"ring 15 yards round the reported position");
 -- you carrying one: the ring follows your own position, not the report
 fire("VHBOMB;0x0000000000018775,500.0,600.0,38.0");
 projected = {};
 draw();
-check(projected[1] and math.abs(projected[1][1] - 120) < 0.01 and math.abs(projected[1][2] - 200) < 0.01,
+check(projected[1] and math.abs(projected[1][1] - 115) < 0.01 and math.abs(projected[1][2] - 200) < 0.01,
 	"your own ring is drawn where you stand");
 fire("VHBOMB");
 draw();

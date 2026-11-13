@@ -3390,7 +3390,7 @@ enum VioletHoldRunes
     SPELL_VHR_VOLATILE_CORE_RUNE    = 94311,
     SPELL_VHR_BRIGHT_REFLECTION     = 94312,
     SPELL_VHR_GLACIAL_STASIS_FREEZE = 94313,  // stun, enemies within 20 yd, 5 sec
-    SPELL_VHR_VOLATILE_CORE_BLAST   = 94314,  // enemies within 20 yd, knocked up
+    SPELL_VHR_VOLATILE_CORE_BLAST   = 94314,  // enemies within 15 yd, knocked up
     SPELL_VISUAL_KIT_VOLATILE_CORE_EXPLOSION = 1424,  // SpellVisualKit: Goblin Sapper Charge's detonation (visual 2899's cast kit)
 };
 
