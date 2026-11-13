@@ -28,6 +28,9 @@ uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint
 void NotifyHunterAutoShotFired(Player* player);
 bool IsHunterAutoShotPlantActive(Player* player);
 void ResyncPlayerbotSwimStateForMovementStop(Player* player);
+// ".playerbot pvp why <name>": the bot's own fight state and, for every other
+// player on its map, whether it counts as a target and why not.
+std::string DescribeBattlegroundPursuit(Player* player);
 
 class BattlegroundLifecycleActions
 {

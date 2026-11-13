@@ -729,6 +729,45 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return IssueMovePointThrottled(player, destination, 4.0f, 1000) || player->isMoving();
     }
 
+    // A battleground bot's fight, as ".playerbot pvp why <name>" reports it:
+    // its own state, then every other player on the map and whether it counts
+    // as a target - the same checks FindNearestEnemyBattlegroundPlayer applies.
+    std::string BuildPursuitDiagnostic(Player* player)
+    {
+        Battleground* battleground = player->GetBattleground();
+        if (!battleground || !player->FindMap())
+            return "not in a battleground";
+
+        std::ostringstream out;
+        Unit const* victim = player->GetVictim();
+        out << "bot=" << player->GetName() << " guid=" << player->GetGUID().GetCounter()
+            << " bgTeam=" << player->GetBGTeam() << " resolved=" << uint32(ResolveBotTeamId(player))
+            << " faction=" << player->GetFaction() << " unitFlags=0x" << std::hex << player->GetUInt32Value(UNIT_FIELD_FLAGS) << std::dec
+            << " rooted=" << player->HasUnitState(UNIT_STATE_ROOT) << " stunned=" << player->HasUnitState(UNIT_STATE_STUNNED)
+            << " held=" << battleground->OwnsPreparationState(player) << " status=" << uint32(battleground->GetStatus())
+            << " canMove=" << CanIssueBotMovement(player)
+            << " motion=" << uint32(player->GetMotionMaster()->GetCurrentMovementGeneratorType())
+            << " victim=" << (victim ? victim->GetName() : std::string("-"))
+            << " pos=" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ());
+
+        Map::PlayerList const& players = player->FindMap()->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            Player* candidate = itr->GetSource();
+            if (!candidate || candidate == player)
+                continue;
+            out << " | " << candidate->GetName() << " alive=" << candidate->IsAlive()
+                << " sameBg=" << (candidate->GetBattlegroundId() == player->GetBattlegroundId())
+                << " team=" << uint32(ResolveBotTeamId(candidate)) << " faction=" << candidate->GetFaction()
+                << " flags=0x" << std::hex << candidate->GetUInt32Value(UNIT_FIELD_FLAGS) << std::dec
+                << " valid=" << player->IsValidAttackTarget(candidate)
+                << " immune=" << playerbot::PvpCore::IsEffectivelyImmuneTarget(player, candidate)
+                << " dist=" << int32(player->GetDistance(candidate));
+        }
+
+        return out.str();
+    }
+
     bool TryPursueNearestEnemyInBattleground(Player* player)
     {
         if (!player || !player->InBattleground())
@@ -4796,6 +4835,11 @@ namespace playerbot
     uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
     {
         return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType, false);
+    }
+
+    std::string DescribeBattlegroundPursuit(Player* player)
+    {
+        return player ? ::BuildPursuitDiagnostic(player) : std::string("no such bot");
     }
 
     void ResyncPlayerbotSwimStateForMovementStop(Player* player)

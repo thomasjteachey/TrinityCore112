@@ -1449,6 +1449,7 @@ public:
         static ChatCommandTable playerbotPvpTable =
         {
             { "lifecycle", playerbotPvpLifecycleTable },
+            { "why", HandlePlayerbotPvpWhyCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "forcequeue", HandlePlayerbotPvpForceQueueCurrentCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "movediag", HandlePlayerbotPvpMoveDiagCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "ctf", HandlePlayerbotPvpCtfCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
@@ -1490,6 +1491,40 @@ public:
         };
 
         return commandTable;
+    }
+
+    // ".playerbot pvp why <name>": what a whisper to the bot answers a GM with
+    // diagnostics on, for the console and SOAP - its status and movement lines,
+    // then its fight: who on the map it counts as a target and why not. Wave
+    // clones and other transient bots answer to their names too.
+    //
+    // Console only: a console command runs on the world thread after the map
+    // threads (World::Update), so reading another map's bot is safe; typed in
+    // game it would run on the GM's own map thread.
+    static bool HandlePlayerbotPvpWhyCommand(ChatHandler* handler, PlayerIdentifier target)
+    {
+        if (!handler)
+            return false;
+        if (!handler->IsConsole())
+        {
+            handler->SendSysMessage("Use .playerbot pvp why from the console or SOAP. In game, turn on .gm diagnostics on playerbot and whisper the bot.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Player* bot = target.GetConnectedPlayer();
+        if (!bot || !bot->IsInWorld())
+        {
+            handler->PSendSysMessage("%s is not in the world.", target.GetName().c_str());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        handler->SendSysMessage(BuildManagedBotStatusLine(bot));
+        handler->SendSysMessage(std::string("PB move diag: ") + playerbot::PvpClassActions::GetLastMovementDebugStatus(bot));
+        handler->SendSysMessage(BuildManagedBotUpdateDiagnosticLine(bot));
+        handler->SendSysMessage(std::string("PB fight: ") + playerbot::DescribeBattlegroundPursuit(bot));
+        return true;
     }
 
     static bool HandlePlayerbotPvpLifecycleSnapshotCommand(ChatHandler* handler)
