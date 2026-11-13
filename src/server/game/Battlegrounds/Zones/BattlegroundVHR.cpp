@@ -20,6 +20,7 @@
 #include "SpellAuras.h"
 #include "StringFormat.h"
 #include "VioletHoldBoons.h"
+#include "VioletHoldClassBoons.h"
 #include "Miscellaneous/VioletHoldBars.h"
 #include "World.h"
 #include "WorldPacket.h"
@@ -263,6 +264,10 @@ void BattlegroundVHR::RemovePlayer(Player* player, ObjectGuid guid, uint32 team)
     // has nothing on them to drop when StripAll then takes those spells away.
     if (player)
     {
+        // Stacks Boon of Inheritance lent them were for this wave only; a
+        // logout must not save them onto the character.
+        VioletHoldBoons::ReturnInheritanceOf(player, _inherited);
+
         WorldSession const* session = player->GetSession();
         if (!session || !session->PlayerLogout())
         {
@@ -306,7 +311,11 @@ void BattlegroundVHR::Reset()
     _alliesToDismiss.clear();
     _claimedRunUniqueBoons = 0;
     _multitudesThisWave = 0;
+    _oncePerWave.clear();
     _undying.clear();
+    _recentHits.clear();
+    _inherited.clear();
+    _packLeaderTimerMs = 0;
     _menagerie.clear();
     _waveCloneSources.clear();
     _championGuid.Clear();
@@ -1156,6 +1165,9 @@ void BattlegroundVHR::OpenWaveCell()
     DespawnMenagerie();
     SummonMenagerie();
 
+    // Boon of the Herald: haste and speed for the whole party as it opens.
+    VioletHoldBoons::SoundHerald(this);
+
     if (_championGuid)
         if (Player const* champion = ObjectAccessor::FindPlayer(_championGuid))
         {
@@ -1180,9 +1192,14 @@ void BattlegroundVHR::CompleteWave()
     // Reflections last the wave they joined; they go before anyone is raised.
     DismissFleetingAllies();
     _multitudesThisWave = 0;
+    _oncePerWave.clear();
     // Undying runs out on the wave, not on the holder: ended here without a
     // death, so the restore below finds them standing and fills them up.
     EndUndying();
+    // What Boon of Inheritance lent goes back with the wave; Focus Fire's
+    // memory of who hit what is about clones that are gone.
+    VioletHoldBoons::ReturnInheritance(_inherited);
+    _recentHits.clear();
     RestorePartyAfterWave();
     uint32 const brokers = SpawnWaveRewardBuffs();
 
@@ -1676,6 +1693,18 @@ void BattlegroundVHR::CollectHumanPlayers(std::vector<Player const*>& out) const
             out.push_back(player);
 }
 
+bool BattlegroundVHR::WasHitByOtherAlly(ObjectGuid victim, ObjectGuid holder, uint32 nowMs, uint32 windowMs) const
+{
+    auto const hits = _recentHits.find(victim);
+    if (hits == _recentHits.end())
+        return false;
+
+    for (auto const& [attacker, atMs] : hits->second)
+        if (attacker != holder && nowMs - atMs <= windowMs)
+            return true;
+    return false;
+}
+
 void BattlegroundVHR::ConsumeBoonBroker(ObjectGuid brokerGuid)
 {
     if (!brokerGuid)
@@ -1995,6 +2024,13 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
     if (!_undying.empty())
         UpdateUndying(diff);
 
+    _packLeaderTimerMs += diff;
+    if (_packLeaderTimerMs >= VioletHoldBoons::PACK_LEADER_TICK_MS)
+    {
+        _packLeaderTimerMs = 0;
+        VioletHoldBoons::UpdatePackLeader(this);
+    }
+
     _bombFeedTimerMs += diff;
     if (_bombFeedTimerMs >= BG_VHR_BOMB_FEED_INTERVAL)
     {
@@ -2154,6 +2190,11 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
 
     Battleground::HandleKillPlayer(victim, killer);
 
+    // Boon of Inheritance: a fallen holder's stacking boons carry on in the
+    // living party until the wave is over (CompleteWave takes them back).
+    if (victim->GetBGTeam() == _humanTeam)
+        VioletHoldBoons::PassInheritance(this, victim, _inherited);
+
     // Every clone that falls lets one of the death half out of its cell. A
     // held clone cannot be hurt, but if one dies anyway it is no longer
     // waiting and counts the same.
@@ -2252,6 +2293,9 @@ void BattlegroundVHR::HandlePlayerResurrect(Player* player)
     // a rezzed clone keeps its wave alive too.
     _eliminated.erase(player->GetGUID());
     UpdateScoreWorldStates();
+
+    // Boon of the Relentless: death cleared Revenge's state; light it again.
+    VioletHoldClassBoons::RefreshReactives(player);
 }
 
 // Denominator for the players readout. _partySize is only fixed when the gates

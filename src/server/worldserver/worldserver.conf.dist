@@ -3056,6 +3056,21 @@ Centurion.Battleground.HourlyHonor.MaxFactor = 4.0
 Centurion.Battleground.HourlyHonor.ArenaEffort = 1.0
 
 #
+#    Centurion.Battleground.HumanOpponentHonorMultiplier
+#        Description: Every battleground and arena match pays this many times its
+#                     honor to a player who fought a person on another team in it -
+#                     hit them, was hit by them, or healed someone fighting them
+#                     (pets and totems count for their owner; playerbots and clones
+#                     are not people). Paid at the end for the whole match, in-play
+#                     honor included; below the level cap it is experience like the
+#                     rest. Custom games pay no honor and are unaffected. Read at
+#                     every match end, so .reload config applies to the next one.
+#        Default:     2.0 - (owner 2026-10-31: double honor)
+#                     1.0 - (Disabled)
+
+Centurion.Battleground.HumanOpponentHonorMultiplier = 2.0
+
+#
 #    Centurion.Battleground.Spoils.Enable
 #        Description: A chest of world-drop greens for a person below the level cap
 #                     who saw a battleground to its end. Not paid in arenas, custom
@@ -3755,6 +3770,14 @@ CharDelete.KeepDays = 30
 #                     reach the whole realm. The two fighters are told either way.
 #        Default:     0
 #
+#    Centurion.Mokgora.BotChallengesPerDay
+#        Description: How many bots one account may challenge to Mok'gora between
+#                     two daily quest resets. Only a challenge the bot took up
+#                     counts. A bounty notice's quarry challenging its holder is
+#                     the bot's challenge and does not count. Kept in memory, so
+#                     a worldserver restart resets it. 0 = no limit.
+#        Default:     1
+#
 #    Centurion.Mokgora.FlagGameObjectId
 #        Description: The marker planted between the two. 21680 is the flag the
 #                     Duel spell (7266) itself plants on this realm - it names it
@@ -3775,6 +3798,7 @@ Centurion.Mokgora.RequireDuelArea = 1
 Centurion.Mokgora.AnnounceStart = 1
 Centurion.Mokgora.AnnounceEnd = 1
 Centurion.Mokgora.AnnounceBots = 0
+Centurion.Mokgora.BotChallengesPerDay = 1
 Centurion.Mokgora.FlagGameObjectId = 21680
 
 ###################################################################################################

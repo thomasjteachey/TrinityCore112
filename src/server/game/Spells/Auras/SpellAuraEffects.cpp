@@ -45,6 +45,7 @@
 #include "ThreatManager.h"
 #include "Unit.h"
 #include "Util.h"
+#include "VioletHoldClassBoons.h"
 #include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
@@ -1837,6 +1838,9 @@ void AuraEffect::HandleAuraModShapeshift(AuraApplication const* aurApp, uint8 mo
                 // and polymorphic affects
                 if (target->IsPolymorphed())
                     target->RemoveAurasDueToSpell(target->GetTransformSpell());
+
+                // Violet Hold Untamed: and stuns and fears too.
+                VioletHoldClassBoons::OnShapeshift(target, GetSpellInfo());
                 break;
             }
             default:
@@ -5951,6 +5955,10 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
     // The player spell only: NPC Frost Novas carry no family and use the generic value.
     bool const isFrostNovaAura = auraInfo && auraInfo->SpellFamilyName == SPELLFAMILY_MAGE
         && (auraInfo->SpellFamilyFlags & FrostNovaFamilyMask);
+
+    // Violet Hold Dread: the holder's Psychic Scream does not break on damage.
+    if (GetAuraType() == SPELL_AURA_MOD_FEAR && VioletHoldClassBoons::FearHoldsThroughDamage(GetCaster(), auraInfo))
+        return;
 
     if (isEntanglingRootsAura)
     {

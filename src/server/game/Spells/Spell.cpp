@@ -72,6 +72,7 @@
 #include "Util.h"
 #include "Vehicle.h"
 #include "VioletHoldBoons.h"
+#include "VioletHoldClassBoons.h"
 #include "RiftProgression.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
@@ -3967,6 +3968,8 @@ void Spell::_cast(bool skipCheck)
         shockCaster->GetSpellHistory()->SyncShockCooldownsToClient(m_spellInfo);
         // League's cooldown reduction, likewise (SyncReducedCooldownToClient).
         shockCaster->GetSpellHistory()->SyncReducedCooldownToClient(m_spellInfo);
+        // Violet Hold Warlord / Trapper: the same, for their un-shared categories.
+        shockCaster->GetSpellHistory()->SyncUnboundCategoryToClient(m_spellInfo);
     }
 
     if (!m_spellInfo->IsChanneled())
@@ -4264,7 +4267,15 @@ void Spell::_handle_finish_phase()
     {
         // Take for real after all targets are processed
         if (m_needComboPoints)
+        {
             unitCaster->ClearComboPoints();
+            // Violet Hold Relentless: Overpower's point comes straight back.
+            VioletHoldClassBoons::RefreshReactives(unitCaster);
+        }
+
+        // Violet Hold Assassin: Hemorrhage builds one more.
+        if (m_comboTarget && m_comboPointGain > 0)
+            m_comboPointGain += VioletHoldClassBoons::GetExtraComboPoints(unitCaster, m_spellInfo);
 
         // Real add combo points from effects
         if (m_comboTarget && m_comboPointGain)
@@ -5962,8 +5973,10 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         if (unitCaster->GetTypeId() == TYPEID_PLAYER && unitCaster->ToPlayer()->isMoving() && (!unitCaster->IsCharmed() || !unitCaster->GetCharmerGUID().IsCreature()))
         {
             // skip stuck spell to allow use it in falling case and apply spell limitations at movement
+            // Violet Hold Skirmisher: Auto Shot starts on the move too.
             if ((!unitCaster->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR) || !m_spellInfo->HasEffect(SPELL_EFFECT_STUCK)) &&
-                (IsAutoRepeat() || (m_spellInfo->AuraInterruptFlags & AURA_INTERRUPT_FLAG_NOT_SEATED) != 0))
+                (IsAutoRepeat() || (m_spellInfo->AuraInterruptFlags & AURA_INTERRUPT_FLAG_NOT_SEATED) != 0)
+                && !(IsAutoRepeat() && VioletHoldClassBoons::ShootsWhileMoving(unitCaster, m_spellInfo)))
                 return SPELL_FAILED_MOVING;
         }
 
@@ -6040,8 +6053,10 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         if (target != casterForTargetCheck)
         {
             // Must be behind the target
+            // (Violet Hold Assassin: Backstab from the front.)
             if (m_spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET)
-                && target->HasInArc(static_cast<float>(M_PI), casterForTargetCheck))
+                && target->HasInArc(static_cast<float>(M_PI), casterForTargetCheck)
+                && !VioletHoldClassBoons::WaivesBehindRequirement(m_caster->ToUnit(), m_spellInfo))
             {
                 //pounce
                 bool pounceOk = false;
@@ -6987,7 +7002,8 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     }
 
     // check if caster has at least 1 combo point on target for spells that require combo points
-    if (m_needComboPoints)
+    // (Violet Hold Relentless: Overpower needs none.)
+    if (m_needComboPoints && !VioletHoldClassBoons::IgnoresComboRequirement(m_caster->ToUnit(), m_spellInfo))
     {
         if (Unit* unitCaster = m_caster->ToUnit())
         {
@@ -7073,6 +7089,11 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
 
     // spells totally immuned to caster auras (wsg flag drop, give marks etc)
     if (m_spellInfo->HasAttribute(SPELL_ATTR6_IGNORE_CASTER_AURAS))
+        return SPELL_CAST_OK;
+
+    // Violet Hold Untamed: a druid form goes up through stun, fear and
+    // polymorph, and breaks them (VioletHoldClassBoons::OnShapeshift).
+    if (VioletHoldClassBoons::ShiftsThroughControl(unitCaster, m_spellInfo))
         return SPELL_CAST_OK;
 
     // these attributes only show the spell as usable on the client when it has related aura applied
@@ -7487,6 +7508,10 @@ std::pair<float, float> Spell::GetMinMaxRange(bool strict) const
         modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_RANGE, maxRange, const_cast<Spell*>(this));
 
     maxRange += rangeMod;
+
+    // Violet Hold Point Blank: no dead zone for the hunter's shots.
+    if (minRange > 0.0f && VioletHoldClassBoons::IgnoresMinRange(unitCaster, m_spellInfo))
+        minRange = 0.0f;
 
     return { minRange, maxRange };
 }
@@ -9226,6 +9251,11 @@ void Spell::TriggerGlobalCooldown()
         gcd = int32(float(gcd) * m_caster->GetFloatValue(UNIT_MOD_CAST_SPEED));
         RoundToInterval<int32>(gcd, MIN_GCD, MAX_GCD);
     }
+
+    // Violet Hold's Boon of Tempo, after the haste clamp so it can reach under
+    // the client's 1.0 sec haste floor. The client-tweaks DLL makes the same
+    // cut in the client's own copy of this function (0x805D70); 0 stays 0.
+    gcd = VioletHoldBoons::ApplyGlobalCooldownReduction(m_caster->ToUnit(), gcd);
 
     if (gcd)
         m_caster->ToUnit()->GetSpellHistory()->AddGlobalCooldown(m_spellInfo, gcd);

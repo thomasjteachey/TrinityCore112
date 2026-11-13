@@ -28,7 +28,9 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "T2SpellHooks.h"
+#include "VioletHoldClassBoons.h"
 #include "WorldPacket.h"
+#include <cstring>
 
 SpellHistory::Clock::duration const SpellHistory::InfinityCooldownDelay = std::chrono::duration_cast<SpellHistory::Clock::duration>(std::chrono::seconds(MONTH));
 SpellHistory::Clock::duration const SpellHistory::InfinityCooldownDelayCheck = std::chrono::duration_cast<SpellHistory::Clock::duration>(std::chrono::seconds(MONTH / 2));
@@ -300,7 +302,7 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
     // (RecoveryTime 0, CategoryRecoveryTime 6000). A holder's unbound shock keeps
     // those 6 s as its OWN cooldown and leaves the category alone, so it neither
     // hands the lockout to the other shocks nor takes it from them.
-    if (categoryId && T2SpellHooks::IsShockUnbound(_owner, spellInfo))
+    if (categoryId && (T2SpellHooks::IsShockUnbound(_owner, spellInfo) || VioletHoldClassBoons::IsCategoryUnbound(_owner, spellInfo)))
     {
         if (categoryCooldown > cooldown)
             cooldown = categoryCooldown;
@@ -949,13 +951,16 @@ void SpellHistory::GetCooldownDurations(SpellInfo const* spellInfo, uint32 itemI
 
 bool SpellHistory::IsUnboundShock(SpellInfo const* spellInfo) const
 {
-    return T2SpellHooks::IsShockUnbound(_owner, spellInfo);
+    return T2SpellHooks::IsShockUnbound(_owner, spellInfo) || VioletHoldClassBoons::IsCategoryUnbound(_owner, spellInfo);
 }
 
 bool SpellHistory::FindUnboundShockCooldown(SpellInfo const* spellInfo, Clock::time_point* end) const
 {
     // Same family, same category, overlapping family flags = same shock chain.
     // The unbound entry was stored with CategoryId 0, so nothing else keys on it.
+    // The Violet Hold's unbound spells (Warlord, Trapper) share family flags
+    // across different spells (every trap is 0x80), so theirs is the name.
+    bool const byName = VioletHoldClassBoons::IsCategoryUnbound(_owner, spellInfo);
     bool found = false;
     for (auto const& p : _spellCooldowns)
     {
@@ -965,7 +970,14 @@ bool SpellHistory::FindUnboundShockCooldown(SpellInfo const* spellInfo, Clock::t
             if (!other || other->SpellFamilyName != spellInfo->SpellFamilyName || other->GetCategory() != spellInfo->GetCategory())
                 continue;
 
-            if (!(other->SpellFamilyFlags[0] & spellInfo->SpellFamilyFlags[0]))
+            if (byName)
+            {
+                char const* a = other->SpellName[LOCALE_enUS];
+                char const* b = spellInfo->SpellName[LOCALE_enUS];
+                if (!a || !b || std::strcmp(a, b) != 0)
+                    continue;
+            }
+            else if (!(other->SpellFamilyFlags[0] & spellInfo->SpellFamilyFlags[0]))
                 continue;
         }
 
@@ -1076,6 +1088,74 @@ void SpellHistory::SyncReducedCooldownToClient(SpellInfo const* castSpell)
                     times[id] = left;
         }
     ResendCooldownRecords(player, castSpell, times);
+}
+
+void SpellHistory::SyncUnboundCategoryToClient(SpellInfo const* castSpell)
+{
+    if (!castSpell || !castSpell->GetCategory())
+        return;
+    Player* player = _owner->ToPlayer();
+    if (!player || !VioletHoldClassBoons::IsCategoryUnbound(player, castSpell))
+        return;
+
+    // Nothing to mirror when the server started nothing (a triggered cast).
+    uint32 const remaining = GetRemainingCooldown(castSpell);
+    if (!remaining)
+        return;
+
+    // The cast rank's client record carries the category half that greys the
+    // other two (or the other traps): tear it down and re-add every known
+    // rank of the SAME spell as a plain per-spell cooldown - the shock recipe.
+    char const* name = castSpell->SpellName[LOCALE_enUS];
+    PacketCooldowns times;
+    times[castSpell->Id] = remaining;
+    for (auto const& [id, known] : player->GetSpellMap())
+    {
+        if (id == castSpell->Id || known.state == PLAYERSPELL_REMOVED || known.disabled)
+            continue;
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(id);
+        if (!info || info->SpellFamilyName != castSpell->SpellFamilyName || info->GetCategory() != castSpell->GetCategory())
+            continue;
+        char const* other = info->SpellName[LOCALE_enUS];
+        if (name && other && std::strcmp(name, other) == 0)
+            times[id] = remaining;
+    }
+    ResendCooldownRecords(player, castSpell, times);
+}
+
+uint32 SpellHistory::ClearSchoolLockouts()
+{
+    Clock::time_point const now = GameTime::GetSystemTime();
+    std::vector<Clock::time_point> ends;
+    for (uint32 i = 0; i < MAX_SPELL_SCHOOL; ++i)
+    {
+        if (_schoolLockouts[i] > now)
+            ends.push_back(_schoolLockouts[i]);
+        _schoolLockouts[i] = Clock::time_point();
+    }
+    if (ends.empty())
+        return 0;
+
+    // LockSpellSchool wrote {spell, no item, no category, end = lockout end}
+    // for every spell of the school; a real cooldown never ends on that exact
+    // instant. (A shorter real cooldown the lockout overwrote is freed too.)
+    std::vector<int32> cleared;
+    for (auto itr = _spellCooldowns.begin(); itr != _spellCooldowns.end();)
+    {
+        CooldownEntry const& entry = itr->second;
+        if (!entry.ItemId && !entry.CategoryId && !entry.OnHold
+            && std::find(ends.begin(), ends.end(), entry.CooldownEnd) != ends.end())
+        {
+            cleared.push_back(int32(itr->first));
+            itr = EraseCooldown(itr);
+        }
+        else
+            ++itr;
+    }
+
+    if (!cleared.empty())
+        SendClearCooldowns(cleared);
+    return uint32(cleared.size());
 }
 
 void SpellHistory::ResendCooldownRecords(Player* player, SpellInfo const* castSpell, PacketCooldowns const& remaining)

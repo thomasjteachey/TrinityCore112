@@ -90,6 +90,7 @@
 #include "Util.h"
 #include "Vehicle.h"
 #include "VioletHoldBoons.h"
+#include "VioletHoldClassBoons.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -1596,8 +1597,17 @@ static bool IsDuelOpponentsBlow(Unit const* attacker, Player const* opponent)
         undying = true;
     }
 
+    // Violet Hold "Boon of the Ancestors": Phoenix's clamp, once per wave,
+    // ahead of Phoenix so the renewable save is spent before the one-shot.
+    bool ancestors = false;
+    if (!duel_hasEnded && !undying && damage >= health && VioletHoldClassBoons::TryAncestors(victim))
+    {
+        damage = health - 1;
+        ancestors = true;
+    }
+
     bool phoenixRescue = false;
-    if (!duel_hasEnded && !undying && damage >= health && VioletHoldBoons::TryPhoenixRescue(victim))
+    if (!duel_hasEnded && !undying && !ancestors && damage >= health && VioletHoldBoons::TryPhoenixRescue(victim))
     {
         damage = health - 1;
         phoenixRescue = true;
@@ -1742,6 +1752,9 @@ static bool IsDuelOpponentsBlow(Unit const* attacker, Player const* opponent)
 
     if (phoenixRescue)
         VioletHoldBoons::CompletePhoenixRescue(victim);
+
+    if (ancestors)
+        VioletHoldClassBoons::CompleteAncestors(victim);
 
     if (undying)
         VioletHoldBoons::BeginUndying(victim);
@@ -3524,6 +3537,14 @@ SpellMissInfo Unit::MeleeSpellHitResult(Unit* victim, SpellInfo const* spellInfo
         }
     }
 
+    // Violet Hold Assassin: Backstab is never dodged, parried or blocked.
+    if (VioletHoldClassBoons::IgnoresAvoidance(this, spellInfo))
+    {
+        canDodge = false;
+        canParry = false;
+        canBlock = false;
+    }
+
     if (canDodge)
     {
         // Roll dodge
@@ -4071,7 +4092,9 @@ void Unit::_UpdateAutoRepeatSpell()
     SpellInfo const* autoRepeatSpellInfo = m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_spellInfo;
 
     // check "realtime" interrupts
-    if ((GetTypeId() == TYPEID_PLAYER && ToPlayer()->isMoving()) || IsNonMeleeSpellCast(false, false, true, autoRepeatSpellInfo->Id == 75))
+    // (Violet Hold Skirmisher: Auto Shot keeps firing on the move.)
+    if ((GetTypeId() == TYPEID_PLAYER && ToPlayer()->isMoving() && !VioletHoldClassBoons::ShootsWhileMoving(this, autoRepeatSpellInfo))
+        || IsNonMeleeSpellCast(false, false, true, autoRepeatSpellInfo->Id == 75))
     {
         // cancel wand shoot
         if (autoRepeatSpellInfo->Id != 75)
@@ -8169,6 +8192,10 @@ void Unit::UnsummonAllTotems()
             if (OldTotem->IsSummon())
                 OldTotem->ToTempSummon()->UnSummon();
     }
+
+    // Violet Hold Totem Lord: totems a newer one pushed off the bar still
+    // stand, and no slot points at them.
+    VioletHoldClassBoons::UnsummonLooseTotems(this);
 }
 
 void Unit::SendHealSpellLog(HealInfo& healInfo, bool critical /*= false*/)
@@ -10383,6 +10410,11 @@ int32 Unit::ModifyPower(Powers power, int32 dVal, bool withPowerUpdate /*= true*
     int32 curPower = (int32)GetPower(power);
 
     int32 val = dVal + curPower;
+
+    // Violet Hold Wellspring: mana crossing below half.
+    if (power == POWER_MANA && dVal < 0)
+        VioletHoldClassBoons::OnManaChange(this, curPower, std::max(val, 0));
+
     if (val <= 0)
     {
         SetPower(power, 0, withPowerUpdate);
@@ -12808,6 +12840,9 @@ void Unit::ClearAllReactives()
         ClearComboPoints();
     if (IsHunterPet())
         ClearComboPoints();
+
+    // Violet Hold Relentless: lit again straight away (a no-op for anyone else).
+    VioletHoldClassBoons::RefreshReactives(this);
 }
 
 void Unit::UpdateReactives(uint32 p_time)
@@ -12822,6 +12857,10 @@ void Unit::UpdateReactives(uint32 p_time)
         if (m_reactiveTimer[reactive] <= p_time)
         {
             m_reactiveTimer[reactive] = 0;
+
+            // Violet Hold Relentless: Revenge and Overpower never lapse.
+            if ((reactive == REACTIVE_DEFENSE || reactive == REACTIVE_OVERPOWER) && VioletHoldClassBoons::KeepsReactivesLit(this))
+                continue;
 
             switch (reactive)
             {
@@ -13351,6 +13390,10 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
     // who was fighting them, which is the whole reason this hook exists.
     if (Player* dyingPlayer = victim->ToPlayer())
         sScriptMgr->OnPlayerJustDied(dyingPlayer, attacker);
+
+    // Violet Hold Contagion (DoTs jump) and Eternal Pact (the demon returns):
+    // the victim's auras and owner are still there to read.
+    VioletHoldClassBoons::OnUnitDying(victim);
 
     // Spirit of Redemption
     // if talent known but not triggered

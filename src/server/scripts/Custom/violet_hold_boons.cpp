@@ -7,6 +7,7 @@
 #include "Battleground.h"
 #include "BattlegroundVHR.h"
 #include "CellImpl.h"
+#include "Containers.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "Map.h"
@@ -100,7 +101,7 @@ BattlegroundVHR* RunOfPlayer(Player const* player)
 // Server -> addon, CCGAME whispers, fields split on '^' (Field() keeps them
 // out of the text), <broker> written the way UnitGUID writes it:
 //   VHBOON:DEAL:<broker>^<wave>^<final wave>^<greed>^<abundance>^<hoarder>[^<name>^<class id>]...
-//   VHBOON:CARD:<broker>^<code>^<kind B|S|I>^<tier 1-5>^<run-wide>^<greed card>^<icon S<spell>|I<item>>
+//   VHBOON:CARD:<broker>^<code>^<kind B|S|I>^<tier 1-6>^<run-wide>^<greed card>^<icon S<spell>|I<item>>
 //               ^<name>^<headline>^<text>^<held>^<after>^<cap>^<unit>^<PickResult for you>[^<who can take it>]...
 //   VHBOON:DECK:<broker>[^<tier>^<name>^<value>]...      (several lines when long)
 //   VHBOON:SHOW:<broker>                                 the hand is complete
@@ -147,12 +148,15 @@ bool IsRunWideBoon(Boon boon)
 // The card's frame colour, read off the roll weight so a card that looks rare
 // is rare in the pool: 1 common, 2 uncommon, 3 rare, 4 class spell, 5 legendary.
 // A very-rare boon (weight 0, rarer than any legendary) wears the legendary frame.
+// The class boons are tier 6, artifact: the top frame (BoonDraft.lua's RARITY[6]).
 uint8 RarityTier(Offer offer)
 {
     if (offer.kind == Offer::Kind::Item)
         return 5;
     if (offer.kind == Offer::Kind::ClassSpell)
         return 4;
+    if (IsArtifact(Boon(offer.index)))
+        return 6;
     uint8 const weight = GetBoon(Boon(offer.index)).weight;
     if (!weight)
         return 5;
@@ -1187,8 +1191,184 @@ class spell_vhr_boon_aggression : public AuraScript
     }
 };
 
+namespace
+{
+// What Boon of Deliverance breaks: every loss-of-control and movement
+// impairing mechanic, plus silence and disarms.
+constexpr uint32 DELIVERANCE_MECHANIC_MASK = IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK
+    | (1 << MECHANIC_SILENCE) | (1 << MECHANIC_DISARM) | (1 << MECHANIC_GRIP);
+
+// A harmful aura that is crowd control: by mechanic, or - for the many that
+// carry none - by what one of its applied effects does.
+bool IsDeliveranceCrowdControl(AuraApplication const* app)
+{
+    if (!app || app->IsPositive())
+        return false;
+
+    SpellInfo const* info = app->GetBase()->GetSpellInfo();
+    if (info->GetSpellMechanicMaskByEffectMask(app->GetEffectMask()) & DELIVERANCE_MECHANIC_MASK)
+        return true;
+
+    for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+    {
+        if (!(app->GetEffectMask() & (1 << i)))
+            continue;
+        switch (info->GetEffect(SpellEffIndex(i)).ApplyAuraName)
+        {
+            case SPELL_AURA_MOD_STUN:
+            case SPELL_AURA_MOD_ROOT:
+            case SPELL_AURA_MOD_FEAR:
+            case SPELL_AURA_MOD_CONFUSE:
+            case SPELL_AURA_MOD_CHARM:
+            case SPELL_AURA_MOD_SILENCE:
+            case SPELL_AURA_MOD_PACIFY:
+            case SPELL_AURA_MOD_PACIFY_SILENCE:
+            case SPELL_AURA_MOD_DECREASE_SPEED:
+            case SPELL_AURA_MOD_DISARM:
+            case SPELL_AURA_MOD_DISARM_OFFHAND:
+            case SPELL_AURA_MOD_DISARM_RANGED:
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
+bool HasDeliveranceCrowdControl(Unit const* unit)
+{
+    for (auto const& [spellId, app] : unit->GetAppliedAuras())
+        if (IsDeliveranceCrowdControl(app))
+            return true;
+    return false;
+}
+
+// A random living ally of `holder` in its battleground - a member of the same
+// team, on the same map, never the holder. One under crowd control is picked
+// first, so the boon spends itself where it matters; with nobody held, any
+// ally gets the speed. Clones carry the boons they copied, so on a clone this
+// frees one of the other clones - the same mirror every other boon follows.
+Player* PickDeliveranceAlly(Player* holder)
+{
+    Battleground* bg = holder->GetBattleground();
+    if (!bg)
+        return nullptr;
+
+    uint32 const team = holder->GetBGTeam();
+    std::vector<Player*> held, loose;
+    for (auto const& [guid, bgPlayer] : bg->GetPlayers())
+    {
+        if (guid == holder->GetGUID() || bgPlayer.Team != team || bgPlayer.OfflineRemoveTime)
+            continue;
+        Player* ally = ObjectAccessor::GetPlayer(*holder, guid);
+        if (!ally || !ally->IsInWorld() || !ally->IsAlive())
+            continue;
+        (HasDeliveranceCrowdControl(ally) ? held : loose).push_back(ally);
+    }
+
+    std::vector<Player*> const& pool = held.empty() ? loose : held;
+    if (pool.empty())
+        return nullptr;
+    return Trinity::Containers::SelectRandomContainerElement(pool);
+}
+}
+
+// 94320 Boon of Deliverance: a critical hit or heal by the holder frees a
+// random ally from all crowd control and puts 94321 (+50% run speed, 3 sec) on
+// them. The spell_proc row limits it to crits (HitMask) and to once every
+// 3 sec (Cooldown); a proc with no ally to help is refused here, so it does not
+// spend the cooldown.
+class spell_vhr_boon_deliverance : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_boon_deliverance);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (!(eventInfo.GetHitMask() & PROC_HIT_CRITICAL))
+            return false;
+        if (IsBoonTriggeredSpell(eventInfo.GetSpellInfo()))
+            return false;
+        Player* holder = GetTarget()->ToPlayer();
+        return holder && holder->IsAlive() && PickDeliveranceAlly(holder);
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+
+        Player* holder = GetTarget()->ToPlayer();
+        Player* ally = holder ? PickDeliveranceAlly(holder) : nullptr;
+        if (!ally)
+            return;
+
+        ally->RemoveAppliedAuras([](AuraApplication const* app) { return IsDeliveranceCrowdControl(app); });
+
+        // Cast by the ally on themselves, so neither range nor line of sight
+        // to the holder matters; the holder is named as its source.
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.SetOriginalCaster(holder->GetGUID());
+        ally->CastSpell(ally, SPELL_DELIVERANCE_SPEED, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_vhr_boon_deliverance::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_vhr_boon_deliverance::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// Boons of Kinship and Focus Fire (the damage the holder deals) and Focus
+// Fire's record of who hit what. The bonus itself is decided by
+// VioletHoldBoons::GetPartyDamageBonusPct; this only applies it.
+class vhr_party_boon_damage : public UnitScript
+{
+public:
+    vhr_party_boon_damage() : UnitScript("vhr_party_boon_damage") { }
+
+    static uint32 Boosted(Unit* attacker, Unit* target, uint32 damage)
+    {
+        if (!damage)
+            return damage;
+        int32 const pct = GetPartyDamageBonusPct(attacker, target);
+        return pct > 0 ? damage + CalculatePct(damage, pct) : damage;
+    }
+
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
+    {
+        damage = Boosted(attacker, target, damage);
+    }
+
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage) override
+    {
+        if (damage > 0)
+            damage = int32(Boosted(attacker, target, uint32(damage)));
+    }
+
+    // Periodic damage ticks.
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* /*spellInfo*/) override
+    {
+        damage = Boosted(attacker, target, damage);
+    }
+
+    // Drain ticks - and, from the periodic HEAL handler, heal-over-time ticks
+    // too, which must be left alone: only a tick on something the attacker
+    // may fight is damage.
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage) override
+    {
+        if (attacker && target && attacker->IsValidAttackTarget(target))
+            damage = Boosted(attacker, target, damage);
+    }
+
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
+    {
+        if (damage)
+            NoteHit(attacker, victim);
+    }
+};
+
 void AddSC_violet_hold_boons()
 {
+    new vhr_party_boon_damage();
     new npc_violet_hold_boon_broker();
     AddonRequestRoutes::Register("VHBOON", &HandleBoonRequest);
     RegisterSpellScript(spell_vhr_boon_flurry);
@@ -1202,4 +1382,5 @@ void AddSC_violet_hold_boons()
     RegisterSpellScript(spell_vhr_boon_clearcasting);
     RegisterSpellScript(spell_vhr_boon_viper);
     RegisterSpellScript(spell_vhr_boon_aggression);
+    RegisterSpellScript(spell_vhr_boon_deliverance);
 }

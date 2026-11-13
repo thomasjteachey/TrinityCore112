@@ -73,6 +73,7 @@ void AddSC_custom_player_collision();
 void AddSC_custom_global_collision();
 void AddSC_custom_client_attest();
 void AddSC_violet_hold_boons();
+void AddSC_violet_hold_class_boons();
 void AddSC_custom_spell_propagate();
 void AddSC_custom_tournament_mode();
 void AddSC_custom_mokgora();
@@ -144,6 +145,7 @@ void AddCustomScripts()
     AddSC_custom_rift_progression();
     AddSC_custom_rift_items();
     AddSC_violet_hold_boons();
+    AddSC_violet_hold_class_boons();
     AddSC_blood_beneath_arena();
     AddSC_custom_always_known_flight_paths();
     AddSC_custom_spawn_commands();

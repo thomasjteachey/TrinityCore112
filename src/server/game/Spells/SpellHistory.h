@@ -146,9 +146,22 @@ public:
     // StartCooldown marked this cast.
     void SyncReducedCooldownToClient(SpellInfo const* castSpell);
 
+    // Violet Hold Warlord / Trapper (VioletHoldClassBoons::IsCategoryUnbound):
+    // the same un-sharing as the unbound shocks, keyed by spell name instead of
+    // the shock family flags - Shield Wall, Recklessness and Retaliation keep
+    // their 30 min to themselves, and so does each trap. The client's own
+    // category record from SMSG_SPELL_GO is replaced by a per-spell one for
+    // every known rank of the cast spell. Call right after SendSpellGo.
+    void SyncUnboundCategoryToClient(SpellInfo const* castSpell);
+
     // School lockouts
     void LockSpellSchool(SpellSchoolMask schoolMask, uint32 lockoutTime);
     bool IsSchoolLocked(SpellSchoolMask schoolMask) const;
+    // Violet Hold Spellbreaker: lift every running school lockout - the
+    // per-spell cooldowns LockSpellSchool wrote (they end exactly at the
+    // lockout's end) go, and the client hears SMSG_CLEAR_COOLDOWN for each.
+    // Returns how many spells were freed.
+    uint32 ClearSchoolLockouts();
 
     // Global cooldown
     bool HasGlobalCooldown(SpellInfo const* spellInfo) const;

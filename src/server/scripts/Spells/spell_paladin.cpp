@@ -37,6 +37,7 @@
 #include "Log.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "VioletHoldClassBoons.h"
 #include "WorldSession.h"
 #include <algorithm>
 
@@ -1332,7 +1333,9 @@ class spell_pal_immunities : public SpellScript
             target = caster;
 
         // "Cannot be used within $61987d. of using Avenging Wrath."
-        if (target->HasAura(SPELL_PALADIN_FORBEARANCE) || target->HasAura(SPELL_PALADIN_AVENGING_WRATH_MARKER))
+        // (Violet Hold Unbound Light: no Forbearance for or from a holder.)
+        if ((target->HasAura(SPELL_PALADIN_FORBEARANCE) || target->HasAura(SPELL_PALADIN_AVENGING_WRATH_MARKER))
+            && !VioletHoldClassBoons::IgnoresForbearance(caster, target))
             return SPELL_FAILED_TARGET_AURASTATE;
 
         return SPELL_CAST_OK;
@@ -1342,6 +1345,9 @@ class spell_pal_immunities : public SpellScript
     {
         if (Unit* target = GetHitUnit())
         {
+            if (VioletHoldClassBoons::IgnoresForbearance(GetCaster(), target))
+                return;
+
             // Blizz seems to just apply aura without bothering to cast
             GetCaster()->AddAura(SPELL_PALADIN_FORBEARANCE, target);
             GetCaster()->AddAura(SPELL_PALADIN_AVENGING_WRATH_MARKER, target);
@@ -1646,6 +1652,17 @@ private:
             caster->CastSpell(hitUnit, spellId2, true);
             for (uint32 extra : extraSealJudgements)
                 caster->CastSpell(hitUnit, extra, true);
+
+            // Violet Hold Judgement Day: the same judgement on every enemy
+            // around the paladin, before the seal is spent below.
+            std::vector<Unit*> splash;
+            VioletHoldClassBoons::CollectJudgementSplash(caster, hitUnit, splash);
+            for (Unit* enemy : splash)
+            {
+                caster->CastSpell(enemy, spellId2, true);
+                for (uint32 extra : extraSealJudgements)
+                    caster->CastSpell(enemy, extra, true);
+            }
         }
 
         // Remove all seal spells. Chain-independent on purpose: the Seal of
@@ -1824,7 +1841,7 @@ class spell_pal_lay_on_hands : public SpellScript
     {
         Unit* caster = GetCaster();
         if (Unit* target = GetExplTargetUnit())
-            if (caster == target)
+            if (caster == target && !VioletHoldClassBoons::IgnoresForbearance(caster, target))
                 if (target->HasAura(SPELL_PALADIN_FORBEARANCE) || target->HasAura(SPELL_PALADIN_AVENGING_WRATH_MARKER) || target->HasAura(SPELL_PALADIN_IMMUNE_SHIELD_MARKER))
                     return SPELL_FAILED_TARGET_AURASTATE;
 
@@ -1834,7 +1851,7 @@ class spell_pal_lay_on_hands : public SpellScript
     void HandleScript()
     {
         Unit* caster = GetCaster();
-        if (caster == GetHitUnit())
+        if (caster == GetHitUnit() && !VioletHoldClassBoons::IgnoresForbearance(caster, caster))
         {
             caster->CastSpell(caster, SPELL_PALADIN_AVENGING_WRATH_MARKER, true);
             caster->CastSpell(caster, SPELL_PALADIN_IMMUNE_SHIELD_MARKER, true);

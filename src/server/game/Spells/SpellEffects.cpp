@@ -62,6 +62,7 @@
 #include "UpdateMask.h"
 #include "Unit.h"
 #include "Util.h"
+#include "VioletHoldClassBoons.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -2524,7 +2525,12 @@ void Spell::EffectSummonType()
                     if (!unitCaster)
                         return;
 
-                    summon = unitCaster->GetMap()->SummonCreature(entry, *destTarget, properties, duration, unitCaster, m_spellInfo->Id, 0, personalSpawn);
+                    // Violet Hold Totem Lord: the earlier copy of this totem
+                    // goes, the new one lasts all day.
+                    if (properties->Title == SUMMON_TYPE_TOTEM)
+                        VioletHoldClassBoons::BeforeTotemSummon(unitCaster, m_spellInfo, duration);
+
+                    summon =unitCaster->GetMap()->SummonCreature(entry, *destTarget, properties, duration, unitCaster, m_spellInfo->Id, 0, personalSpawn);
                     if (!summon || !summon->IsTotem())
                         return;
 
@@ -2681,6 +2687,10 @@ void Spell::EffectDispel()
         return;
 
     uint32 dispelCount = uint32(damage);
+
+    // Violet Hold Stormcaller: Purge takes everything it can.
+    if (VioletHoldClassBoons::DispelsEverything(m_caster, m_spellInfo))
+        dispelCount = 255;
 
     DispelChargesList dispelList;
     unitTarget->GetDispellableAuraList(m_caster, dispelMask, dispelList, targetMissInfo == SPELL_MISS_REFLECT);
@@ -3929,6 +3939,12 @@ void Spell::EffectInterruptCast()
     if (!interruptedSomething)
         if (Unit* unitCaster = GetUnitCasterForEffectHandlers())
             T2SpellHooks::OnInterruptWhileNotCasting(unitCaster, unitTarget);
+
+    // Violet Hold Spellbreaker: a Counterspell that landed frees the caster's
+    // whole side from their own lockouts.
+    if (interruptedSomething)
+        if (Unit* unitCaster = GetUnitCasterForEffectHandlers())
+            VioletHoldClassBoons::OnSuccessfulInterrupt(unitCaster, m_spellInfo);
 }
 
 void Spell::EffectSummonObjectWild()

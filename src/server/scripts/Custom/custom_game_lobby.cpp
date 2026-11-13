@@ -49,6 +49,9 @@ constexpr uint32 CUSTOM_GAME_BLUE_ENTRY = 900002;
 constexpr uint32 CUSTOM_GAME_RED_ENTRY = 900003;
 constexpr uint32 CUSTOM_GAME_CHROMIE_ENTRY = 900004;
 constexpr uint32 CUSTOM_GAME_CHAIR_ENTRY = 178934;
+// A picture hung under the staging box's ceiling (GameObjectDisplayInfo 11980,
+// a flat downward-facing quad in patch-enUS-A), seen far overhead when looking up.
+constexpr uint32 CUSTOM_GAME_CEILING_PORTRAIT_ENTRY = 900340;
 constexpr uint32 CUSTOM_GAME_MAP_ID = 1;
 constexpr uint32 CUSTOM_GAME_MAX_PLAYERS_PER_TEAM = 40;
 constexpr uint32 CUSTOM_GAME_GOSSIP_PAGE_SIZE = 28;
@@ -65,6 +68,10 @@ Position const RedNpcPosition = { 16230.437500f, 16391.000000f, -64.378792f, 3.0
 Position const ChromieNpcPosition = { 16240.280273f, 16402.792969f, -64.378471f, 3.104628f };
 Position const ChairPosition = { 16227.799805f, 16403.400391f, -64.380402f, 3.136040f };
 QuaternionData const ChairRotation(0.0f, 0.0f, 0.999996f, 0.002776f);
+// Centre of GMDUNGEON.WMO, 0.74 yd below its ceiling (world z 12.24). The model's
+// image top points along +X, the way players face on arrival.
+Position const CeilingPortraitPosition = { 16227.9f, 16403.4f, 11.5f, 0.0f };
+QuaternionData const CeilingPortraitRotation(0.0f, 0.0f, 0.0f, 1.0f);
 WorldLocation const GurubashiGamesmasterLocation(0, -13235.707031f, 214.336441f, 31.276190f, 1.010225f);
 constexpr float LOBBY_MAX_DISTANCE = 32.0f;
 
@@ -415,6 +422,15 @@ void PopulateLobbyMap(Map* map)
         delete chair;
         TC_LOG_ERROR("scripts.custom", "Custom-game lobby could not spawn chair entry {} in instance {}.",
             CUSTOM_GAME_CHAIR_ENTRY, map->GetInstanceId());
+    }
+
+    GameObject* portrait = new GameObject();
+    if (!portrait->Create(map->GenerateLowGuid<HighGuid::GameObject>(), CUSTOM_GAME_CEILING_PORTRAIT_ENTRY, map,
+        PHASEMASK_NORMAL, CeilingPortraitPosition, CeilingPortraitRotation, 0, GO_STATE_READY) || !map->AddToMap(portrait))
+    {
+        delete portrait;
+        TC_LOG_ERROR("scripts.custom", "Custom-game lobby could not spawn ceiling portrait entry {} in instance {}.",
+            CUSTOM_GAME_CEILING_PORTRAIT_ENTRY, map->GetInstanceId());
     }
 }
 

@@ -27,6 +27,7 @@
 #include <deque>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace WorldPackets
@@ -622,6 +623,17 @@ class TC_GAME_API Battleground
             auto itr = m_MatchHonor.find(guid);
             return itr != m_MatchHonor.end() ? itr->second : 0;
         }
+        // Owner 2026-10-31: "every bg and arena mode should grant double honor
+        // if you fought a human opponent". A participant who got into PvP combat
+        // with a PERSON on another team while the match was in progress - hit
+        // them, was hit by them, or healed somebody fighting them (a heal
+        // inherits the ally's combat) - is paid the whole match's honor times
+        // Centurion.Battleground.HumanOpponentHonorMultiplier when it ends
+        // (ApplyHumanOpponentHonor). CombatManager calls this for every new PvP
+        // combat reference; pets, totems and charmed units count for whoever
+        // controls them.
+        static void NotePvPCombat(Unit const* a, Unit const* b);
+        bool FoughtHumanOpponent(ObjectGuid guid) const { return m_FoughtHuman.count(guid) != 0; }
         // A public match padded with transient clones by the playerbot module
         // (see PlayerbotBgFillDriver). In such a match the clones are bots for
         // every purpose the queue and the empty-match rules care about, so a
@@ -1202,6 +1214,11 @@ class TC_GAME_API Battleground
         // player's own character is paid. `honor` is the payout as handed to
         // RewardHonor, before Rate.Honor.
         virtual uint32 ShareEndOfMatchHonor(Player* /*player*/, uint32 honor) { return honor; }
+        // The end-of-match payout for a player who fought a person
+        // (NotePvPCombat): `payout` times the multiplier, plus what the
+        // multiplier adds to the honor already earned in play. Unchanged for
+        // everyone else.
+        uint32 ApplyHumanOpponentHonor(Player* player, uint32 payout) const;
 
         // Player lists, those need to be accessible by inherited classes
         BattlegroundPlayerMap m_Players;
@@ -1239,6 +1256,7 @@ class TC_GAME_API Battleground
         uint32 m_StartTime;
         uint32 m_ResetStatTimer;
         std::unordered_map<ObjectGuid, uint32> m_MatchHonor;   // NoteMatchHonor
+        std::unordered_set<ObjectGuid> m_FoughtHuman;          // NotePvPCombat
         uint32 m_ValidStartPositionTimer;
         BattlegroundBounds m_Bounds;
         uint32 m_BoundsCheckTimer;

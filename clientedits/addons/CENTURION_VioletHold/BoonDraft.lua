@@ -7,7 +7,7 @@
 -- Fields are split on '^'; <broker> is the broker's guid as UnitGUID writes it.
 --
 --    VHBOON:DEAL:<broker>^<wave>^<final wave>^<greed>^<abundance>^<hoarder>[^<name>^<class id>]...
---    VHBOON:CARD:<broker>^<code>^<B|S|I>^<tier 1-5>^<run-wide>^<greed card>^<S<spell>|I<item>>
+--    VHBOON:CARD:<broker>^<code>^<B|S|I>^<tier 1-6>^<run-wide>^<greed card>^<S<spell>|I<item>>
 --                ^<name>^<headline>^<text>^<held>^<after>^<cap>^<unit>^<status>[^<who can take it>]...
 --    VHBOON:DECK:<broker>[^<tier>^<name>^<value>]...
 --    VHBOON:SHOW:<broker>
@@ -40,6 +40,7 @@ local RARITY = {
 	{ name = "Rare",      r = 0.35, g = 0.67, b = 1.00 },
 	{ name = "Epic",      r = 0.73, g = 0.52, b = 1.00 },
 	{ name = "Legendary", r = 1.00, g = 0.62, b = 0.26 },
+	{ name = "Artifact",  r = 0.90, g = 0.80, b = 0.50 },   -- class boons (server tier 6), WoW's artifact gold
 };
 local GOLD = { r = 0.95, g = 0.81, b = 0.42 };
 
@@ -316,7 +317,7 @@ local function DrawCard(c, card, index, count)
 
 	-- Only what sets a card apart; a plain boon needs no label.
 	local kinds = { S = "CLASS SPELL", I = "LEGENDARY" };
-	c.kind:SetText(card.runWide and "RUN-WIDE" or kinds[card.kind] or "");
+	c.kind:SetText(card.runWide and "RUN-WIDE" or (card.tier == 6 and "ARTIFACT") or kinds[card.kind] or "");
 	c.kind:SetTextColor(rarity.r, rarity.g, rarity.b);
 
 	c.name:SetText(card.name);

@@ -62,6 +62,7 @@
 #include "BattlegroundScore.h"
 #include "Common.h"
 #include "Position.h"
+#include "VioletHoldBoons.h"
 
 #include <map>
 #include <string>
@@ -605,6 +606,9 @@ public:
     // Boons only one member of a run may ever take (VioletHoldBoons::
     // IsRunUnique), by Boon index. Claimed when taken; never released.
     bool IsRunUniqueBoonClaimed(uint8 boonIndex) const { return boonIndex < 64 && (_claimedRunUniqueBoons & (uint64(1) << boonIndex)); }
+    // Once-per-wave class boons (VioletHoldClassBoons: Ancestors, Wellspring):
+    // true the first time `guid` spends boon `boonSpellId` this wave.
+    bool ClaimOncePerWave(uint32 boonSpellId, ObjectGuid guid) { return _oncePerWave[boonSpellId].insert(guid).second; }
     void ClaimRunUniqueBoon(uint8 boonIndex) { if (boonIndex < 64) _claimedRunUniqueBoons |= uint64(1) << boonIndex; }
     std::vector<VhrAllyRequest> const& GetPendingAllyRequests() const { return _allyRequests; }
     // Fellowship's own requests and allies only - the reflections are not its.
@@ -614,6 +618,16 @@ public:
     void NotifyAllySpawned(uint32 requestId, ObjectGuid allyGuid);
     uint32 GetAllyCount() const { return uint32(_allies.size() - _fleetingAllies.size()); }
     bool IsAlly(ObjectGuid guid) const { return _allies.find(guid) != _allies.end(); }
+    // A reflection (Bright Reflection rune, Boon of Multitudes) - here for the
+    // wave only.
+    bool IsFleetingAlly(ObjectGuid guid) const { return _fleetingAllies.find(guid) != _fleetingAllies.end(); }
+
+    // Boon of Focus Fire: `attacker` (a player on the party's side) hit
+    // `victim` at `nowMs`. Forgotten when the wave ends.
+    void NoteHit(ObjectGuid victim, ObjectGuid attacker, uint32 nowMs) { _recentHits[victim][attacker] = nowMs; }
+    // Whether anyone on the party's side but `holder` hit `victim` within the
+    // last `windowMs`.
+    bool WasHitByOtherAlly(ObjectGuid victim, ObjectGuid holder, uint32 nowMs, uint32 windowMs) const;
     // Reflections whose wave has fallen, for the driver to take down. Empties
     // the list.
     std::vector<ObjectGuid> TakeAlliesToDismiss();
@@ -850,6 +864,16 @@ private:
     uint64 _claimedRunUniqueBoons = 0;
     // Boon of Multitudes copies called this wave (MULTITUDES_MAX_PER_WAVE).
     uint32 _multitudesThisWave = 0;
+    // Once-per-wave class boons (Ancestors, Wellspring): boon spell -> who
+    // already spent it this wave. Cleared in CompleteWave.
+    std::unordered_map<uint32, GuidSet> _oncePerWave;
+    // Boon of Focus Fire: victim -> party-side attacker -> game time (ms) of
+    // the last hit. Cleared every wave.
+    std::unordered_map<ObjectGuid, std::unordered_map<ObjectGuid, uint32>> _recentHits;
+    // Boon of Inheritance: stacks lent this wave, taken back in CompleteWave.
+    std::vector<VioletHoldBoons::InheritedStacks> _inherited;
+    // Boon of the Pack Leader's refresh clock.
+    uint32 _packLeaderTimerMs = 0;
     // Boon of the Undying: who is Undying, and the milliseconds they have left.
     std::unordered_map<ObjectGuid, uint32> _undying;
     // Menagerie guardians alive for the current wave.

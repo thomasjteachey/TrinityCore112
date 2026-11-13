@@ -25,6 +25,7 @@
 #include "ObjectAccessor.h"
 #include "Pet.h"
 #include "Player.h"
+#include "VioletHoldClassBoons.h"
 
 TempSummon::TempSummon(SummonPropertiesEntry const* properties, WorldObject* owner, bool isWorldObject) :
 Creature(isWorldObject), m_Properties(properties), m_type(TEMPSUMMON_MANUAL_DESPAWN),
@@ -203,7 +204,9 @@ void TempSummon::InitStats(uint32 duration)
             if (owner->m_SummonSlot[slot] && owner->m_SummonSlot[slot] != GetGUID())
             {
                 Creature* oldSummon = GetMap()->GetCreature(owner->m_SummonSlot[slot]);
-                if (oldSummon && oldSummon->IsSummon())
+                // Violet Hold Totem Lord: elements share no slot - the old
+                // totem keeps standing, only the bar moves to the new one.
+                if (oldSummon && oldSummon->IsSummon() && !VioletHoldClassBoons::KeepsDisplacedTotem(owner, oldSummon))
                     oldSummon->ToTempSummon()->UnSummon();
             }
             owner->m_SummonSlot[slot] = GetGUID();

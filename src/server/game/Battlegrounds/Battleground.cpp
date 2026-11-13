@@ -1529,6 +1529,96 @@ void Battleground::UpdateWorldState(uint32 variable, uint32 value)
     SendPacketToAll(worldstate.Write());
 }
 
+// A person at the keys: not a playerbot (virtual session) and not a transient
+// clone (a bot-fill seat, an Obsidian Colosseum mirror) - the reading
+// EndBattleground's count of humans uses.
+static bool IsHumanOpponent(Player const* player)
+{
+    WorldSession const* session = player->GetSession();
+    return session && !session->IsVirtualSession() && !session->IsTransientPlayerSession();
+}
+
+/*static*/ void Battleground::NotePvPCombat(Unit const* a, Unit const* b)
+{
+    // Every new PvP combat reference in the world comes through here, so the
+    // map test goes first and is all that a fight outside a match costs.
+    Map* map = a ? a->FindMap() : nullptr;
+    if (!map || !b || map != b->FindMap() || !map->IsBattlegroundOrArena())
+        return;
+
+    Battleground* bg = map->ToBattlegroundMap()->GetBG();
+    if (!bg || bg->GetStatus() != STATUS_IN_PROGRESS || bg->IsCustomGame())
+        return;
+
+    Player const* left = a->GetCharmerOrOwnerPlayerOrPlayerItself();
+    Player const* right = b->GetCharmerOrOwnerPlayerOrPlayerItself();
+    if (!left || !right || left == right)
+        return;
+
+    // Both seated in this match and on different teams - squads are teams
+    // here, and Buffle Shuffle's teams are the current round's. A heal pulls
+    // the healer into the ally's fights without asking who they are with, so
+    // a fight carried over from an earlier shuffle round can reach a teammate.
+    ObjectGuid const leftGuid = left->GetGUID();
+    ObjectGuid const rightGuid = right->GetGUID();
+    if (!bg->IsPlayerInBattleground(leftGuid) || !bg->IsPlayerInBattleground(rightGuid) ||
+        bg->AreTeammates(leftGuid, rightGuid))
+        return;
+
+    if (IsHumanOpponent(right))
+        bg->m_FoughtHuman.insert(leftGuid);
+    if (IsHumanOpponent(left))
+        bg->m_FoughtHuman.insert(rightGuid);
+}
+
+// Paid once, at the end, for the whole match: the in-play awards made before
+// the first fight with a person are multiplied as well, and a mode that pays
+// its end of the match late (All-Star, at the leave) is handed the multiplied
+// figure from here.
+//
+// The in-play honor was counted after ScaleHonorGain (Rate.Honor and any
+// honor-gain aura), and the payout goes to RewardHonor before it, so the
+// in-play part is turned back by the player's scale first - RewardHonor would
+// otherwise apply Rate.Honor to it a second time. All of it still goes through
+// RewardHonor, so below the level cap it is experience like the rest, and the
+// Rift's half honor applies to it as to everything a champion is paid.
+//
+// Nothing here reaches the hourly payout's records: they keep the configured
+// payout and the raw in-play medians.
+uint32 Battleground::ApplyHumanOpponentHonor(Player* player, uint32 payout) const
+{
+    if (!FoughtHumanOpponent(player->GetGUID()))
+        return payout;
+
+    // 1 (or less) turns it off. Read here, so .reload config applies to the
+    // next match that ends.
+    float const multiplier = sConfigMgr->GetFloatDefault("Centurion.Battleground.HumanOpponentHonorMultiplier", 2.0f);
+    if (multiplier <= 1.0f)
+        return payout;
+
+    double total = double(payout) * double(multiplier);
+    if (uint32 const inPlay = GetMatchHonor(player->GetGUID()))
+    {
+        double const scale = double(player->ScaleHonorGain(1000000.0f)) / 1000000.0;
+        if (scale > 0.0)
+            total += double(inPlay) / scale * (double(multiplier) - 1.0);
+    }
+
+    // RewardHonor takes an int32.
+    uint32 const multiplied = uint32(std::min(std::round(total), double(std::numeric_limits<int32>::max())));
+
+    if (multiplied > payout)
+        if (WorldSession* session = player->GetSession(); session && !session->IsVirtualSession())
+        {
+            if (multiplier == 2.0f)
+                ChatHandler(session).SendSysMessage("You fought a human opponent: this match's reward is doubled.");
+            else
+                ChatHandler(session).PSendSysMessage("You fought a human opponent: this match's reward is multiplied by %.2f.", multiplier);
+        }
+
+    return multiplied;
+}
+
 void Battleground::EndBattleground(uint32 winner)
 {
     RemoveFromBGFreeSlotQueue();
@@ -1696,6 +1786,17 @@ void Battleground::EndBattleground(uint32 winner)
 
         ModifyEndOfMatchHonorRewards(winner, team, winner_honor, loser_honor);
         ModifyEndOfMatchMoneyRewards(winner, team, winner_money, loser_money);
+
+        // Fought a person this match: its honor is multiplied (ApplyHumanOpponentHonor).
+        // Before the All-Star share below, so every character that played one
+        // of the player's lives is paid a multiplied share.
+        if (paysOut && !m_IsCustomGame)
+        {
+            if (won)
+                winner_honor = ApplyHumanOpponentHonor(player, winner_honor);
+            else
+                loser_honor = ApplyHumanOpponentHonor(player, loser_honor);
+        }
 
         // Rewards
         // only grant rewards if battle has lasted 15 seconds

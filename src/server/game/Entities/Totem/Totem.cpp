@@ -27,6 +27,7 @@
 #include "SpellMgr.h"
 #include "ThreatManager.h"
 #include "TotemPackets.h"
+#include "VioletHoldClassBoons.h"
 
 Totem::Totem(SummonPropertiesEntry const* properties, Unit* owner) : Minion(properties, owner, false)
 {
@@ -55,6 +56,9 @@ void Totem::Update(uint32 time)
     }
     else
         m_duration -= time;
+
+    // Violet Hold Totem Lord: walk after the shaman.
+    VioletHoldClassBoons::UpdateTotemFollow(this);
 
     Creature::Update(time);
 }
@@ -127,6 +131,9 @@ void Totem::UnSummon(uint32 msTime)
         if (GetOwner()->m_SummonSlot[i] == GetGUID())
         {
             GetOwner()->m_SummonSlot[i].Clear();
+            // Violet Hold Totem Lord: an older totem of this element still
+            // standing takes the bar back.
+            VioletHoldClassBoons::OnTotemSlotFreed(GetOwner(), i, this);
             break;
         }
     }

@@ -396,6 +396,7 @@ namespace
 }
 #include "ArenaSpectator.h"
 #include "VioletHoldBoons.h"
+#include "VioletHoldClassBoons.h"
 #include "RiftProgression.h"
 
 #include <array>
@@ -26609,6 +26610,8 @@ void Player::SetSelection(ObjectGuid guid)
 {
     SetGuidValue(UNIT_FIELD_TARGET, guid);
     UpdateOwnedComboTarget();
+    // Violet Hold Relentless: Overpower's point follows the selection.
+    VioletHoldClassBoons::RefreshReactives(this);
 }
 
 void Player::UpdateOwnedComboTarget()

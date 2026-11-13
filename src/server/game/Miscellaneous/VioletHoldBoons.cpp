@@ -3,6 +3,7 @@
  */
 
 #include "VioletHoldBoons.h"
+#include "VioletHoldClassBoons.h"
 
 #include "Battleground.h"
 #include "BattlegroundVHR.h"
@@ -18,6 +19,8 @@
 #include "WorldSession.h"
 #include "DBCStores.h"
 #include "Errors.h"
+#include "GameTime.h"
+#include "ObjectAccessor.h"
 #include "Item.h"
 #include "ItemEnchantmentMgr.h"
 #include "ItemTemplate.h"
@@ -138,8 +141,55 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // Rarer still (weight 0 = VERY_RARE_ROLL_QUARTERS, a quarter of
     // Communion's odds), and only one member of a run may ever take it.
     { Boon::Multitudes,   SPELL_BOON_MULTITUDES,   1,   1, MASK_ALL,      0, "Boon of Multitudes",   "every killing blow you land calls a copy of you at 25% strength for the rest of the wave (one per run)", "" },
+    // One stack is 100 ms. The unit is written "00 ms" so every readout that
+    // prints <stacks><unit> - the card's headline, held/after/max bar and the
+    // deck strip - reads in milliseconds ("+100 ms", "300 ms", "max 500 ms");
+    // DescribeOffer has its own line for the gossip menu.
+    { Boon::Tempo,        SPELL_BOON_TEMPO,        1,   5, MASK_ALL,      4, "Boon of Tempo",        "off your global cooldown (never below 0.5 sec)", "00 ms" },
+    // Communion's shape: unique, and only offered to a party of two or more
+    // (CanTake) - with nobody else in the run it would never do anything.
+    { Boon::Deliverance,  SPELL_BOON_DELIVERANCE,  1,   1, MASK_ALL,      2, "Boon of Deliverance",  "your critical strikes free a random ally from all crowd control and give them 50% speed for 3 sec (once every 3 sec, unique)", "" },
+    // Four more party boons, all offered only to a party of two or more
+    // (CanTake). Herald and the Pack Leader are one per run (IsRunUnique).
+    { Boon::Inheritance,  SPELL_BOON_INHERITANCE,  1,   1, MASK_ALL,      3, "Boon of Inheritance",  "when you die, your stacking boons pass to the living party until the wave ends (unique)", "" },
+    { Boon::Kinship,      SPELL_BOON_KINSHIP,      1,   1, MASK_ALL,      3, "Boon of Kinship",      "+10% damage for every living ally (unique)", "" },
+    { Boon::FocusFire,    SPELL_BOON_FOCUS_FIRE,   1,   1, MASK_ALL,      4, "Boon of Focus Fire",   "+10% damage to a target an ally hit in the last 3 sec (unique)", "" },
+    { Boon::Herald,       SPELL_BOON_HERALD,       1,   1, MASK_ALL,      2, "Boon of the Herald",   "as each wave opens, your whole party gets 30% haste and 100% movement speed for 10 sec (one per run)", "" },
+    { Boon::PackLeader,   SPELL_BOON_PACK_LEADER,  1,   1, MASK_ALL,      2, "Boon of the Pack Leader", "allies within 30 yd of you take 15% less damage (one per run)", "" },
     // Phoenix's weight; one per run (IsRunUnique). TryUndying, before Phoenix.
-    { Boon::Undying,      SPELL_BOON_UNDYING,      1,   1, MASK_ALL,      2, "Boon of the Undying",  "a blow that would kill you leaves you immune to all damage, effects and healing for 30 sec instead - then you die, unless the wave falls first (one per run)", "" }
+    { Boon::Undying,      SPELL_BOON_UNDYING,      1,   1, MASK_ALL,      2, "Boon of the Undying",  "a blow that would kill you leaves you immune to all damage, effects and healing for 30 sec instead - then you die, unless the wave falls first (one per run)", "" },
+
+    // The artifact tier: three per class, unique (one stack), offered to that
+    // class only. Weight is unused - every artifact rolls at
+    // ARTIFACT_ROLL_QUARTERS (GetOfferWeight). Spell ids run in table order
+    // from SPELL_BOON_CLASS_FIRST.
+    { Boon::Juggernaut,    94340, 1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Juggernaut",    "Charge and Intercept stun every enemy within 8 yd of your target", "" },
+    { Boon::Relentless,    94341, 1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Relentless",    "Overpower and Revenge are always usable - no dodge, block or parry needed", "" },
+    { Boon::Warlord,       94342, 1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Warlord",       "Shield Wall, Recklessness and Retaliation no longer share a cooldown", "" },
+    { Boon::UnboundLight,  94343, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Unbound Light",     "Forbearance no longer exists for you", "" },
+    { Boon::RadiantHost,   94344, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Radiant Host",  "all of your Auras can be active at once", "" },
+    { Boon::JudgementDay,  94345, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Judgement Day",     "Judgement also strikes every enemy within 20 yd of your target", "" },
+    { Boon::PointBlank,    94346, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of Point Blank",       "no dead zone: Auto Shot and your shots work in melee range", "" },
+    { Boon::Trapper,       94347, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Trapper",       "your traps no longer share a cooldown and can be laid in combat", "" },
+    { Boon::Skirmisher,    94348, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Skirmisher",    "you can move while Auto Shot is firing", "" },
+    { Boon::Assassin,      94349, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Assassin",      "Backstab works from the front and is never dodged, parried or blocked; Sinister Strike also hits a second enemy; Hemorrhage gives 1 extra combo point", "" },
+    { Boon::Unseen,        94350, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Unseen",        "damage and hostile effects no longer break your Stealth", "" },
+    { Boon::Crippler,      94351, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Crippler",      "Kidney Shot lasts three times as long", "" },
+    { Boon::Dread,         94352, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of Dread",             "damage no longer breaks your Psychic Scream", "" },
+    { Boon::ShatteredWard, 94353, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Shattered Ward", "your Power Word: Shield explodes when it breaks or expires, dealing what it absorbed to enemies within 10 yd", "" },
+    { Boon::Agony,         94354, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of Agony",             "Shadow Word: Pain deals all of its damage at once", "" },
+    { Boon::Frostwalker,   94355, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Frostwalker",   "Blink casts Frost Nova where you leave and where you land", "" },
+    { Boon::Spellbreaker,  94356, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Spellbreaker",  "a successful Counterspell clears every spell school lockout on you and your allies", "" },
+    { Boon::Transmutation, 94357, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of Transmutation",     "Polymorph is instant", "" },
+    { Boon::Contagion,     94358, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of Contagion",         "when a target dies, your damage over time effects on it jump to the nearest enemy", "" },
+    { Boon::Indelible,     94359, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Indelible",     "your harmful effects cannot be dispelled", "" },
+    { Boon::EternalPact,   94360, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Eternal Pact",  "your demon comes back at once when it dies - no cast, no Soul Shard (once every 20 sec)", "" },
+    { Boon::Untamed,       94361, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Untamed",       "you can shapeshift while stunned, feared or polymorphed, and the shift breaks it", "" },
+    { Boon::Wellspring,    94362, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Wellspring",    "falling below 50% mana gives you and your party a 5 sec Innervate (once per wave)", "" },
+    { Boon::Serenity,      94363, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Serenity",          "Tranquility heals its full amount at once, with no channel", "" },
+    { Boon::Stormcaller,   94364, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Stormcaller",   "Purge removes every magic buff on the target", "" },
+    { Boon::TotemLord,     94365, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Totem Lord",    "your totems slowly follow you, never expire and no longer share a slot by element", "" },
+    { Boon::Ancestors,     94366, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Ancestors",     "once per wave a killing blow Reincarnates you on the spot instead (no cooldown, no Ankh; Improved Reincarnation adds to it)", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -674,10 +724,28 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_ABUNDANCE
         || spellId == SPELL_BOON_COMMUNION
         || spellId == SPELL_BOON_MULTITUDES
+        || spellId == SPELL_BOON_TEMPO
+        || spellId == SPELL_BOON_DELIVERANCE
+        || spellId == SPELL_BOON_INHERITANCE
+        || spellId == SPELL_BOON_KINSHIP
+        || spellId == SPELL_BOON_FOCUS_FIRE
+        || spellId == SPELL_BOON_HERALD
+        || spellId == SPELL_BOON_PACK_LEADER
         || spellId == SPELL_BOON_UNDYING
+        || (spellId >= SPELL_BOON_CLASS_FIRST && spellId <= SPELL_BOON_CLASS_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
 }
+
+bool IsArtifact(Boon boon)
+{
+    return boon >= Boon::Juggernaut && boon <= Boon::Ancestors;
+}
+
+// The artifact rows must sit on their spell ids in order: the class boon hooks
+// (VioletHoldClassBoons) name the spells, the table names the boons.
+static_assert(uint8(Boon::Ancestors) - uint8(Boon::Juggernaut) == SPELL_BOON_CLASS_LAST - SPELL_BOON_CLASS_FIRST,
+    "the artifact boons and their spell block must be the same length");
 
 bool SharesRunes(Player const* player)
 {
@@ -686,7 +754,7 @@ bool SharesRunes(Player const* player)
 
 bool IsRunUnique(Boon boon)
 {
-    return boon == Boon::Multitudes || boon == Boon::Undying;
+    return boon == Boon::Multitudes || boon == Boon::Herald || boon == Boon::PackLeader || boon == Boon::Undying;
 }
 
 bool CallsMultitudes(Player const* player)
@@ -807,8 +875,10 @@ PickResult CanTake(Player const* player, Offer offer)
         if (info.boon == Boon::Level)
             return player->GetLevel() < LEVEL_BOON_CEILING ? PickResult::Ok : PickResult::LevelCeiling;
 
-        // Sharing with nobody is nothing: Communion is for a party of two or more.
-        if (info.boon == Boon::Communion)
+        // Sharing with nobody is nothing: the party boons are for a party of
+        // two or more. (Herald also helps a lone holder, so it is not here.)
+        if (info.boon == Boon::Communion || info.boon == Boon::Deliverance || info.boon == Boon::Inheritance
+            || info.boon == Boon::Kinship || info.boon == Boon::FocusFire || info.boon == Boon::PackLeader)
         {
             BattlegroundVHR const* run = GetRunOf(player);
             if (!run)
@@ -988,6 +1058,9 @@ uint32 GetOfferWeight(Offer const& offer)
         case Offer::Kind::Boon:
             if (offer.index >= uint8(Boon::Max))
                 return 0;
+            // Class boons: a little rarer than any one legendary weapon.
+            if (IsArtifact(Boon(offer.index)))
+                return ARTIFACT_ROLL_QUARTERS;
             return kBoons[offer.index].weight ? kBoons[offer.index].weight * ROLL_QUARTERS_PER_WEIGHT : VERY_RARE_ROLL_QUARTERS;
         case Offer::Kind::ClassSpell: return offer.index < CLASS_SPELL_COUNT ? CLASS_SPELL_WEIGHT * ROLL_QUARTERS_PER_WEIGHT : 0;
         case Offer::Kind::Item:       return offer.index < ITEM_GRANT_COUNT ? kItemGrants[offer.index].weight * ROLL_QUARTERS_PER_WEIGHT : 0;
@@ -1166,6 +1239,11 @@ PickResult Take(Player* player, Offer offer)
     if (IsRunUnique(info.boon))
         if (BattlegroundVHR* run = GetRunOf(player))
             run->ClaimRunUniqueBoon(offer.index);
+
+    // Class boons that have to set something up the moment they are held
+    // (the warrior's lit Overpower/Revenge).
+    if (IsArtifact(info.boon))
+        VioletHoldClassBoons::OnTaken(player);
 
     // Boons whose effect is not the aura itself.
     switch (info.boon)
@@ -1348,6 +1426,10 @@ void StripAll(Player* player)
             if (IsTaughtByBroker(player, *itr))
                 player->RemoveSpell(*itr, false, false);
     }
+
+    // Class boons with state outside their aura (lit reactives, never-ending
+    // totems) let go of it while the auras still say who held what.
+    VioletHoldClassBoons::OnStripped(player);
 
     for (BoonInfo const& info : kBoons)
         player->RemoveAurasDueToSpell(info.spellId);
@@ -1599,6 +1681,10 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
     BoonInfo const& info = kBoons[offer.index];
     uint8 const held = GetStacks(viewer, info.boon);
 
+    // Artifacts are one-stack: "Boon of the Juggernaut (artifact): ...".
+    if (IsArtifact(info.boon))
+        return Trinity::StringFormat("{} (artifact): {}{}", info.name, info.summary, blocked);
+
     switch (info.boon)
     {
         case Boon::MountSpeed:
@@ -1607,6 +1693,12 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Overkill:
         case Boon::Communion:
         case Boon::Multitudes:
+        case Boon::Deliverance:
+        case Boon::Inheritance:
+        case Boon::Kinship:
+        case Boon::FocusFire:
+        case Boon::Herald:
+        case Boon::PackLeader:
         case Boon::Undying:
             return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:
@@ -1624,6 +1716,10 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Menagerie:
         case Boon::Abundance:
             return Trinity::StringFormat("{}: {} [{}/{}]{}", info.name, info.summary, uint32(held), uint32(info.maxStacks), blocked);
+        case Boon::Tempo:
+            // "[200/500 ms]", not the default's "[2/500 ms]".
+            return Trinity::StringFormat("{}: {} ms {} [{}/{} ms]{}", info.name, uint32(info.grantStacks) * 100, info.summary,
+                uint32(held) * 100, uint32(info.maxStacks) * 100, blocked);
         default:
             return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]{}", info.name, uint32(info.grantStacks), info.unit,
                 info.summary, uint32(held), uint32(info.maxStacks), info.unit, blocked);
@@ -1655,6 +1751,23 @@ int32 GetRageGenerationPct(Unit const* unit)
 uint32 GetCombatDropReductionMs(Unit const* unit)
 {
     return uint32(AmountOf(unit, SPELL_BOON_RESPITE, RESPITE_MAX_SECONDS)) * IN_MILLISECONDS;
+}
+
+int32 ApplyGlobalCooldownReduction(Unit const* caster, int32 gcd)
+{
+    // Off-GCD spells (0) and anything already at the floor are left exactly
+    // as they are: a cut must never raise a GCD or invent one.
+    if (!caster || gcd <= TEMPO_FLOOR_MS)
+        return gcd;
+
+    // Read off the STACK COUNT, not the effect amount: the stack count is all
+    // the client gets, and both sides have to land on the same number.
+    Aura const* tempo = caster->GetAura(SPELL_BOON_TEMPO);
+    if (!tempo)
+        return gcd;
+
+    int32 const cut = std::min<int32>(int32(tempo->GetStackAmount()) * 100, TEMPO_MAX_MS);
+    return std::max<int32>(TEMPO_FLOOR_MS, gcd - cut);
 }
 
 // --- second batch ------------------------------------------------------------
@@ -1948,9 +2061,6 @@ void CopyBoonsTo(Player const* source, Player* target)
             // Calls copies onto the PARTY's side (BattlegroundVHR::
             // RequestReflection refuses anyone else) - nothing on a clone.
             case Boon::Multitudes:
-            // Its clock lives on the party's run, and TryUndying ignores
-            // anyone who is not the party.
-            case Boon::Undying:
             // The clone is built at the source's CURRENT level, borrowed
             // levels included, so the marker has nothing left to mark.
             case Boon::Level:
@@ -1959,9 +2069,21 @@ void CopyBoonsTo(Player const* source, Player* target)
             // The record aura is nothing without the stone, and a clone has
             // no bags worth filling.
             case Boon::Healthstone:
+            // The party boons work for the party. On a wave clone Kinship
+            // would count a whole wave of "allies"; on a reflection Herald,
+            // Pack Leader and Inheritance would fire twice.
+            case Boon::Inheritance:
+            case Boon::Kinship:
+            case Boon::FocusFire:
+            case Boon::Herald:
+            case Boon::PackLeader:
+            // Its clock lives on the party's run, and TryUndying ignores
+            // anyone who is not the party.
+            case Boon::Undying:
                 return false;
             default:
-                return true;
+                // The class (artifact) boons never go onto a clone.
+                return !IsArtifact(boon);
         }
     };
 
@@ -2023,6 +2145,237 @@ void SummonMenagerie(Player* owner, uint8 count, std::vector<ObjectGuid>& out)
         summon->SetReactState(REACT_AGGRESSIVE);
 
         out.push_back(summon->GetGUID());
+    }
+}
+
+// --- Party boons (2026-11-13) ------------------------------------------------
+
+namespace
+{
+// Every player on the party's side of `run` who is in `ref`'s map: the real
+// party, Fellowship champions and reflections. `humansOnly` keeps the real
+// party (the GetHumanRoster rule: no transient sessions).
+std::vector<Player*> PartySide(BattlegroundVHR const* run, WorldObject const& ref, bool livingOnly, bool humansOnly)
+{
+    std::vector<Player*> out;
+    for (auto const& [guid, bgPlayer] : run->GetPlayers())
+    {
+        if (bgPlayer.Team != run->GetHumanTeam() || bgPlayer.OfflineRemoveTime)
+            continue;
+        Player* player = ObjectAccessor::GetPlayer(ref, guid);
+        if (!player || !player->IsInWorld() || (livingOnly && !player->IsAlive()))
+            continue;
+        if (humansOnly && (!player->GetSession() || player->GetSession()->IsTransientPlayerSession()))
+            continue;
+        out.push_back(player);
+    }
+    return out;
+}
+
+// Kinship's count: the holder's living allies, Fellowship champions included,
+// reflections not (a quarter of a player each, and Multitudes calls them by
+// the dozen).
+uint32 CountLivingAllies(BattlegroundVHR const* run, Player const* holder)
+{
+    uint32 count = 0;
+    for (Player const* ally : PartySide(run, *holder, true, false))
+        if (ally != holder && !run->IsFleetingAlly(ally->GetGUID()))
+            ++count;
+    return count;
+}
+
+// Takes one ledger entry's stacks back off its heir.
+void ReturnLent(Player* heir, InheritedStacks const& lent)
+{
+    if (!heir)
+        return;
+    if (Aura* aura = heir->GetAura(lent.spellId))
+        aura->ModStackAmount(-int32(lent.stacks));   // to zero removes it
+    if (BoonInfo const* info = FindBySpell(lent.spellId); info && info->boon == Boon::Beastmaster)
+        RefreshBeastmaster(heir);
+}
+}
+
+void PassInheritance(BattlegroundVHR* run, Player const* dead, std::vector<InheritedStacks>& ledger)
+{
+    if (!run || !dead || run->GetStatus() != STATUS_IN_PROGRESS || !dead->HasAura(SPELL_BOON_INHERITANCE))
+        return;
+
+    std::vector<Player*> heirs;
+    for (Player* member : PartySide(run, *dead, true, true))
+        if (member != dead)
+            heirs.push_back(member);
+    if (heirs.empty())
+        return;
+
+    bool passedAny = false;
+    for (BoonInfo const& info : kBoons)
+    {
+        // Stacking, per-player boons only. Run-wide ones belong to the run
+        // already; Ascension's stacks are levels, and the Menagerie's
+        // guardians only come out as a wave opens.
+        if (info.maxStacks <= 1 || RunHeld(dead, info.boon) >= 0 || info.boon == Boon::Level || info.boon == Boon::Menagerie)
+            continue;
+
+        uint8 const stacks = GetStacks(dead, info.boon);
+        if (!stacks)
+            continue;
+
+        for (Player* heir : heirs)
+        {
+            if (!(info.classMask & heir->GetClassMask()))
+                continue;
+
+            // Alacrity's per-class variant is the HEIR's class.
+            uint32 const spellId = GetBoonSpellFor(info.boon, heir->GetClass());
+            Aura* aura = heir->GetAura(spellId);
+            uint32 const before = aura ? aura->GetStackAmount() : 0;
+            uint32 const after = std::min<uint32>(before + stacks, info.maxStacks);
+            if (after <= before)
+                continue;
+
+            if (!aura)
+            {
+                heir->CastSpell(heir, spellId, true);
+                aura = heir->GetAura(spellId);
+                if (!aura)
+                    continue;
+            }
+            // The cast (if any) made stack one; ModStackAmount clamps to the DBC cap.
+            int32 const delta = int32(after) - int32(aura->GetStackAmount());
+            if (delta)
+                aura->ModStackAmount(delta);
+
+            ledger.push_back({ heir->GetGUID(), spellId, uint8(aura->GetStackAmount() - before) });
+            passedAny = true;
+
+            if (info.boon == Boon::Beastmaster)
+                RefreshBeastmaster(heir);
+        }
+    }
+
+    if (passedAny)
+        for (Player* heir : heirs)
+            if (WorldSession* session = heir->GetSession())
+                session->SendNotification("%s's boons are yours until the wave ends.", dead->GetName().c_str());
+}
+
+void ReturnInheritance(std::vector<InheritedStacks>& ledger)
+{
+    for (InheritedStacks const& lent : ledger)
+        ReturnLent(ObjectAccessor::FindPlayer(lent.heir), lent);
+    ledger.clear();
+}
+
+void ReturnInheritanceOf(Player* heir, std::vector<InheritedStacks>& ledger)
+{
+    if (!heir)
+        return;
+    for (InheritedStacks const& lent : ledger)
+        if (lent.heir == heir->GetGUID())
+            ReturnLent(heir, lent);
+    ledger.erase(std::remove_if(ledger.begin(), ledger.end(),
+        [&heir](InheritedStacks const& lent) { return lent.heir == heir->GetGUID(); }), ledger.end());
+}
+
+int32 GetPartyDamageBonusPct(Unit const* attacker, Unit const* victim)
+{
+    // The holder's own damage; pets and totems are their own units.
+    Player const* holder = attacker ? attacker->ToPlayer() : nullptr;
+    if (!holder || !victim || victim == attacker)
+        return 0;
+
+    bool const kinship = holder->HasAura(SPELL_BOON_KINSHIP);
+    bool const focusFire = holder->HasAura(SPELL_BOON_FOCUS_FIRE);
+    if (!kinship && !focusFire)
+        return 0;
+
+    BattlegroundVHR const* run = GetRunOf(holder);
+    if (!run || run->GetStatus() != STATUS_IN_PROGRESS || holder->GetBGTeam() != run->GetHumanTeam())
+        return 0;
+
+    int32 pct = 0;
+    if (kinship)
+        pct += KINSHIP_PCT_PER_ALLY * int32(CountLivingAllies(run, holder));
+    if (focusFire && run->WasHitByOtherAlly(victim->GetGUID(), holder->GetGUID(), GameTime::GetGameTimeMS(), FOCUS_FIRE_WINDOW_MS))
+        pct += FOCUS_FIRE_PCT;
+    return pct;
+}
+
+void NoteHit(Unit const* attacker, Unit const* victim)
+{
+    if (!attacker || !victim || attacker == victim)
+        return;
+
+    // A pet's or a totem's hit is its owner's.
+    Player const* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+    if (!player)
+        return;
+
+    BattlegroundVHR* run = GetRunOf(player);
+    if (!run || run->GetStatus() != STATUS_IN_PROGRESS || player->GetBGTeam() != run->GetHumanTeam())
+        return;
+
+    run->NoteHit(victim->GetGUID(), player->GetGUID(), GameTime::GetGameTimeMS());
+}
+
+namespace
+{
+// The real party members holding `spellId`.
+std::vector<Player*> HoldersOf(BattlegroundVHR const* run, uint32 spellId)
+{
+    std::vector<Player*> out;
+    for (auto const& [guid, bgPlayer] : run->GetPlayers())
+    {
+        if (bgPlayer.Team != run->GetHumanTeam() || bgPlayer.OfflineRemoveTime)
+            continue;
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (player && player->IsInWorld() && player->GetSession() && !player->GetSession()->IsTransientPlayerSession()
+            && player->HasAura(spellId))
+            out.push_back(player);
+    }
+    return out;
+}
+}
+
+void SoundHerald(BattlegroundVHR* run)
+{
+    if (!run)
+        return;
+
+    // Everyone on the party's side, the holder included. Cast by each member
+    // on themselves so distance and line of sight play no part.
+    for (Player* holder : HoldersOf(run, SPELL_BOON_HERALD))
+        for (Player* member : PartySide(run, *holder, true, false))
+        {
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.SetOriginalCaster(holder->GetGUID());
+            member->CastSpell(member, SPELL_HERALD_CALL, args);
+        }
+}
+
+void UpdatePackLeader(BattlegroundVHR* run)
+{
+    if (!run)
+        return;
+
+    // A dead holder stops refreshing, and the guard (3 sec) runs out.
+    for (Player* holder : HoldersOf(run, SPELL_BOON_PACK_LEADER))
+    {
+        if (!holder->IsAlive())
+            continue;
+
+        for (Player* ally : PartySide(run, *holder, true, false))
+        {
+            if (ally == holder || !holder->IsWithinDistInMap(ally, PACK_LEADER_RANGE))
+                continue;
+
+            // AddAura, not a cast: no cast visual every second.
+            if (Aura* guard = ally->GetAura(SPELL_PACK_LEADER_GUARD, holder->GetGUID()))
+                guard->RefreshDuration();
+            else
+                holder->AddAura(SPELL_PACK_LEADER_GUARD, ally);
+        }
     }
 }
 }

@@ -39,6 +39,7 @@
 #include "SpellScript.h"
 #include "Unit.h"
 #include "Util.h"
+#include "VioletHoldClassBoons.h"
 #include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
@@ -1409,6 +1410,10 @@ int32 Aura::CalcDispelChance(Unit const* auraTarget, bool offensive) const
     // need formula for level difference based chance
     int32 resistChance = 0;
 
+    // Violet Hold Indelible: a holder's harmful effects never come off.
+    if (VioletHoldClassBoons::IsUndispellable(this, auraTarget))
+        return 0;
+
     // Apply dispel mod from aura caster
     if (Unit* caster = GetCaster())
         if (Player* modOwner = caster->GetSpellModOwner())
@@ -2164,8 +2169,10 @@ bool Aura::CanStackWith(Aura const* existingAura) const
             || (isCrusaderJudgement(existingSpellInfo->Id) && isLightOrWisdomJudgement(m_spellInfo->Id)));
 
     // check spell specific stack rules
-    if (m_spellInfo->IsAuraExclusiveBySpecificWith(existingSpellInfo)
+    // (Violet Hold Radiant Host: a holder's paladin Auras all stay up.)
+    if ((m_spellInfo->IsAuraExclusiveBySpecificWith(existingSpellInfo)
         || (sameCaster && m_spellInfo->IsAuraExclusiveBySpecificPerCasterWith(existingSpellInfo)))
+        && !(sameCaster && VioletHoldClassBoons::AurasStackFreely(caster, m_spellInfo, existingSpellInfo)))
     {
         if(!ignoreJustice && !ignoreJudgementJustice && !ignoreLawbenderCrusader)
             return false;
@@ -2497,6 +2504,12 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
     // check don't break stealth attr present
     if (m_spellInfo->HasAura(SPELL_AURA_MOD_STEALTH))
     {
+        // Violet Hold Unseen: Stealth's taken-hit proc (its one charge is
+        // what drops it) never fires; the rogue's own actions still break it
+        // through the interrupt flags.
+        if (VioletHoldClassBoons::StealthHoldsThroughHits(aurApp->GetTarget(), m_spellInfo))
+            return 0;
+
         if (SpellInfo const* spellInfo = eventInfo.GetSpellInfo())
             if (spellInfo->HasAttribute(SPELL_ATTR0_CU_DONT_BREAK_STEALTH))
             {

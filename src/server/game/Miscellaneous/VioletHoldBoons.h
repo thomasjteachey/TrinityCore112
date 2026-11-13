@@ -64,6 +64,7 @@
 #include <string>
 #include <vector>
 
+class BattlegroundVHR;
 class Player;
 class SpellInfo;
 class Unit;
@@ -127,7 +128,47 @@ namespace VioletHoldBoons
 
         // 2026-11-13, later.
         Multitudes,     // very rare, one per RUN: every killing blow calls a 25% copy of you for the wave
+        Tempo,          // 0.1 sec off every global cooldown per stack (Spell::TriggerGlobalCooldown + client DLL)
+        Deliverance,    // unique, party only: a crit frees a random ally from crowd control, +50% speed 3 sec
+        Inheritance,    // unique, party only: when you die, your stacking boons go to the living party until the wave ends
+        Kinship,        // unique, party only: +10% damage per living ally
+        FocusFire,      // unique, party only: +10% damage to a target an ally hit in the last 3 sec
+        Herald,         // one per RUN: as each wave opens, the whole party gets +30% haste, +100% speed for 10 sec
+        PackLeader,     // one per RUN, party only: allies within 30 yd of you take 15% less damage
         Undying,        // one per RUN: a killing blow leaves you immune to everything for 30 sec instead, then you die
+
+        // Class boons, the ARTIFACT tier (2026-11-13): three per class, offered
+        // only to that class, rolled a little rarer than a legendary weapon
+        // (ARTIFACT_ROLL_QUARTERS) and shown on the top card frame. The work is
+        // in VioletHoldClassBoons.{h,cpp} and scripts/Custom/violet_hold_class_boons.cpp.
+        // Keep these contiguous: IsArtifact is a range check.
+        Juggernaut,     // warrior: Charge / Intercept stun every enemy near the target
+        Relentless,     // warrior: Overpower and Revenge always usable
+        Warlord,        // warrior: Shield Wall / Recklessness / Retaliation stop sharing a cooldown
+        UnboundLight,   // paladin: no Forbearance
+        RadiantHost,    // paladin: every Aura at once
+        JudgementDay,   // paladin: Judgement hits every enemy within 20 yd of the target
+        PointBlank,     // hunter: no dead zone
+        Trapper,        // hunter: traps stop sharing a cooldown, can be laid in combat
+        Skirmisher,     // hunter: Auto Shot while moving
+        Assassin,       // rogue: Backstab from the front, unavoidable; Sinister Strike cleaves; Hemorrhage +1 combo point
+        Unseen,         // rogue: Stealth does not break from damage or effects
+        Crippler,       // rogue: Kidney Shot lasts 3x as long
+        Dread,          // priest: Psychic Scream does not break from damage
+        ShatteredWard,  // priest: Power Word: Shield explodes for what it absorbed
+        Agony,          // priest: Shadow Word: Pain all at once
+        Frostwalker,    // mage: Blink casts Frost Nova where you leave and where you land
+        Spellbreaker,   // mage: a successful Counterspell clears every lockout on you and your allies
+        Transmutation,  // mage: instant Polymorph
+        Contagion,      // warlock: DoTs jump when their target dies
+        Indelible,      // warlock: undispellable debuffs
+        EternalPact,    // warlock: the demon returns at once when it dies (20 sec)
+        Untamed,        // druid: shapeshift out of stun / fear / polymorph
+        Wellspring,     // druid: below 50% mana -> 5 sec party Innervate (once per wave)
+        Serenity,       // druid: Tranquility all at once
+        Stormcaller,    // shaman: Purge removes every magic buff
+        TotemLord,      // shaman: totems follow, never expire, no shared slots
+        Ancestors,      // shaman: once per wave a killing blow Reincarnates you on the spot (Phoenix-style)
 
         Max
     };
@@ -240,6 +281,27 @@ namespace VioletHoldBoons
         // Boon of Multitudes, the same record-aura shape. BattlegroundVHR::
         // HandleKillPlayer calls the copies.
         SPELL_BOON_MULTITUDES   = 94317,
+        // Boon of Tempo, Respite's shape (a visible dummy, 100 ms per stack,
+        // StackAmount 5). The CLIENT must see it: the client-tweaks DLL
+        // (clientedits/src/gcdtempo.cpp) reads its stack count off the aura
+        // to shorten its own GCD the same way the server does.
+        SPELL_BOON_TEMPO        = 94318,
+        // Boon of Deliverance (unique record-and-proc dummy; spell_proc row:
+        // crits only, 3 sec cooldown) and the 50% / 3 sec run speed it puts on
+        // the freed ally. The proc is spell_vhr_boon_deliverance in
+        // scripts/Custom/violet_hold_boons.cpp. 94321 is not a boon aura.
+        SPELL_BOON_DELIVERANCE  = 94320,
+        SPELL_DELIVERANCE_SPEED = 94321,
+        // Five more party boons, all unique DUMMY record auras (Communion's
+        // shape); the work is in code. 94326 and 94328 are the buffs they put
+        // on the party and are not boon auras.
+        SPELL_BOON_INHERITANCE  = 94322,   // HandleKillPlayer -> PassInheritance
+        SPELL_BOON_KINSHIP      = 94323,   // GetPartyDamageBonusPct
+        SPELL_BOON_FOCUS_FIRE   = 94324,   // GetPartyDamageBonusPct + BattlegroundVHR::NoteHit
+        SPELL_BOON_HERALD       = 94325,   // OpenWaveCell -> SoundHerald
+        SPELL_HERALD_CALL       = 94326,   // +30% melee/ranged/cast haste, +100% run speed, 10 sec
+        SPELL_BOON_PACK_LEADER  = 94327,   // PostUpdateImpl -> UpdatePackLeader
+        SPELL_PACK_LEADER_GUARD = 94328,   // 15% less damage taken, 3 sec, refreshed while in range
         // Boon of the Undying (record aura, Communion's shape) and the state it
         // puts its holder in: "Undying", Divine Shield's school immunity and
         // bubble without its penalty, cooldown or Forbearance, uncancellable,
@@ -247,6 +309,14 @@ namespace VioletHoldBoons
         // 94330 is not a boon aura.
         SPELL_BOON_UNDYING      = 94329,   // Unit::DealDamage -> TryUndying, before Phoenix
         SPELL_UNDYING_STATE     = 94330,
+
+        // The 27 class (artifact) boons, one contiguous block in Boon order
+        // (Juggernaut first), so the spell is SPELL_BOON_CLASS_FIRST + offset.
+        // Communion's record shape; Relentless, Trapper and Transmutation also
+        // carry the client-visible effect that does their work (see
+        // VioletHoldClassBoons.h). 94367-94371 are what the hooks cast.
+        SPELL_BOON_CLASS_FIRST  = 94340,
+        SPELL_BOON_CLASS_LAST   = 94366,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -418,6 +488,13 @@ namespace VioletHoldBoons
     constexpr uint32 ROLL_QUARTERS_PER_WEIGHT = 4;
     constexpr uint32 VERY_RARE_ROLL_QUARTERS = 1;
 
+    // The artifact tier (class boons, Boon::Juggernaut .. Boon::Ancestors).
+    // Every legendary weapon rolls at weight 2 = 8 quarters; an artifact rolls
+    // at 6, three quarters of a legendary's odds. Their kBoons weight column
+    // is ignored. Shown on the top (tier 6) card frame.
+    constexpr uint32 ARTIFACT_ROLL_QUARTERS = 6;
+    TC_GAME_API bool IsArtifact(Boon boon);
+
     // Boons only one member of a run may ever hold: once taken, no broker in
     // that run offers it again, even if its holder leaves.
     TC_GAME_API bool IsRunUnique(Boon boon);
@@ -539,6 +616,19 @@ namespace VioletHoldBoons
     TC_GAME_API uint32 GetCombatDropReductionMs(Unit const* unit);
     constexpr uint8 RESPITE_MAX_SECONDS = 4;
 
+    // Boon of Tempo: the global cooldown `caster` actually gets for a cast
+    // whose GCD came out of the normal rules (spellmods, haste clamp) as
+    // `gcd` ms. 100 ms per stack, never below TEMPO_FLOOR_MS, never touching
+    // a GCD that is already 0 (off-GCD spells) or at the floor. This runs
+    // AFTER the haste clamp, so it reaches under the client's 1.0 sec haste
+    // floor. The client-tweaks DLL does the identical sum on its side
+    // (clientedits/src/gcdtempo.cpp, defaults MsPerStack 100 / MaxMs 500 /
+    // FloorMs 500) - change both together, or the client refuses casts the
+    // server would take.
+    TC_GAME_API int32 ApplyGlobalCooldownReduction(Unit const* caster, int32 gcd);
+    constexpr int32 TEMPO_MAX_MS = 500;
+    constexpr int32 TEMPO_FLOOR_MS = 500;
+
     // --- second-batch hooks -------------------------------------------------
     // Ricochet, Reflection and Vampire are aura procs (scripts/Custom). These
     // are the ones the core itself has to call.
@@ -589,6 +679,45 @@ namespace VioletHoldBoons
     // PetAI at the owner's level, and are appended to `out` for the
     // battleground to take down when the wave is over.
     TC_GAME_API void SummonMenagerie(Player* owner, uint8 count, std::vector<ObjectGuid>& out);
+
+    // --- Party boons (2026-11-13) --------------------------------------------
+
+    // Boon of Inheritance: stacks lent to one heir until the wave ends.
+    struct InheritedStacks
+    {
+        ObjectGuid heir;
+        uint32 spellId;
+        uint8 stacks;
+    };
+
+    // `dead` (a party member holding Inheritance) just fell: every living
+    // party member gets that player's stacking boons on top of their own, up
+    // to each boon's cap, and what was actually added goes in `ledger`.
+    TC_GAME_API void PassInheritance(BattlegroundVHR* run, Player const* dead, std::vector<InheritedStacks>& ledger);
+    // Takes every lent stack back (the wave is over) and empties `ledger`.
+    TC_GAME_API void ReturnInheritance(std::vector<InheritedStacks>& ledger);
+    // Takes back only what `heir` was lent - they are leaving or logging out,
+    // and must not be saved with someone else's stacks.
+    TC_GAME_API void ReturnInheritanceOf(Player* heir, std::vector<InheritedStacks>& ledger);
+
+    // Kinship and Focus Fire: the % more damage `attacker` (a player holding
+    // either) deals to `victim`. 0 for everyone else.
+    constexpr int32 KINSHIP_PCT_PER_ALLY = 10;
+    constexpr int32 FOCUS_FIRE_PCT = 10;
+    constexpr uint32 FOCUS_FIRE_WINDOW_MS = 3000;
+    TC_GAME_API int32 GetPartyDamageBonusPct(Unit const* attacker, Unit const* victim);
+    // Every hit in a run, for Focus Fire: who (the player behind a pet or a
+    // totem) hit what, and when.
+    TC_GAME_API void NoteHit(Unit const* attacker, Unit const* victim);
+
+    // Boon of the Herald: the wave just opened.
+    TC_GAME_API void SoundHerald(BattlegroundVHR* run);
+
+    // Boon of the Pack Leader: puts/refreshes the guard on every ally within
+    // PACK_LEADER_RANGE of a living holder. Ticked by the battleground.
+    constexpr float PACK_LEADER_RANGE = 30.0f;
+    constexpr uint32 PACK_LEADER_TICK_MS = 1000;
+    TC_GAME_API void UpdatePackLeader(BattlegroundVHR* run);
 }
 
 #endif // TRINITYCORE_VIOLET_HOLD_BOONS_H

@@ -16,6 +16,7 @@
  */
 
 #include "CombatManager.h"
+#include "Battleground.h"
 #include "Log.h"
 #include "Containers.h"
 #include "Creature.h"
@@ -288,7 +289,8 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
 
     // ...then create new reference
     CombatReference* ref;
-    if (_owner->IsControlledByPlayer() && who->IsControlledByPlayer())
+    bool const pvp = _owner->IsControlledByPlayer() && who->IsControlledByPlayer();
+    if (pvp)
         ref = new PvPCombatReference(_owner, who);
     else
         ref = new CombatReference(_owner, who);
@@ -299,6 +301,11 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
     // ...and insert it into both managers
     PutReference(who->GetGUID(), ref);
     who->GetCombatManager().PutReference(_owner->GetGUID(), ref);
+
+    // A match pays more to whoever fought a person in it. Before the AI hears
+    // of the fight below, while both units are certainly still here.
+    if (pvp)
+        Battleground::NotePvPCombat(_owner, who);
 
     // now, sequencing is important - first we update the combat state, which will set both units in combat and do non-AI combat start stuff
     bool const needSelfAI  = UpdateOwnerCombatState();

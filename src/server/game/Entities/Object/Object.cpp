@@ -53,6 +53,7 @@
 #include "Vehicle.h"
 #include "T2SpellHooks.h"
 #include "VioletHoldBoons.h"
+#include "VioletHoldClassBoons.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
 #include "World.h"
@@ -2598,6 +2599,10 @@ int32 WorldObject::ModSpellDuration(SpellInfo const* spellInfo, WorldObject cons
 
     if (!positive)
     {
+        // Violet Hold Crippler: the holder's Kidney Shot, three times over
+        // (before the target's own reductions below).
+        duration *= VioletHoldClassBoons::GetDurationMultiplier(this, spellInfo);
+
         int32 mechanicMask = spellInfo->GetSpellMechanicMaskByEffectMask(effectMask);
         auto mechanicCheck = [mechanicMask](AuraEffect const* aurEff) -> bool
         {
