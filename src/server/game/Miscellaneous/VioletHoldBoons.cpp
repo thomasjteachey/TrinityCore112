@@ -127,7 +127,10 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Protector,    SPELL_BOON_PROTECTOR,   10, 100, MASK_ALL,      8, "Boon of the Protector", "armor",                                  "%" },
     { Boon::Weaponmaster, SPELL_BOON_WEAPONMASTER, 10, 90, MASK_MELEE,    4, "Boon of the Weaponmaster", "shorter disarms on you",              "%" },
     { Boon::Aggression,   SPELL_BOON_AGGRESSION,   5,  50, MASK_ALL,      6, "Boon of Aggression",   "less healing received by whatever you hit (10 sec)", "%" },
-    { Boon::Healthstone,  SPELL_BOON_HEALTHSTONE,  1,   1, MASK_ALL,      4, "Boon of the Healthstone", "never used up, lasts the run (unique)", "" }
+    { Boon::Healthstone,  SPELL_BOON_HEALTHSTONE,  1,   1, MASK_ALL,      4, "Boon of the Healthstone", "never used up, lasts the run (unique)", "" },
+
+    // Run-wide like Hoarder, counted against the run (RunHeld).
+    { Boon::Abundance,    SPELL_BOON_ABUNDANCE,    1,   3, MASK_ALL,      3, "Boon of Abundance",    "extra rune after every wave from now on (run-wide)", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -308,6 +311,7 @@ int32 RunHeld(Player const* player, Boon boon)
         case Boon::Greed:
         case Boon::Hoarder:
         case Boon::Fellowship:
+        case Boon::Abundance:
             break;
         default:
             return -1;
@@ -321,6 +325,7 @@ int32 RunHeld(Player const* player, Boon boon)
     {
         case Boon::Greed:      return int32(run->GetBrokerBonusOffers());
         case Boon::Hoarder:    return int32(run->GetBonusBrokersPerWave());
+        case Boon::Abundance:  return int32(run->GetBonusRunesPerWave());
         // Spawned allies plus the requests still with the driver, so a pick
         // already promised is not offered twice and the [x/cap] readout says
         // the same thing the cap check does.
@@ -697,6 +702,7 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_RESPITE
         || (spellId >= SPELL_BOON_BATCH3_FIRST && spellId <= SPELL_BOON_BATCH3_LAST)
         || spellId == SPELL_BOON_HEALTHSTONE
+        || spellId == SPELL_BOON_ABUNDANCE
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
 }
@@ -1154,6 +1160,10 @@ PickResult Take(Player* player, Offer offer)
             if (BattlegroundVHR* run = GetRunOf(player))
                 run->AddBonusBrokersPerWave(info.grantStacks);
             break;
+        case Boon::Abundance:
+            if (BattlegroundVHR* run = GetRunOf(player))
+                run->AddBonusRunesPerWave(info.grantStacks);
+            break;
         case Boon::Fellowship:
             if (BattlegroundVHR* run = GetRunOf(player))
                 for (uint8 i = 0; i < info.grantStacks; ++i)
@@ -1574,6 +1584,7 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Greed:
         case Boon::Fellowship:
         case Boon::Menagerie:
+        case Boon::Abundance:
             return Trinity::StringFormat("{}: {} [{}/{}]{}", info.name, info.summary, uint32(held), uint32(info.maxStacks), blocked);
         default:
             return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]{}", info.name, uint32(info.grantStacks), info.unit,
@@ -1835,6 +1846,7 @@ void CopyBoonsTo(Player const* source, Player* target)
             case Boon::Greed:
             case Boon::Hoarder:
             case Boon::Fellowship:
+            case Boon::Abundance:
             case Boon::Menagerie:
             // The clone is built at the source's CURRENT level, borrowed
             // levels included, so the marker has nothing left to mark.

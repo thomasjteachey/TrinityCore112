@@ -289,6 +289,7 @@ void BattlegroundVHR::Reset()
     _hasPendingRequest = false;
     _brokerBonusOffers = 0;
     _bonusBrokersPerWave = 0;
+    _bonusRunesPerWave = 0;
     _allyRequests.clear();
     _nextAllyRequestId = 0;
     _allyRetryMs = 0;
@@ -1255,10 +1256,14 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
     // placement picker, so nothing is dropped on top of one.
     std::vector<Position> placed;
     uint32 brokerSlot = FindFreeBoonBrokerSlot(placed);
-    placed.reserve(placed.size() + wanted * 2);
+    placed.reserve(placed.size() + wanted * 2 + _bonusRunesPerWave);
+
+    // Boon of Abundance's extra runes come on top; the brokers below still
+    // follow the party-size drop only.
+    uint32 const runesWanted = std::min<uint32>(wanted + _bonusRunesPerWave, BG_VHR_RUNE_SLOTS);
 
     bool droppedRune = false;
-    for (uint32 i = 0; i < wanted; ++i)
+    for (uint32 i = 0; i < runesWanted; ++i)
     {
         // Only ever false when the instance has no map, in which case nothing
         // can be spawned at all - the picker relaxes its way to an answer for
@@ -1327,7 +1332,7 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
 
 void BattlegroundVHR::DespawnWaveRewardBuffs()
 {
-    for (uint32 i = 0; i < BG_VHR_MAX_WAVE_BUFFS; ++i)
+    for (uint32 i = 0; i < BG_VHR_RUNE_SLOTS; ++i)
         DelObject(BG_VHR_OBJECT_BUFF_1 + i);
 
     _buffLifetimeMs = 0;
@@ -1346,7 +1351,7 @@ uint8 BattlegroundVHR::GetStandingRuneMask() const
 
     // A taken rune is despawned, not deleted (Battleground::HandleTriggerBuff),
     // so it is the spawned state that says whether it is still there.
-    for (uint32 i = 0; i < BG_VHR_MAX_WAVE_BUFFS; ++i)
+    for (uint32 i = 0; i < BG_VHR_RUNE_SLOTS; ++i)
         if (ObjectGuid const guid = BgObjects[BG_VHR_OBJECT_BUFF_1 + i])
             if (GameObject const* rune = map->GetGameObject(guid))
                 if (rune->IsInWorld() && rune->isSpawned())
@@ -1362,7 +1367,7 @@ std::string BattlegroundVHR::BuildRuneFeed() const
 
     Map* map = FindBgMap();
     std::string line = "VHRUNE:" + std::to_string(_buffLifetimeMs);
-    for (uint32 i = 0; i < BG_VHR_MAX_WAVE_BUFFS; ++i)
+    for (uint32 i = 0; i < BG_VHR_RUNE_SLOTS; ++i)
     {
         if (!(mask & (1u << i)))
             continue;
@@ -1470,6 +1475,11 @@ void BattlegroundVHR::AddBrokerBonusOffers(uint8 count)
 void BattlegroundVHR::AddBonusBrokersPerWave(uint8 count)
 {
     _bonusBrokersPerWave = uint8(std::min<uint32>(uint32(_bonusBrokersPerWave) + count, BG_VHR_CREATURE_BOON_BROKER_MAX));
+}
+
+void BattlegroundVHR::AddBonusRunesPerWave(uint8 count)
+{
+    _bonusRunesPerWave = uint8(std::min<uint32>(uint32(_bonusRunesPerWave) + count, BG_VHR_MAX_BONUS_RUNES));
 }
 
 void BattlegroundVHR::RequestAlly(Player const* requester)

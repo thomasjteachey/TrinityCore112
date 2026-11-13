@@ -132,7 +132,11 @@ enum BG_VHR_Objects
     BG_VHR_OBJECT_BUFF_2           = 10,
     BG_VHR_OBJECT_BUFF_3           = 11,
     BG_VHR_OBJECT_BUFF_4           = 12,
-    BG_VHR_OBJECT_MAX              = 13
+    // Boon of Abundance's extra runes, one slot per stack.
+    BG_VHR_OBJECT_BUFF_5           = 13,
+    BG_VHR_OBJECT_BUFF_6           = 14,
+    BG_VHR_OBJECT_BUFF_7           = 15,
+    BG_VHR_OBJECT_MAX              = 16
 };
 
 enum BG_VHR_Creatures
@@ -262,6 +266,10 @@ enum BG_VHR_Constants
     //   1-3 players -> 1     4-6 -> 2     7-9 -> 3     10 -> 4
     BG_VHR_PLAYERS_PER_BUFF = 3,
     BG_VHR_MAX_WAVE_BUFFS   = 4,
+    // Boon of Abundance adds a rune per stack on top of that (its brokers do
+    // not grow with it), so the drop can be up to seven.
+    BG_VHR_MAX_BONUS_RUNES  = 3,
+    BG_VHR_RUNE_SLOTS       = BG_VHR_MAX_WAVE_BUFFS + BG_VHR_MAX_BONUS_RUNES,
 
     // Below this many people the party gets one extra boon broker per wave. A
     // boon is bought once and carried by one person, so it does not divide the
@@ -532,6 +540,9 @@ public:
     // Hoarder: this many brokers more than runes after every wave from now on.
     uint8 GetBonusBrokersPerWave() const { return _bonusBrokersPerWave; }
     void AddBonusBrokersPerWave(uint8 count);
+    // Abundance: this many runes more after every wave from now on.
+    uint8 GetBonusRunesPerWave() const { return _bonusRunesPerWave; }
+    void AddBonusRunesPerWave(uint8 count);
 
     // Fellowship. RequestAlly queues one; the driver polls the queue, and on
     // success calls NotifyAllySpawned. A request that cannot be met right now
@@ -743,6 +754,7 @@ private:
     // Run-wide boon state (see the accessors above).
     uint8 _brokerBonusOffers;
     uint8 _bonusBrokersPerWave;
+    uint8 _bonusRunesPerWave = 0;
     std::vector<VhrAllyRequest> _allyRequests;
     uint32 _nextAllyRequestId;
     uint32 _allyRetryMs;

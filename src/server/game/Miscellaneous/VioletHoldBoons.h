@@ -121,6 +121,9 @@ namespace VioletHoldBoons
         Aggression,     // your hits cut the target's healing received for 10 sec
         Healthstone,    // unique: a healthstone for your level that is never used up
 
+        // 2026-11-13.
+        Abundance,      // RUN-WIDE: an extra rune after every wave, up to 3
+
         Max
     };
 
@@ -222,6 +225,10 @@ namespace VioletHoldBoons
         // real cut ("0 to 1%"); 90396 stays in the DBC, unused.
         SPELL_AGGRESSION_WOUND  = 94304,
         SPELL_DIVINITY_SHIELD   = 90419,
+
+        // Boon of Abundance, a run-wide record aura like Hoarder's (StackAmount
+        // 3). Past the Violet Hold runes 94310-94314.
+        SPELL_BOON_ABUNDANCE    = 94315,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
