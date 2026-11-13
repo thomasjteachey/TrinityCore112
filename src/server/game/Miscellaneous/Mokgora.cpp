@@ -102,6 +102,13 @@ namespace
         // day on 2026-10-28). The two fighters are still told everything.
         bool AnnounceBots = false;
 
+        // How many Mok'goras a player may throw at bots between two daily
+        // resets (owner, 2026-11-13: one). A bot accepts on the spot, so
+        // without this a bot is a free kill on demand. 0 = no limit. A bounty
+        // notice's quarry challenging the person who took the notice does not
+        // count - that one is the bot's challenge, not theirs.
+        uint32 BotChallengesPerDay = 1;
+
         // The duel flag. 21680 is the one the Duel spell (7266) itself plants
         // on this realm - read off its own EffectMiscValue rather than assumed.
         // 194 is stock TrinityCore's id and is NOT in this world's
@@ -171,6 +178,90 @@ namespace
             if (offer.Challenger == challenger)
                 return &offer;
         return nullptr;
+    }
+
+    // ---------------------------------------------------------------------
+    // one bot a day
+    // ---------------------------------------------------------------------
+
+    // Per ACCOUNT, so an alt does not buy a second one, and counted until the
+    // realm's daily quest reset - the "day" every other daily on the realm
+    // already uses. Only a challenge that planted a flag is counted: a bot
+    // turning down somebody red to it, or a flag that would not go in, costs
+    // nothing.
+    //
+    // Kept in memory only. A worldserver restart hands everyone a fresh one,
+    // which is a smaller cost than another characters-database table to apply
+    // and probe on every realm for a counter that lives a day.
+    struct BotChallengeTally
+    {
+        time_t Until = 0;   // the daily reset this count belongs to
+        uint32 Count = 0;
+    };
+
+    std::unordered_map<uint32, BotChallengeTally> BotChallengesToday;
+
+    time_t NextDailyReset()
+    {
+        time_t const now = GameTime::GetGameTime();
+        time_t const next = sWorld->GetNextDailyQuestsResetTime();
+        return next > now ? next : now + DAY;
+    }
+
+    BotChallengeTally const* CurrentBotTally(Player const* player)
+    {
+        if (!player || !player->GetSession())
+            return nullptr;
+
+        auto itr = BotChallengesToday.find(player->GetSession()->GetAccountId());
+        if (itr == BotChallengesToday.end() || GameTime::GetGameTime() >= itr->second.Until)
+            return nullptr;
+        return &itr->second;
+    }
+
+    bool BotChallengesSpent(Player const* player)
+    {
+        if (!Config.BotChallengesPerDay)
+            return false;
+
+        BotChallengeTally const* tally = CurrentBotTally(player);
+        return tally && tally->Count >= Config.BotChallengesPerDay;
+    }
+
+    void SpendBotChallenge(Player const* player)
+    {
+        if (!Config.BotChallengesPerDay || !player || !player->GetSession())
+            return;
+
+        BotChallengeTally& tally = BotChallengesToday[player->GetSession()->GetAccountId()];
+        if (GameTime::GetGameTime() >= tally.Until)
+            tally = BotChallengeTally{ NextDailyReset(), 0 };
+        ++tally.Count;
+    }
+
+    std::string BotChallengesSpentLine(Player const* player)
+    {
+        BotChallengeTally const* tally = CurrentBotTally(player);
+        time_t const left = tally ? std::max<time_t>(tally->Until - GameTime::GetGameTime(), MINUTE) : DAY;
+
+        // Rounded up, so "1 hour" never means "a few seconds".
+        std::string when;
+        if (left > HOUR)
+        {
+            time_t const hours = (left + HOUR - 1) / HOUR;
+            when = Trinity::StringFormat("{} hour{}", hours, hours == 1 ? "" : "s");
+        }
+        else
+        {
+            time_t const minutes = (left + MINUTE - 1) / MINUTE;
+            when = Trinity::StringFormat("{} minute{}", minutes, minutes == 1 ? "" : "s");
+        }
+
+        if (Config.BotChallengesPerDay == 1)
+            return Trinity::StringFormat("You have already challenged a bot to Mok'gora today. "
+                "You may challenge another in {}.", when);
+        return Trinity::StringFormat("You have already challenged {} bots to Mok'gora today. "
+            "You may challenge another in {}.", Config.BotChallengesPerDay, when);
     }
 
     // ---------------------------------------------------------------------
@@ -316,6 +407,9 @@ namespace
         if (target->GetSession() && target->GetSession()->IsTransientPlayerSession())
             return Trinity::StringFormat("{} is not here to stay. There is nothing to settle with them.",
                 target->GetName());
+
+        if (!botIssued && IsBot(target) && BotChallengesSpent(challenger))
+            return BotChallengesSpentLine(challenger);
 
         if (challenger->IsGameMaster() || target->IsGameMaster())
             return "A Game Master may not take part in a Mok'gora.";
@@ -645,6 +739,8 @@ void LoadConfig()
     Config.AnnounceStart = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceStart", true);
     Config.AnnounceEnd = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceEnd", true);
     Config.AnnounceBots = sConfigMgr->GetBoolDefault("Centurion.Mokgora.AnnounceBots", false);
+    Config.BotChallengesPerDay = uint32(std::clamp(
+        sConfigMgr->GetIntDefault("Centurion.Mokgora.BotChallengesPerDay", 1), 0, 100));
     Config.FlagGameObjectId = uint32(std::max(1,
         sConfigMgr->GetIntDefault("Centurion.Mokgora.FlagGameObjectId", 21680)));
 
@@ -753,6 +849,9 @@ bool Challenge(Player* challenger, std::string const& targetName)
             Say(challenger, Banner(why));
             return true;
         }
+
+        // The flag is in: this is the day's bot.
+        SpendBotChallenge(challenger);
 
         // The fleet answers an ordinary duel request with a countdown of its
         // own (playerbot_loader's OnDuelRequest), which StartDuel's request
