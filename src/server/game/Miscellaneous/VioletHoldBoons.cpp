@@ -92,7 +92,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::AttackSpeed,  SPELL_BOON_ATTACK_SPEED, 4, 255, MASK_MELEE,    6, "Boon of Haste",        "attack speed",                            "%" },
     { Boon::CastSpeed,    SPELL_BOON_CAST_SPEED,   4, 100, MASK_CASTER,   6, "Boon of Celerity",     "casting speed",                           "%" },
     { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "mounts summon instantly, even in combat (unique)", "" },
-    { Boon::Cooldown,     SPELL_BOON_COOLDOWN,     5, 100, MASK_ALL,     4, "Boon of Alacrity",     "cooldown reduction",                      "%" },
+    { Boon::Cooldown,     SPELL_BOON_COOLDOWN,    10, 100, MASK_ALL,     4, "Boon of Alacrity",     "cooldown reduction",                      "%" },
     { Boon::Resistance,   SPELL_BOON_RESISTANCE,   8, 255, MASK_ALL,      6, "Boon of Warding",      "to all resistances",                      "" },
     { Boon::Level,        SPELL_BOON_LEVEL,        1, 100, MASK_ALL,     3, "Boon of Ascension",    "level, with its talent point (until you leave)", "" },
     { Boon::Strength,     SPELL_BOON_STRENGTH,     5, 255, MASK_ALL,     10, "Boon of Brawn",        "Strength",                                "%" },
@@ -123,7 +123,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // Weaponmaster covers what Resolve leaves out on purpose: disarms.
     { Boon::Resilience,   SPELL_BOON_RESILIENCE,   3,  30, MASK_ALL,      7, "Boon of Resilience",   "less chance to be critically hit",        "%" },
     { Boon::Divinity,     SPELL_BOON_DIVINITY,     5,  25, MASK_ALL,      5, "Boon of Divinity",     "of your damage and healing builds a shield (up to 25% of your health)", "%" },
-    { Boon::Clearcasting, SPELL_BOON_CLEARCASTING, 2,  20, MASK_ALL,      5, "Boon of Clearcasting", "chance on damage or healing that your next spell or ability costs nothing", "%" },
+    { Boon::Clearcasting, SPELL_BOON_CLEARCASTING, 5,  20, MASK_ALL,      5, "Boon of Clearcasting", "chance on damage or healing that your next spell or ability costs nothing", "%" },
     { Boon::Viper,        SPELL_BOON_VIPER,        5,  25, MASK_MANA,     6, "Boon of the Viper",    "of damage dealt returned to you as mana", "%" },
     { Boon::Protector,    SPELL_BOON_PROTECTOR,   10, 100, MASK_ALL,      8, "Boon of the Protector", "armor",                                  "%" },
     { Boon::Weaponmaster, SPELL_BOON_WEAPONMASTER, 10, 90, MASK_MELEE,    4, "Boon of the Weaponmaster", "shorter disarms on you",              "%" },

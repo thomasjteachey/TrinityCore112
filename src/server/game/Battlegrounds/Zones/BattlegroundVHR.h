@@ -20,7 +20,8 @@
  * clone in it is at full power.
  *
  * Wave BG_VHR_MIDBOSS_WAVE is a champion: one oversized clone with a party's
- * worth of health and extra damage, walking out with a horde escort. The waves
+ * worth of health, extra damage and crowd-control resistance, walking out with
+ * the wave's regular number of clones, none of them horde. The waves
  * before the champion and before the final wave drop extra boon brokers.
  * Deeper waves also reinforce every clone that is not a copy of a party member
  * (BG_VHR_REINFORCE_FROM_WAVE), while clones OF a party member carry that
@@ -241,12 +242,15 @@ enum BG_VHR_Constants
     // BG_VHR_CHAMPION_REINFORCED_PER_PLAYER Reinforced stacks per player
     // (+5% Stamina each, so about (party size + 1) times a clone's
     // health), BG_VHR_CHAMPION_DAMAGE_BASE + _PER_PLAYER per player
-    // stacks of Boon of Might (+1% damage each) and BG_VHR_CHAMPION_SCALE
-    // times the size, walking out with one horde clone per player.
+    // stacks of Boon of Might (+1% damage each), BG_VHR_CHAMPION_RESOLVE
+    // stacks of Boon of Resolve (1% shorter crowd control each) and
+    // BG_VHR_CHAMPION_SCALE times the size, walking out with the wave's
+    // regular count of clones, every one at full power.
     BG_VHR_MIDBOSS_WAVE = 15,
     BG_VHR_CHAMPION_REINFORCED_PER_PLAYER = 20,
     BG_VHR_CHAMPION_DAMAGE_BASE = 50,
     BG_VHR_CHAMPION_DAMAGE_PER_PLAYER = 10,
+    BG_VHR_CHAMPION_RESOLVE = 50,
 
     // Clearing the wave before the champion drops this many brokers on top
     // of the usual ones. Clearing the wave before the final one drops at
@@ -657,6 +661,9 @@ private:
     // The champion wave's slot-0 clone grows into the champion as the wave is
     // fulfilled. Announced when its gates open.
     void MakeChampion(Player* champion);
+    // The champion's boons: at least its own Might and Resolve, whatever the
+    // party member it copies was handed (RefreshWaveBoonCopies).
+    void EmpowerChampion(Player* champion);
 
     // Re-copy every party member's boons onto the clones made from them, as
     // the cells open - or onto just `onlyClone`, as a held-back one comes out.

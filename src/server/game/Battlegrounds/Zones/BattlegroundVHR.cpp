@@ -409,9 +409,10 @@ uint32 BattlegroundVHR::GetEnemyCountForWave(uint32 wave) const
     if (!wave)
         return 0;
 
-    // The champion and one horde clone per player.
+    // The champion on top of the wave's regular count of whole clones (the
+    // quarter-clone partial is left out: nothing in this wave is Diminished).
     if (wave == BG_VHR_MIDBOSS_WAVE)
-        return 1 + _partySize;
+        return 1 + GetFullStrengthCountForWave(wave);
 
     return GetFullStrengthCountForWave(wave) + (GetPartialCloneStacks(wave) ? 1 : 0);
 }
@@ -420,8 +421,9 @@ uint32 BattlegroundVHR::GetFullPowerCountForWave(uint32 wave) const
 {
     uint32 const enemies = GetEnemyCountForWave(wave);
 
-    // The final wave is everything the run has been building to: no horde.
-    if (wave >= BG_VHR_FINAL_WAVE)
+    // The final wave is everything the run has been building to, and the
+    // champion's escort is its own: no horde in either.
+    if (wave >= BG_VHR_FINAL_WAVE || wave == BG_VHR_MIDBOSS_WAVE)
         return enemies;
 
     // 0 turns the horde off - every clone at full power, as before.
@@ -573,10 +575,9 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
     // Past the party's full-power budget the wave is horde. The budget is
     // spent from slot 0, which is the opening group first, so the clones
     // that walk out with the gates are the real fight and the horde is
-    // what trickles out after. The champion wave is slot 0 the champion and
-    // the rest horde. A slot already carrying the partial clone's stacks
-    // keeps them.
-    uint32 const fullPower = _waveNumber == BG_VHR_MIDBOSS_WAVE ? 1u : GetFullPowerCountForWave(_waveNumber);
+    // what trickles out after. The champion wave (slot 0 the champion) has
+    // none. A slot already carrying the partial clone's stacks keeps them.
+    uint32 const fullPower = GetFullPowerCountForWave(_waveNumber);
     uint8 const hordeStacks = GetHordeCloneStacks();
     for (size_t i = fullPower; i < _pendingRequest.diminishedStacks.size(); ++i)
         if (!_pendingRequest.diminishedStacks[i])
@@ -761,18 +762,38 @@ void BattlegroundVHR::MakeChampion(Player* champion)
         TC_LOG_WARN("bg.battleground", "BattlegroundVHR: could not reinforce champion {} in instance {}.",
             champion->GetName(), GetInstanceID());
 
-    // Damage: Boon of Might is +1% damage done a stack.
-    uint32 const might = std::min<uint32>(BG_VHR_CHAMPION_DAMAGE_BASE + BG_VHR_CHAMPION_DAMAGE_PER_PLAYER * _partySize, 255);
-    if (Aura* aura = champion->AddAura(VioletHoldBoons::SPELL_BOON_DAMAGE, champion))
-        aura->SetStackAmount(uint8(might));
-    else
-        TC_LOG_WARN("bg.battleground", "BattlegroundVHR: could not empower champion {} in instance {}.",
-            champion->GetName(), GetInstanceID());
+    EmpowerChampion(champion);
 
     champion->SetObjectScale(champion->GetObjectScale() * BG_VHR_CHAMPION_SCALE);
 
     // A percentage Stamina aura raises the maximum, not the current health.
     champion->SetFullHealth();
+}
+
+void BattlegroundVHR::EmpowerChampion(Player* champion)
+{
+    // Damage: Boon of Might is +1% damage done a stack. Resolve: 1% shorter
+    // crowd control a stack. Never lowered: the champion is a copy of a party
+    // member, and when the gates open it is handed that member's boons, Might
+    // and Resolve included - which used to knock its +50% damage down to the
+    // player's own few percent.
+    auto atLeast = [this, champion](uint32 spellId, uint32 stacks)
+    {
+        Aura* aura = champion->GetAura(spellId);
+        if (!aura)
+            aura = champion->AddAura(spellId, champion);
+        if (!aura)
+        {
+            TC_LOG_WARN("bg.battleground", "BattlegroundVHR: could not empower champion {} with {} in instance {}.",
+                champion->GetName(), spellId, GetInstanceID());
+            return;
+        }
+        if (aura->GetStackAmount() < stacks)
+            aura->SetStackAmount(uint8(std::min<uint32>(stacks, 255)));
+    };
+
+    atLeast(VioletHoldBoons::SPELL_BOON_DAMAGE, BG_VHR_CHAMPION_DAMAGE_BASE + BG_VHR_CHAMPION_DAMAGE_PER_PLAYER * _partySize);
+    atLeast(VioletHoldBoons::SPELL_BOON_CC_DURATION, BG_VHR_CHAMPION_RESOLVE);
 }
 
 void BattlegroundVHR::NotifyCloneSeated(uint32 waveNumber, uint32 slot, ObjectGuid cloneGuid)
@@ -979,6 +1000,8 @@ void BattlegroundVHR::RefreshWaveBoonCopies(ObjectGuid onlyClone)
             continue;
 
         VioletHoldBoons::CopyBoonsTo(source, clone);
+        if (cloneGuid == _championGuid)
+            EmpowerChampion(clone);
     }
 }
 
@@ -1276,15 +1299,35 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
 
     // Speed is deliberately not in the roll - the party is not chasing anyone -
     // nor Restoration, whose health and mana the wave clear has just refilled.
-    static uint32 const kBuffEntries[] =
+    // Reset Cooldowns and Spawn a Clone of You are the strongest of the five
+    // and roll half as often as the rest.
+    struct WeightedRune
     {
-        BG_OBJECTID_BERSERKERBUFF_ENTRY,
-        BG_VHR_GO_RECHARGE_BUFF,
-        BG_VHR_GO_GLACIAL_STASIS_BUFF,
-        BG_VHR_GO_VOLATILE_CORE_BUFF,
-        BG_VHR_GO_BRIGHT_REFLECTION_BUFF
+        uint32 entry;
+        uint32 weight;
     };
-    uint32 const kBuffCount = uint32(sizeof(kBuffEntries) / sizeof(kBuffEntries[0]));
+    static WeightedRune const kBuffEntries[] =
+    {
+        { BG_OBJECTID_BERSERKERBUFF_ENTRY,  2 },
+        { BG_VHR_GO_RECHARGE_BUFF,          1 },
+        { BG_VHR_GO_GLACIAL_STASIS_BUFF,    2 },
+        { BG_VHR_GO_VOLATILE_CORE_BUFF,     2 },
+        { BG_VHR_GO_BRIGHT_REFLECTION_BUFF, 1 }
+    };
+    auto rollRune = []()
+    {
+        uint32 total = 0;
+        for (WeightedRune const& rune : kBuffEntries)
+            total += rune.weight;
+        uint32 roll = urand(0, total - 1);
+        for (WeightedRune const& rune : kBuffEntries)
+        {
+            if (roll < rune.weight)
+                return rune.entry;
+            roll -= rune.weight;
+        }
+        return kBuffEntries[0].entry;
+    };
 
     // Brokers left over from earlier waves count as taken ground for the
     // placement picker, so nothing is dropped on top of one.
@@ -1306,7 +1349,7 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
         if (!PickBuffPosition(placed, spot))
             break;
 
-        uint32 const entry = kBuffEntries[urand(0, kBuffCount - 1)];
+        uint32 const entry = rollRune();
         if (!AddObject(BG_VHR_OBJECT_BUFF_1 + i, entry, spot, 0.0f, 0.0f,
             std::sin(spot.GetOrientation() / 2.0f), std::cos(spot.GetOrientation() / 2.0f), RESPAWN_IMMEDIATELY))
         {
