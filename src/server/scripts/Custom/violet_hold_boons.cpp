@@ -21,12 +21,24 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "AddonRequestRoutes.h"
+#include "DBCStores.h"
+#include "GameTime.h"
+#include "ItemTemplate.h"
+#include "ObjectAccessor.h"
+#include "ObjectMgr.h"
+#include "StringConvert.h"
+#include "StringFormat.h"
+#include "Util.h"
 #include "VioletHoldBoons.h"
 #include "WorldSession.h"
 #include "WrappedSpells.h"
 
 #include <algorithm>
 #include <iterator>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 using namespace VioletHoldBoons;
@@ -69,147 +81,507 @@ bool MayTrade(Player const* player, BattlegroundVHR const* run)
 
     return player->GetBGTeam() == run->GetHumanTeam();
 }
+
+BattlegroundVHR* RunOfPlayer(Player const* player)
+{
+    Battleground* bg = player ? player->GetBattleground() : nullptr;
+    if (!bg || bg->GetTypeID() != BATTLEGROUND_VHR)
+        return nullptr;
+    return static_cast<BattlegroundVHR*>(bg);
+}
+
+// --- The card draft (CENTURION_VioletHold addon, BoonDraft.lua) -------------
+//
+// The broker's offers as a hand of cards. Everything the cards show comes from
+// the same tables the gossip lines do; the gossip menu is still sent after the
+// cards, so a player without the addon trades exactly as before, and the addon
+// closes that menu when it has the cards up.
+//
+// Server -> addon, CCGAME whispers, fields split on '^' (Field() keeps them
+// out of the text), <broker> written the way UnitGUID writes it:
+//   VHBOON:DEAL:<broker>^<wave>^<final wave>^<greed>^<abundance>^<hoarder>[^<name>^<class id>]...
+//   VHBOON:CARD:<broker>^<code>^<kind B|S|I>^<tier 1-5>^<run-wide>^<greed card>^<icon S<spell>|I<item>>
+//               ^<name>^<headline>^<text>^<held>^<after>^<cap>^<unit>^<PickResult for you>[^<who can take it>]...
+//   VHBOON:DECK:<broker>[^<tier>^<name>^<value>]...      (several lines when long)
+//   VHBOON:SHOW:<broker>                                 the hand is complete
+//   VHBOON:LOOK:<broker>^<name>^<code>                   a party member is looking at a card
+//   VHBOON:TAKEN:<broker>^<name>^<code>                  the deal is over
+//   VHBOON:GONE:<broker>                                 the broker left with nothing taken
+// Addon -> server, CCGAMEREQ whispers to self:
+//   VHBOON:PICK:<broker>:<code>
+//   VHBOON:LOOK:<broker>:<code>
+// Codes are Offer::Encode(); CODE_NONE is "looking at nothing".
+constexpr uint32 CODE_NONE = 999;
+// One addon line stays inside what a chat message may carry.
+constexpr size_t MAX_LINE = 250;
+// A party member's "looking at" relay, at most this often.
+constexpr uint32 LOOK_INTERVAL_MS = 150;
+
+std::string BrokerTag(ObjectGuid guid)
+{
+    return Trinity::StringFormat("0x{:016X}", guid.GetRawValue());
+}
+
+ObjectGuid ParseBrokerTag(std::string_view tag)
+{
+    if (tag.size() > 2 && tag[0] == '0' && (tag[1] == 'x' || tag[1] == 'X'))
+        tag.remove_prefix(2);
+    Optional<uint64> raw = Trinity::StringTo<uint64>(tag, 16);
+    return raw ? ObjectGuid(*raw) : ObjectGuid::Empty;
+}
+
+std::string Field(std::string_view text)
+{
+    std::string out(text);
+    for (char& c : out)
+        if (c == '^' || c == '|' || c == '\t' || c == '\n' || c == '\r')
+            c = ' ';
+    return out;
+}
+
+bool IsRunWideBoon(Boon boon)
+{
+    return boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::Fellowship || boon == Boon::Abundance;
+}
+
+// The card's frame colour, read off the roll weight so a card that looks rare
+// is rare in the pool: 1 common, 2 uncommon, 3 rare, 4 class spell, 5 legendary.
+uint8 RarityTier(Offer offer)
+{
+    if (offer.kind == Offer::Kind::Item)
+        return 5;
+    if (offer.kind == Offer::Kind::ClassSpell)
+        return 4;
+    uint8 const weight = GetBoon(Boon(offer.index)).weight;
+    return weight >= 8 ? 1 : weight >= 5 ? 2 : 3;
+}
+
+// "Boon of the Vampire" -> "Vampire", for the deck strip.
+std::string ShortBoonName(char const* name)
+{
+    std::string_view view(name);
+    for (std::string_view prefix : { std::string_view("Boon of the "), std::string_view("Boon of ") })
+        if (StringStartsWith(view, prefix))
+            return std::string(view.substr(prefix.size()));
+    return std::string(view);
+}
+
+// Every human member of the run, except `except`.
+void SendToParty(BattlegroundVHR const* run, std::string const& line, Player const* except = nullptr)
+{
+    for (auto const& itr : run->GetPlayers())
+    {
+        if (itr.second.Team != run->GetHumanTeam() || (except && itr.first == except->GetGUID()))
+            continue;
+        if (Player* member = ObjectAccessor::FindPlayer(itr.first))
+            if (member->GetSession() && !member->GetSession()->IsTransientPlayerSession())
+                Battleground::SendSquadFeedLine(member, line);
+    }
+}
+
+std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, bool greedCard,
+    std::vector<Player const*> const& roster)
+{
+    char kind = 'B';
+    bool runWide = false;
+    std::string icon, name, headline, text, unit;
+    uint32 held = 0, after = 0, cap = 0;
+
+    switch (offer.kind)
+    {
+        case Offer::Kind::Item:
+        {
+            ItemGrantInfo const& info = GetItemGrant(offer.index);
+            kind = 'I';
+            icon = "I" + std::to_string(info.itemEntry);
+            name = info.name;
+            if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(info.itemEntry))
+                name = proto->Name1;
+            headline = "Legendary";
+            SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(info.enchantId);
+            if (enchant && *enchant->Name[LOCALE_enUS])
+                headline = enchant->Name[LOCALE_enUS];
+            text = "Yours for this run, soulbound. Destroyed when you leave the Hold.";
+            break;
+        }
+        case Offer::Kind::ClassSpell:
+        {
+            ClassSpellInfo const& info = GetClassSpell(offer.index);
+            kind = 'S';
+            icon = "S" + std::to_string(ResolveRank(info.spellId, viewer->GetLevel()));
+            name = info.name;
+            headline = "Learn";
+            char const* className = "Class";
+            if (ChrClassesEntry const* entry = sChrClassesStore.LookupEntry(info.classId))
+                className = entry->Name[LOCALE_enUS];
+            text = Trinity::StringFormat("{} spell, taught at the best rank your level allows. Forgotten when you leave the Hold.", className);
+            break;
+        }
+        default:
+        {
+            BoonInfo const& info = GetBoon(Boon(offer.index));
+            icon = "S" + std::to_string(GetBoonSpellFor(info.boon, viewer->GetClass()));
+            name = info.name;
+            runWide = IsRunWideBoon(info.boon);
+            held = GetStacks(viewer, info.boon);
+            cap = info.maxStacks;
+            after = std::min<uint32>(held + info.grantStacks, cap);
+            unit = info.unit;
+            text = info.summary;
+            if (cap > 1)
+                headline = Trinity::StringFormat("+{}{}", uint32(info.grantStacks), info.unit);
+            if (info.boon == Boon::Healthstone)
+                if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(GetHealthstoneFor(viewer->GetLevel())))
+                    text = proto->Name1 + ", " + info.summary;
+            break;
+        }
+    }
+
+    PickResult const status = CanTake(viewer, offer);
+
+    std::string const head = Trinity::StringFormat("VHBOON:CARD:{}^{}^{}^{}^{}^{}^{}^{}^{}^", tag, offer.Encode(), kind,
+        uint32(RarityTier(offer)), runWide ? 1 : 0, greedCard ? 1 : 0, icon, Field(name), Field(headline));
+    std::string tail = Trinity::StringFormat("^{}^{}^{}^{}^{}", held, after, cap, Field(unit), uint32(status));
+
+    // A card that is not yours says whose it is.
+    if (status != PickResult::Ok)
+        for (Player const* member : roster)
+            if (member && member != viewer && CanTake(member, offer) == PickResult::Ok && tail.size() < 80)
+                tail += "^" + Field(member->GetName());
+
+    text = Field(text);
+    size_t const room = MAX_LINE > head.size() + tail.size() ? MAX_LINE - head.size() - tail.size() : 0;
+    if (text.size() > room)
+        text.resize(room);
+
+    return head + text + tail;
+}
+
+// What the viewer already holds this run: boons with their stacks, the class
+// spells the broker taught (knowledge marker) and the legendaries he handed
+// out. Run-wide boons are left to the DEAL line.
+void SendDeck(Player* viewer, std::string const& tag)
+{
+    std::vector<std::string> entries;
+
+    for (uint8 i = 0; i < uint8(Boon::Max); ++i)
+    {
+        BoonInfo const& info = GetBoon(Boon(i));
+        if (IsRunWideBoon(info.boon))
+            continue;
+        uint8 const stacks = GetStacks(viewer, info.boon);
+        if (!stacks)
+            continue;
+
+        Offer offer;
+        offer.kind = Offer::Kind::Boon;
+        offer.index = i;
+        std::string value;
+        if (info.maxStacks > 1)
+            value = *info.unit ? Trinity::StringFormat("{}{}", uint32(stacks), info.unit) : Trinity::StringFormat("x{}", uint32(stacks));
+        entries.push_back(Trinity::StringFormat("{}^{}^{}", uint32(RarityTier(offer)), Field(ShortBoonName(info.name)), Field(value)));
+    }
+
+    if (Aura const* marker = viewer->GetAura(SPELL_KNOWLEDGE_MARKER))
+        for (uint8 slot = 0; slot < MAX_SPELL_EFFECTS; ++slot)
+            if (AuraEffect const* eff = marker->GetEffect(slot))
+                if (uint32 const tableSpellId = uint32(eff->GetBaseAmount()))
+                    for (uint8 i = 0; i < CLASS_SPELL_COUNT; ++i)
+                        if (GetClassSpell(i).spellId == tableSpellId)
+                            entries.push_back(Trinity::StringFormat("4^{}^learned", Field(GetClassSpell(i).name)));
+
+    Aura const* cache = viewer->GetAura(SPELL_CACHE_MARKER);
+    for (uint8 i = 0; i < ITEM_GRANT_COUNT; ++i)
+    {
+        ItemGrantInfo const& info = GetItemGrant(i);
+        bool owned = false;
+        if (info.runOnly)
+            owned = viewer->HasItemCount(info.itemEntry, 1, true);
+        else if (cache && i < MAX_SPELL_EFFECTS)
+            if (AuraEffect const* eff = cache->GetEffect(i))
+                owned = eff->GetBaseAmount() != 0;
+        if (owned)
+            entries.push_back(Trinity::StringFormat("5^{}^", Field(info.name)));
+    }
+
+    std::string const start = "VHBOON:DECK:" + tag;
+    std::string line = start;
+    for (std::string const& entry : entries)
+    {
+        if (line.size() + 1 + entry.size() > MAX_LINE && line.size() > start.size())
+        {
+            Battleground::SendSquadFeedLine(viewer, line);
+            line = start;
+        }
+        line += "^" + entry;
+    }
+    Battleground::SendSquadFeedLine(viewer, line);
+}
+
+struct npc_violet_hold_boon_brokerAI : public ScriptedAI
+{
+    npc_violet_hold_boon_brokerAI(Creature* creature) : ScriptedAI(creature), _rolled(false), _consumed(false) { }
+
+    void Reset() override
+    {
+        me->SetReactState(REACT_PASSIVE);
+    }
+
+    bool OnGossipHello(Player* player) override
+    {
+        BattlegroundVHR* run = GetRun(me);
+        if (!MayTrade(player, run) || _consumed)
+        {
+            CloseGossipMenuFor(player);
+            return true;
+        }
+
+        // The board minus whatever has gone dead since it was rolled: a
+        // unique boon somebody claimed, a class spell its only owner
+        // learned, a legendary already handed out. Lines that merely do
+        // not fit THIS reader stay - they are still somebody's - and
+        // DescribeOffer labels them.
+        std::vector<Offer> const offers = LiveOffersFor(run);
+        if (offers.empty())
+        {
+            // Nothing here helps anyone any more. This broker can never be
+            // consumed by a pick, and his slot is one of a fixed few, so
+            // retire him now and let the next wave put a fresh one out.
+            if (WorldSession* session = player->GetSession())
+                session->SendNotification("The broker has nothing left that would help anyone here.");
+            CloseGossipMenuFor(player);
+            _consumed = true;
+            SendToParty(run, "VHBOON:GONE:" + BrokerTag(me->GetGUID()));
+            // Frees the slot and removes the creature at the end of the
+            // update. Nothing below may touch `me` after this.
+            run->ConsumeBoonBroker(me->GetGUID());
+            return true;
+        }
+
+        // The cards first, so the addon has them when the menu arrives.
+        SendDeal(player, run, offers);
+
+        ClearGossipMenuFor(player);
+        for (Offer const& offer : offers)
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, DescribeOffer(player, offer),
+                GOSSIP_SENDER_MAIN, ACTION_PICK_BASE + offer.Encode());
+
+        SendGossipMenuFor(player, NPC_TEXT_BOON_BROKER, me->GetGUID());
+        return true;
+    }
+
+    bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
+    {
+        uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
+        CloseGossipMenuFor(player);
+
+        Offer offer;
+        if (action < ACTION_PICK_BASE || !Offer::Decode(action - ACTION_PICK_BASE, offer))
+            return true;
+
+        Pick(player, offer);
+        return true;
+    }
+
+    // Both ways in - a gossip line and a card - end here.
+    void Pick(Player* player, Offer offer)
+    {
+        BattlegroundVHR* run = GetRun(me);
+        if (!MayTrade(player, run) || _consumed)
+            return;
+
+        // The pick has to be one of the offers this broker is actually
+        // showing, so a hand-crafted packet cannot shop the whole list.
+        std::vector<Offer> const& offers = OffersFor(run);
+        if (std::find(offers.begin(), offers.end(), offer) == offers.end())
+            return;
+
+        PickResult const result = Take(player, offer);
+        if (result != PickResult::Ok)
+        {
+            // Wrong class, already known, capped: the broker stays for
+            // whoever it does fit. Nothing was changed.
+            if (WorldSession* session = player->GetSession())
+                session->SendNotification("%s", GetPickResultText(result));
+            return;
+        }
+
+        _consumed = true;
+
+        char const* name = offer.kind == Offer::Kind::Boon ? GetBoon(Boon(offer.index)).name
+                         : offer.kind == Offer::Kind::ClassSpell ? GetClassSpell(offer.index).name
+                         : GetItemGrant(offer.index).name;
+        if (WorldSession* session = player->GetSession())
+            session->SendNotification("You receive %s.", name);
+        run->PSendMessageToAll(STRING_BOON_TAKEN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName().c_str(), name);
+        SendToParty(run, Trinity::StringFormat("VHBOON:TAKEN:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), offer.Encode()));
+
+        // Frees the slot and removes the creature at the end of the update.
+        // Nothing below may touch `me` after this.
+        run->ConsumeBoonBroker(me->GetGUID());
+    }
+
+    // A party member's cursor moved to another card (CODE_NONE: put down).
+    // Told to the rest of the party so two people do not reach for the same one.
+    void Look(Player* player, uint32 code)
+    {
+        BattlegroundVHR* run = GetRun(me);
+        if (!MayTrade(player, run) || _consumed)
+            return;
+
+        Offer offer;
+        if (code != CODE_NONE && !Offer::Decode(code, offer))
+            return;
+
+        uint32 const now = GameTime::GetGameTimeMS();
+        uint32& last = _lookTimes[player->GetGUID()];
+        // Putting the cards down always goes through, or a badge could stick.
+        if (code != CODE_NONE && last && now - last < LOOK_INTERVAL_MS)
+            return;
+        last = now;
+
+        if (code == CODE_NONE)
+            _looks.erase(player->GetGUID());
+        else
+            _looks[player->GetGUID()] = code;
+
+        SendToParty(run, Trinity::StringFormat("VHBOON:LOOK:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), code), player);
+    }
+
+private:
+    void SendDeal(Player* viewer, BattlegroundVHR* run, std::vector<Offer> const& live)
+    {
+        std::string const tag = BrokerTag(me->GetGUID());
+        std::vector<Player const*> roster;
+        run->CollectHumanPlayers(roster);
+
+        std::string deal = Trinity::StringFormat("VHBOON:DEAL:{}^{}^{}^{}^{}^{}", tag, run->GetWaveNumber(), uint32(BG_VHR_FINAL_WAVE),
+            uint32(run->GetBrokerBonusOffers()), uint32(run->GetBonusRunesPerWave()), uint32(run->GetBonusBrokersPerWave()));
+        for (Player const* member : roster)
+            if (member && deal.size() < MAX_LINE - 20)
+                deal += Trinity::StringFormat("^{}^{}", Field(member->GetName()), uint32(member->GetClass()));
+        Battleground::SendSquadFeedLine(viewer, deal);
+
+        // Past the first OFFERS_PER_BROKER of the roll is what Greed added.
+        std::vector<Offer> const& rolled = OffersFor(run);
+        for (Offer const& offer : live)
+        {
+            size_t const position = size_t(std::find(rolled.begin(), rolled.end(), offer) - rolled.begin());
+            Battleground::SendSquadFeedLine(viewer, CardLine(viewer, tag, offer, position >= OFFERS_PER_BROKER, roster));
+        }
+
+        SendDeck(viewer, tag);
+        Battleground::SendSquadFeedLine(viewer, "VHBOON:SHOW:" + tag);
+
+        // Where everyone else's cursor already is.
+        for (auto const& [guid, code] : _looks)
+            if (guid != viewer->GetGUID())
+                if (Player const* member = ObjectAccessor::FindPlayer(guid))
+                    Battleground::SendSquadFeedLine(viewer,
+                        Trinity::StringFormat("VHBOON:LOOK:{}^{}^{}", tag, Field(member->GetName()), code));
+    }
+
+    // Rolled once, on the first visit, against the party as it stands then,
+    // and shown unchanged to everyone after - closing and reopening the
+    // window is not a reroll, and a hunter ability stays on the board for
+    // the hunter even if a mage looked first.
+    // The cached board, filtered to what at least one member of the team
+    // could still take. Recomputed on every visit: the roll is fixed, but
+    // whether an offer is still worth anything is not.
+    std::vector<Offer> LiveOffersFor(BattlegroundVHR const* run)
+    {
+        std::vector<Player const*> roster;
+        run->CollectHumanPlayers(roster);
+
+        std::vector<Offer> live;
+        for (Offer const& offer : OffersFor(run))
+            for (Player const* member : roster)
+                if (member && CanTake(member, offer) == PickResult::Ok)
+                {
+                    live.push_back(offer);
+                    break;
+                }
+
+        return live;
+    }
+
+    std::vector<Offer> const& OffersFor(BattlegroundVHR const* run)
+    {
+        if (!_rolled)
+        {
+            std::vector<Player const*> roster;
+            run->CollectHumanPlayers(roster);
+            // Boon of Greed widens every broker rolled after it.
+            _offers = RollOffers(roster, uint8(std::min<uint32>(OFFERS_PER_BROKER + run->GetBrokerBonusOffers(), 12)));
+            _rolled = true;
+        }
+        return _offers;
+    }
+
+    std::vector<Offer> _offers;
+    std::unordered_map<ObjectGuid, uint32> _looks;
+    std::unordered_map<ObjectGuid, uint32> _lookTimes;
+    bool _rolled;
+    bool _consumed;
+};
+
+// CCGAMEREQ VHBOON:PICK:<broker>:<code> and VHBOON:LOOK:<broker>:<code>, from
+// the card draft. A pick passes the same interaction check a gossip click does
+// (alive, in reach of the broker), then the same Pick().
+void HandleBoonRequest(Player* sender, std::string_view argument)
+{
+    std::vector<std::string_view> const parts = Trinity::Tokenize(argument, ':', false);
+    if (parts.size() != 3)
+        return;
+
+    ObjectGuid const brokerGuid = ParseBrokerTag(parts[1]);
+    Optional<uint32> const code = Trinity::StringTo<uint32>(parts[2]);
+    if (brokerGuid.IsEmpty() || !code)
+        return;
+
+    BattlegroundVHR* run = RunOfPlayer(sender);
+    if (!MayTrade(sender, run))
+        return;
+
+    Creature* broker = ObjectAccessor::GetCreature(*sender, brokerGuid);
+    npc_violet_hold_boon_brokerAI* ai = broker ? dynamic_cast<npc_violet_hold_boon_brokerAI*>(broker->AI()) : nullptr;
+    if (!ai || GetRun(broker) != run)
+    {
+        // Gone already (taken by someone without the addon, or retired):
+        // put the sender's cards away.
+        if (parts[0] == "PICK")
+            Battleground::SendSquadFeedLine(sender, "VHBOON:GONE:" + std::string(parts[1]));
+        return;
+    }
+
+    if (parts[0] == "LOOK")
+    {
+        ai->Look(sender, *code);
+        return;
+    }
+
+    if (parts[0] != "PICK")
+        return;
+
+    if (!sender->GetNPCIfCanInteractWith(brokerGuid, UNIT_NPC_FLAG_GOSSIP))
+    {
+        if (WorldSession* session = sender->GetSession())
+            session->SendNotification("You are too far away from the broker.");
+        return;
+    }
+
+    Offer offer;
+    if (!Offer::Decode(*code, offer))
+        return;
+
+    ai->Pick(sender, offer);
+}
 }
 
 class npc_violet_hold_boon_broker : public CreatureScript
 {
 public:
     npc_violet_hold_boon_broker() : CreatureScript("npc_violet_hold_boon_broker") { }
-
-    struct npc_violet_hold_boon_brokerAI : public ScriptedAI
-    {
-        npc_violet_hold_boon_brokerAI(Creature* creature) : ScriptedAI(creature), _rolled(false), _consumed(false) { }
-
-        void Reset() override
-        {
-            me->SetReactState(REACT_PASSIVE);
-        }
-
-        bool OnGossipHello(Player* player) override
-        {
-            BattlegroundVHR* run = GetRun(me);
-            if (!MayTrade(player, run) || _consumed)
-            {
-                CloseGossipMenuFor(player);
-                return true;
-            }
-
-            // The board minus whatever has gone dead since it was rolled: a
-            // unique boon somebody claimed, a class spell its only owner
-            // learned, a legendary already handed out. Lines that merely do
-            // not fit THIS reader stay - they are still somebody's - and
-            // DescribeOffer labels them.
-            std::vector<Offer> const offers = LiveOffersFor(run);
-            if (offers.empty())
-            {
-                // Nothing here helps anyone any more. This broker can never be
-                // consumed by a pick, and his slot is one of a fixed few, so
-                // retire him now and let the next wave put a fresh one out.
-                if (WorldSession* session = player->GetSession())
-                    session->SendNotification("The broker has nothing left that would help anyone here.");
-                CloseGossipMenuFor(player);
-                _consumed = true;
-                // Frees the slot and removes the creature at the end of the
-                // update. Nothing below may touch `me` after this.
-                run->ConsumeBoonBroker(me->GetGUID());
-                return true;
-            }
-
-            ClearGossipMenuFor(player);
-            for (Offer const& offer : offers)
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, DescribeOffer(player, offer),
-                    GOSSIP_SENDER_MAIN, ACTION_PICK_BASE + offer.Encode());
-
-            SendGossipMenuFor(player, NPC_TEXT_BOON_BROKER, me->GetGUID());
-            return true;
-        }
-
-        bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
-        {
-            uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
-            CloseGossipMenuFor(player);
-
-            BattlegroundVHR* run = GetRun(me);
-            if (!MayTrade(player, run) || _consumed)
-                return true;
-
-            Offer offer;
-            if (action < ACTION_PICK_BASE || !Offer::Decode(action - ACTION_PICK_BASE, offer))
-                return true;
-
-            // The pick has to be one of the three this broker is actually
-            // showing, so a hand-crafted gossip packet cannot shop the whole list.
-            std::vector<Offer> const& offers = OffersFor(run);
-            if (std::find(offers.begin(), offers.end(), offer) == offers.end())
-                return true;
-
-            PickResult const result = Take(player, offer);
-            if (result != PickResult::Ok)
-            {
-                // Wrong class, already known, capped: the broker stays for
-                // whoever it does fit. Nothing was changed.
-                if (WorldSession* session = player->GetSession())
-                    session->SendNotification("%s", GetPickResultText(result));
-                return true;
-            }
-
-            _consumed = true;
-
-            char const* name = offer.kind == Offer::Kind::Boon ? GetBoon(Boon(offer.index)).name
-                             : offer.kind == Offer::Kind::ClassSpell ? GetClassSpell(offer.index).name
-                             : GetItemGrant(offer.index).name;
-            if (WorldSession* session = player->GetSession())
-                session->SendNotification("You receive %s.", name);
-            run->PSendMessageToAll(STRING_BOON_TAKEN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName().c_str(), name);
-
-            // Frees the slot and removes the creature at the end of the update.
-            // Nothing below may touch `me` after this.
-            run->ConsumeBoonBroker(me->GetGUID());
-            return true;
-        }
-
-    private:
-        // Rolled once, on the first visit, against the party as it stands then,
-        // and shown unchanged to everyone after - closing and reopening the
-        // window is not a reroll, and a hunter ability stays on the board for
-        // the hunter even if a mage looked first.
-        // The cached board, filtered to what at least one member of the team
-        // could still take. Recomputed on every visit: the roll is fixed, but
-        // whether an offer is still worth anything is not.
-        std::vector<Offer> LiveOffersFor(BattlegroundVHR const* run)
-        {
-            std::vector<Player const*> roster;
-            run->CollectHumanPlayers(roster);
-
-            std::vector<Offer> live;
-            for (Offer const& offer : OffersFor(run))
-                for (Player const* member : roster)
-                    if (member && CanTake(member, offer) == PickResult::Ok)
-                    {
-                        live.push_back(offer);
-                        break;
-                    }
-
-            return live;
-        }
-
-        std::vector<Offer> const& OffersFor(BattlegroundVHR const* run)
-        {
-            if (!_rolled)
-            {
-                std::vector<Player const*> roster;
-                run->CollectHumanPlayers(roster);
-                // Boon of Greed widens every broker rolled after it.
-                _offers = RollOffers(roster, uint8(std::min<uint32>(OFFERS_PER_BROKER + run->GetBrokerBonusOffers(), 12)));
-                _rolled = true;
-            }
-            return _offers;
-        }
-
-        std::vector<Offer> _offers;
-        bool _rolled;
-        bool _consumed;
-    };
 
     CreatureAI* GetAI(Creature* creature) const override
     {
@@ -818,6 +1190,7 @@ class spell_vhr_boon_aggression : public AuraScript
 void AddSC_violet_hold_boons()
 {
     new npc_violet_hold_boon_broker();
+    AddonRequestRoutes::Register("VHBOON", &HandleBoonRequest);
     RegisterSpellScript(spell_vhr_boon_flurry);
     RegisterSpellScript(spell_vhr_boon_echoes);
     RegisterSpellScript(spell_vhr_boon_ascension);

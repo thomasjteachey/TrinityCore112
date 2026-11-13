@@ -1,8 +1,9 @@
 ## Interface: 30300
 ## Title: Centurion Violet Hold
-## Notes: A timer bar over every rune on the Violet Hold's floor, showing how long until it is taken back.
+## Notes: Violet Hold: a timer bar over every rune on the floor, and the Ethereal Broker's offers as a hand of cards.
 ## Author: Centurion
 ## Version: 1.0
 ## DefaultState: Enabled
 
 CENTURION_VioletHold.lua
+BoonDraft.lua
