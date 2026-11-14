@@ -1636,6 +1636,8 @@ class TC_GAME_API Unit : public WorldObject
 
         GameObject* GetGameObject(uint32 spellId) const;
         std::vector<GameObject*> GetGameObjects(uint32 spellId) const;
+        // Every gameobject this unit owns, in the order they were added.
+        std::vector<GameObject*> GetAllGameObjects() const { return { m_gameObj.begin(), m_gameObj.end() }; }
         void AddGameObject(GameObject* gameObj);
         void RemoveGameObject(GameObject* gameObj, bool del);
         void RemoveGameObject(uint32 spellid, bool del);

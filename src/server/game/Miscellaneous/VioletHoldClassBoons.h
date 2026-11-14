@@ -35,6 +35,7 @@
 
 class Aura;
 class Creature;
+class GameObject;
 class Player;
 class SpellInfo;
 class Totem;
@@ -125,6 +126,12 @@ namespace VioletHoldClassBoons
     // Warlord / Trapper: this spell keeps its category cooldown to itself
     // (every rank of the same spell shares it) - SpellHistory.
     TC_GAME_API bool IsCategoryUnbound(Unit const* owner, SpellInfo const* spellInfo);
+    // Trapper: one of each trap down. Every trap-laying spell shares a summon
+    // slot, so a new trap would otherwise take the last one up whatever its
+    // kind; with the boon it replaces only the caster's earlier trap of the
+    // same kind (any rank) - Spell::EffectSummonObject.
+    TC_GAME_API bool KeepsOneOfEachTrap(Unit const* caster, SpellInfo const* spellInfo);
+    TC_GAME_API std::vector<GameObject*> SameKindTraps(Unit const* caster, SpellInfo const* spellInfo);
 
     // ---- paladin -----------------------------------------------------------
     // Unbound Light: Forbearance (and its two markers) are not put on, and do

@@ -170,7 +170,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::RadiantHost,   94344, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Radiant Host",  "all of your Auras can be active at once", "" },
     { Boon::JudgementDay,  94345, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Judgement Day",     "Judgement also strikes every enemy within 20 yd of your target", "" },
     { Boon::PointBlank,    94346, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of Point Blank",       "no dead zone: Auto Shot and your shots work in melee range", "" },
-    { Boon::Trapper,       94347, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Trapper",       "your traps no longer share a cooldown and can be laid in combat", "" },
+    { Boon::Trapper,       94347, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Trapper",       "your traps no longer share a cooldown and can be laid in combat, and you can have one of each trap down", "" },
     { Boon::Skirmisher,    94348, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Skirmisher",    "you can move while Auto Shot is firing", "" },
     { Boon::Assassin,      94349, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Assassin",      "Backstab works from the front and is never dodged, parried or blocked; Sinister Strike also hits a second enemy; Hemorrhage gives 1 extra combo point", "" },
     { Boon::Unseen,        94350, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Unseen",        "damage and hostile effects no longer break your Stealth", "" },
