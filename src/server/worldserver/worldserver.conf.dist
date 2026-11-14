@@ -6720,7 +6720,8 @@ Centurion.Marks.HonorCostMultiplier = 0
 #    Centurion.VioletHold.FullPowerClonesPerPlayer
 #        Description: How many of a wave's clones fight at full power, per player in the
 #                     party. Every clone past that is "horde" and carries
-#                     HordeDiminishedStacks. The final wave (30) is always all full power.
+#                     HordeDiminishedStacks. Past wave 15 a growing share of the horde is
+#                     promoted to full power each wave; the final wave (25) is all full power.
 #                     Live: `.reload config` applies to the next wave.
 #        Default:     4
 #                     0 - (No horde, every clone at full power)

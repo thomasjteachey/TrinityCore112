@@ -11,13 +11,14 @@
  * wave after that the partial clone is gone and the wave climbs - slowly at
  * first, faster towards the end - to BG_VHR_MAX_ENEMIES clones on
  * BG_VHR_FINAL_WAVE, whatever the party size. See BG_VHR_QUARTERS_PER_CLONE for
- * the table. Clearing BG_VHR_FINAL_WAVE (30) wins the run.
+ * the table. Clearing BG_VHR_FINAL_WAVE (25) wins the run.
  *
  * Only so many of a wave's clones fight at full power: four per player
  * (Centurion.VioletHold.FullPowerClonesPerPlayer). The rest are a horde of
  * Diminished clones, so a small party faces the same forty bodies as a full
- * one without facing forty of itself. The final wave has no horde - every
- * clone in it is at full power.
+ * one without facing forty of itself. Past the champion the horde thins out
+ * a wave at a time, and the final wave has none - every clone in it is at
+ * full power.
  *
  * Wave BG_VHR_MIDBOSS_WAVE is a champion: one oversized clone with a party's
  * worth of health, extra damage and crowd-control resistance, walking out with
@@ -167,7 +168,7 @@ enum BG_VHR_Constants
     // The final wave's clone count, for every party size, and the most any
     // wave ever fields. Clearing BG_VHR_FINAL_WAVE wins the run.
     BG_VHR_MAX_ENEMIES = 40,
-    BG_VHR_FINAL_WAVE  = 30,
+    BG_VHR_FINAL_WAVE  = 25,
 
     // Cells hold at most ten players each in the stock instance, so a late
     // wave has to be spread over several. One cell per ten clones, rounded up,
@@ -232,14 +233,16 @@ enum BG_VHR_Constants
     // BG_VHR_MAX_ENEMIES on BG_VHR_FINAL_WAVE along a square curve - gentle
     // just past the ramp, steep at the end (GetFullStrengthCountForWave):
     //
-    //   solo      wave 16: 5    wave 20: 8     wave 25: 20    wave 29: 36    wave 30: 40
-    //   party 2   wave 16: 6    wave 20: 9     wave 25: 21    wave 29: 36    wave 30: 40
-    //   party 5   wave 16: 9    wave 20: 12    wave 25: 23    wave 29: 36    wave 30: 40
-    //   party 10  wave 16: 14   wave 20: 16    wave 25: 25    wave 29: 37    wave 30: 40
+    //   solo      wave 16: 5    wave 20: 13    wave 24: 34    wave 25: 40
+    //   party 2   wave 16: 6    wave 20: 14    wave 24: 34    wave 25: 40
+    //   party 5   wave 16: 9    wave 20: 16    wave 24: 34    wave 25: 40
+    //   party 10  wave 16: 14   wave 20: 20    wave 24: 35    wave 25: 40
     //
     // (Wave 15 itself is the champion - see BG_VHR_MIDBOSS_WAVE.) Of those,
-    // only Centurion.VioletHold.FullPowerClonesPerPlayer per player fight at
-    // full power before the final wave; the rest are the horde.
+    // Centurion.VioletHold.FullPowerClonesPerPlayer per player fight at full
+    // power, plus a share of the rest that grows by a tenth each wave past
+    // the ramp, so the horde is gone by the final wave
+    // (GetFullPowerCountForWave).
     BG_VHR_QUARTERS_PER_CLONE = 4,
     BG_VHR_SPELL_DIMINISHED   = 90201,
     BG_VHR_QUARTER_RAMP_LAST_WAVE = 15,
@@ -711,7 +714,8 @@ private:
     // ramp, the champion wave, and every wave past BG_VHR_QUARTER_RAMP_LAST_WAVE.
     static uint8 GetPartialCloneStacks(uint32 wave);
     // How many of the wave's clones fight at full power; every clone past it
-    // is horde (GetHordeCloneStacks). All of them on the final wave.
+    // is horde (GetHordeCloneStacks). Past the ramp the horde is promoted to
+    // full power a step per wave; all of them on the final wave.
     uint32 GetFullPowerCountForWave(uint32 wave) const;
     // How many clones walk out with the wave-15 champion.
     uint32 GetChampionEscortCount() const;

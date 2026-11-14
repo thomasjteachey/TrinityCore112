@@ -460,7 +460,19 @@ uint32 BattlegroundVHR::GetFullPowerCountForWave(uint32 wave) const
     if (!perPlayer)
         return enemies;
 
-    return std::min(enemies, _partySize * perPlayer);
+    uint32 const budget = _partySize * perPlayer;
+    if (enemies <= budget)
+        return enemies;
+
+    // Past the ramp the horde does not all lose its Diminished on the final
+    // wave at once: each wave promotes a growing share of it to full power -
+    // a tenth more per wave over the climb - so the last horde clone goes on
+    // the final wave. Rounded up.
+    if (wave <= BG_VHR_QUARTER_RAMP_LAST_WAVE)
+        return budget;
+    uint32 const climbWaves = BG_VHR_FINAL_WAVE - BG_VHR_QUARTER_RAMP_LAST_WAVE;
+    uint32 const climbed = wave - BG_VHR_QUARTER_RAMP_LAST_WAVE;
+    return budget + ((enemies - budget) * climbed + climbWaves - 1) / climbWaves;
 }
 
 uint8 BattlegroundVHR::GetHordeCloneStacks()
