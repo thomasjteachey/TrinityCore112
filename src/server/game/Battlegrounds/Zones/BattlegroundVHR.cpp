@@ -2076,6 +2076,13 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
         VioletHoldBoons::UpdatePackLeader(this);
     }
 
+    _classBoonTimerMs += diff;
+    if (_classBoonTimerMs >= 1000)
+    {
+        _classBoonTimerMs = 0;
+        VioletHoldClassBoons::UpdateRun(this, ++_classBoonTick);
+    }
+
     _bombFeedTimerMs += diff;
     if (_bombFeedTimerMs >= BG_VHR_BOMB_FEED_INTERVAL)
     {
@@ -2238,7 +2245,11 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
     // Boon of Inheritance: a fallen holder's stacking boons carry on in the
     // living party until the wave is over (CompleteWave takes them back).
     if (victim->GetBGTeam() == _humanTeam)
+    {
         VioletHoldBoons::PassInheritance(this, victim, _inherited);
+        // Boon of Vengeance: the fall sends nearby warriors berserk.
+        VioletHoldClassBoons::OnAllyDied(victim);
+    }
 
     // Every clone that falls lets one of the death half out of its cell. A
     // held clone cannot be hurt, but if one dies anyway it is no longer

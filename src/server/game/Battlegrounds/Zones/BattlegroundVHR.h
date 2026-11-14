@@ -891,6 +891,9 @@ private:
     std::vector<VioletHoldBoons::InheritedStacks> _inherited;
     // Boon of the Pack Leader's refresh clock.
     uint32 _packLeaderTimerMs = 0;
+    // VioletHoldClassBoons::UpdateRun, once a second (Plaguebearer, Spirit Link).
+    uint32 _classBoonTimerMs = 0;
+    uint32 _classBoonTick = 0;
     // Boon of the Undying: who is Undying, and the milliseconds they have left.
     std::unordered_map<ObjectGuid, uint32> _undying;
     // Menagerie guardians alive for the current wave.

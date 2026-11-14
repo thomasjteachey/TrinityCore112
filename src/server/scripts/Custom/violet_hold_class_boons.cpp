@@ -9,11 +9,14 @@
  *   spell_vhr_sinister_strike every player rank of Sinister Strike
  *   spell_vhr_shattered_ward  every player rank of Power Word: Shield
  *   spell_vhr_agony           every player rank of Shadow Word: Pain
- *   spell_vhr_frostwalker     1953                                      Blink
+ *   spell_vhr_frostwalker     1953                                      Blink (Frostwalker + Slipstream)
+ *   spell_vhr_second_coming   2006, 2010, 10880, 10881, 20770, 25435, 48171  Resurrection
  *   spell_vhr_serenity        740, 8918, 9862, 9863                     Tranquility
  */
 
 #include "CellImpl.h"
+#include "Corpse.h"
+#include "ObjectAccessor.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "Group.h"
@@ -54,10 +57,13 @@ std::vector<Unit*> EnemiesAround(WorldObject* around, Unit* attacker, float radi
 
 // Frostwalker: the landing nova waits for the client to finish the Blink
 // (a player's near teleport only moves them on its ack).
+// Also where Slipstream's passengers are put down: on the spot the mage
+// actually landed.
 class FrostwalkerLandingEvent : public BasicEvent
 {
 public:
-    FrostwalkerLandingEvent(Player* mage, uint32 novaSpell, uint8 tries) : _mage(mage), _novaSpell(novaSpell), _tries(tries) { }
+    FrostwalkerLandingEvent(Player* mage, uint32 novaSpell, std::vector<ObjectGuid> passengers, uint8 tries)
+        : _mage(mage), _novaSpell(novaSpell), _passengers(std::move(passengers)), _tries(tries) { }
 
     bool Execute(uint64 /*time*/, uint32 /*diff*/) override
     {
@@ -65,17 +71,21 @@ public:
             return true;
         if (_mage->IsBeingTeleportedNear() && _tries < 20)
         {
-            _mage->m_Events.AddEventAtOffset(new FrostwalkerLandingEvent(_mage, _novaSpell, uint8(_tries + 1)),
+            _mage->m_Events.AddEventAtOffset(new FrostwalkerLandingEvent(_mage, _novaSpell, std::move(_passengers), uint8(_tries + 1)),
                 Milliseconds(FROSTWALKER_LANDING_CHECK_MS));
             return true;
         }
-        _mage->CastSpell(_mage, _novaSpell, TRIGGERED_FULL_MASK);
+        if (_novaSpell)
+            _mage->CastSpell(_mage, _novaSpell, TRIGGERED_FULL_MASK);
+        if (!_passengers.empty())
+            SlipstreamArrive(_mage, _passengers);
         return true;
     }
 
 private:
     Player* _mage;
     uint32 _novaSpell;
+    std::vector<ObjectGuid> _passengers;
     uint8 _tries;
 };
 }
@@ -226,7 +236,9 @@ class spell_vhr_agony : public SpellScript
 };
 
 // Boon of the Frostwalker: Blink casts the mage's Frost Nova where they leave
-// and again where they land.
+// and again where they land. Boon of the Slipstream: every ally within 10 yd
+// when the mage Blinks is put down where the mage lands, and every stun and
+// root on them (and the mage) is broken.
 class spell_vhr_frostwalker : public SpellScript
 {
     PrepareSpellScript(spell_vhr_frostwalker);
@@ -234,7 +246,11 @@ class spell_vhr_frostwalker : public SpellScript
     void Departure()
     {
         Player* mage = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
-        if (!mage || !mage->HasAura(SPELL_FROSTWALKER))
+        if (!mage)
+            return;
+        // Taken before the Nova below, which roots nobody on the mage's side.
+        _passengers = SlipstreamPassengers(mage);
+        if (!mage->HasAura(SPELL_FROSTWALKER))
             return;
         _nova = GetFrostNovaRank(mage);
         if (_nova)
@@ -244,9 +260,10 @@ class spell_vhr_frostwalker : public SpellScript
     void Landing()
     {
         Player* mage = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
-        if (!mage || !_nova)
+        if (!mage || (!_nova && _passengers.empty()))
             return;
-        mage->m_Events.AddEventAtOffset(new FrostwalkerLandingEvent(mage, _nova, 0), Milliseconds(FROSTWALKER_LANDING_CHECK_MS));
+        mage->m_Events.AddEventAtOffset(new FrostwalkerLandingEvent(mage, _nova, std::move(_passengers), 0),
+            Milliseconds(FROSTWALKER_LANDING_CHECK_MS));
     }
 
     void Register() override
@@ -256,6 +273,40 @@ class spell_vhr_frostwalker : public SpellScript
     }
 
     uint32 _nova = 0;
+    std::vector<ObjectGuid> _passengers;
+};
+
+// Boon of the Second Coming: with the once-per-wave charge up, Resurrection
+// (made instant and allowed in combat in the core) brings the ally back at
+// full health, and the cast spends the charge.
+class spell_vhr_second_coming : public SpellScript
+{
+    PrepareSpellScript(spell_vhr_second_coming);
+
+    void FullHealth(SpellEffIndex /*effIndex*/)
+    {
+        if (!IsSecondComingResurrection(GetCaster(), GetSpellInfo()))
+            return;
+        Player* raised = GetHitPlayer();
+        if (!raised)
+            if (Corpse* corpse = GetHitCorpse())
+                raised = ObjectAccessor::FindPlayer(corpse->GetOwnerGUID());
+        if (raised)
+            SetEffectValue(int32(raised->GetMaxHealth()));
+    }
+
+    void SpendCharge()
+    {
+        if (Unit* caster = GetCaster())
+            if (IsSecondComingResurrection(caster, GetSpellInfo()))
+                caster->RemoveAurasDueToSpell(SPELL_SECOND_COMING_READY);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_second_coming::FullHealth, EFFECT_0, SPELL_EFFECT_RESURRECT_NEW);
+        AfterCast += SpellCastFn(spell_vhr_second_coming::SpendCharge);
+    }
 };
 
 // Boon of Serenity: once per wave, Tranquility heals everything its whole
@@ -322,5 +373,6 @@ void AddSC_violet_hold_class_boons()
     RegisterSpellScript(spell_vhr_shattered_ward);
     RegisterSpellScript(spell_vhr_agony);
     RegisterSpellScript(spell_vhr_frostwalker);
+    RegisterSpellScript(spell_vhr_second_coming);
     RegisterSpellScript(spell_vhr_serenity);
 }

@@ -95,11 +95,11 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::EnergyCost,   SPELL_BOON_ENERGY_COST, 10,  75, MASK_ENERGY,  7, "Boon of Finesse",      "cheaper energy costs",                    "%" },
     { Boon::Stamina,      SPELL_BOON_STAMINA,      5, 255, MASK_ALL,     10, "Boon of Vitality",     "Stamina",                                 "%" },
     { Boon::ExtraAttack,  SPELL_BOON_EXTRA_ATTACK, 3, 100, MASK_SWING,   6, "Boon of Flurry",       "chance for attacks to swing again",       "%" },
-    { Boon::Doublecast,   SPELL_BOON_DOUBLECAST,   3, 100, MASK_CASTER,  5, "Boon of Echoes",       "chance for damage/heal spells to double", "%" },
+    { Boon::Doublecast,   SPELL_BOON_DOUBLECAST,   6, 100, MASK_CASTER,  5, "Boon of Echoes",       "chance for damage/heal spells to double", "%" },
     { Boon::Crit,         SPELL_BOON_CRIT,         3, 100, MASK_MELEE,    5, "Boon of Precision",    "melee and ranged crit",                   "%" },
     { Boon::SpellCrit,    SPELL_BOON_SPELL_CRIT,   3, 100, MASK_CASTER,   5, "Boon of Insight",      "spell crit",                              "%" },
     { Boon::AttackSpeed,  SPELL_BOON_ATTACK_SPEED, 4, 255, MASK_MELEE,    6, "Boon of Haste",        "attack speed",                            "%" },
-    { Boon::CastSpeed,    SPELL_BOON_CAST_SPEED,   4, 100, MASK_CASTER,   6, "Boon of Celerity",     "casting speed",                           "%" },
+    { Boon::CastSpeed,    SPELL_BOON_CAST_SPEED,   6, 100, MASK_CASTER,   6, "Boon of Celerity",     "casting speed",                           "%" },
     { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "mounts summon instantly, even in combat (unique)", "" },
     { Boon::Cooldown,     SPELL_BOON_COOLDOWN,    10, 100, MASK_ALL,     4, "Boon of Alacrity",     "cooldown reduction",                      "%" },
     { Boon::Resistance,   SPELL_BOON_RESISTANCE,   8, 255, MASK_ALL,      6, "Boon of Warding",      "to all resistances",                      "" },
@@ -201,7 +201,18 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // spec is in the party, though anyone with a heal may take it; the Gale
     // rolls for a caster spec. Both unique.
     { Boon::Atonement,     SPELL_BOON_ATONEMENT, 1, 1, MASK_HEALS, 3, "Boon of Atonement",  "once per wave, your fifth heal makes your next damaging spell deal 10 times damage - it cannot miss or be resisted (unique)", "" },
-    { Boon::Gale,          SPELL_BOON_GALE,      1, 1, MASK_GALE,  4, "Boon of the Gale",   "your damaging spells have a 15% chance to knock the target into the air (unique)", "" }
+    { Boon::Gale,          SPELL_BOON_GALE,      1, 1, MASK_GALE,  4, "Boon of the Gale",   "your damaging spells have a 15% chance to knock the target into the air (unique)", "" },
+
+    // The second artifact block: a fourth class boon per class.
+    { Boon::FieldMedic,    SPELL_BOON_FIELD_MEDIC, 1, 1, ClassBit(CLASS_HUNTER), 0, "Boon of the Field Medic", "your shots, Auto Shot included, can target allies and heal them for what they would have hit for", "" },
+    { Boon::Slipstream,    SPELL_BOON_SLIPSTREAM,  1, 1, ClassBit(CLASS_MAGE),   0, "Boon of the Slipstream",  "Blink takes every ally within 15 yd with you, and frees them from stuns and roots", "" },
+    { Boon::SecondComing,  SPELL_BOON_SECOND_COMING, 1, 1, ClassBit(CLASS_PRIEST), 0, "Boon of the Second Coming", "once per wave, Resurrection is instant, can be cast in combat and brings the ally back at full health", "" },
+    { Boon::Aegis,         SPELL_BOON_AEGIS,        1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Aegis",        "Divine Shield also shields every ally within 20 yd from all damage and effects for 4 sec", "" },
+    { Boon::Vengeance,     SPELL_BOON_VENGEANCE,    1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of Vengeance",        "when an ally dies, you go berserk for 12 sec: +50% damage, immune to crowd control, and every kill heals you for 10%", "" },
+    { Boon::BodyDouble,    SPELL_BOON_BODY_DOUBLE,  1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Body Double",  "when an ally within 30 yd drops below 25% health, you swap places with them and gain Evasion; they are stealthed and immune to all damage and effects for 6 sec (once every 30 sec)", "" },
+    { Boon::Plaguebearer,  SPELL_BOON_PLAGUEBEARER, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Plaguebearer", "every 3 sec one harmful effect on an ally within 20 yd jumps onto you; +10% damage for every harmful effect you carry", "" },
+    { Boon::Wildcaller,    SPELL_BOON_WILDCALLER,   1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Wildcaller",   "shifting forms rallies your party for 8 sec: Cat +15% damage, Bear 15% less damage taken, caster form 25% cheaper mana costs, Moonkin turns them into moonkins whose spells have a 50% chance to cast twice", "" },
+    { Boon::SpiritLink,    SPELL_BOON_SPIRIT_LINK,  1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Spirit Link",  "every 2 sec the health of you and your allies within 20 yd is evened out", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -746,6 +757,15 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_UNDYING
         || spellId == SPELL_BOON_ATONEMENT
         || spellId == SPELL_BOON_GALE
+        || spellId == SPELL_BOON_FIELD_MEDIC
+        || spellId == SPELL_BOON_SLIPSTREAM
+        || spellId == SPELL_BOON_SECOND_COMING
+        || spellId == SPELL_BOON_AEGIS
+        || spellId == SPELL_BOON_VENGEANCE
+        || spellId == SPELL_BOON_BODY_DOUBLE
+        || spellId == SPELL_BOON_PLAGUEBEARER
+        || spellId == SPELL_BOON_WILDCALLER
+        || spellId == SPELL_BOON_SPIRIT_LINK
         || (spellId >= SPELL_BOON_CLASS_FIRST && spellId <= SPELL_BOON_CLASS_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
@@ -753,7 +773,8 @@ bool IsBoonSpell(uint32 spellId)
 
 bool IsArtifact(Boon boon)
 {
-    return boon >= Boon::Juggernaut && boon <= Boon::Ancestors;
+    return (boon >= Boon::Juggernaut && boon <= Boon::Ancestors)
+        || (boon >= Boon::FieldMedic && boon <= Boon::SpiritLink);
 }
 
 // The artifact rows must sit on their spell ids in order: the class boon hooks
@@ -891,8 +912,11 @@ PickResult CanTake(Player const* player, Offer offer)
 
         // Sharing with nobody is nothing: the party boons are for a party of
         // two or more. (Herald also helps a lone holder, so it is not here.)
+        // The whole second artifact block (Field Medic .. Spirit Link) acts
+        // on allies - no allies, no use.
         if (info.boon == Boon::Communion || info.boon == Boon::Deliverance || info.boon == Boon::Inheritance
-            || info.boon == Boon::Kinship || info.boon == Boon::FocusFire || info.boon == Boon::PackLeader)
+            || info.boon == Boon::Kinship || info.boon == Boon::FocusFire || info.boon == Boon::PackLeader
+            || (info.boon >= Boon::FieldMedic && info.boon <= Boon::SpiritLink))
         {
             BattlegroundVHR const* run = GetRunOf(player);
             if (!run)

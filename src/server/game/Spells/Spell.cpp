@@ -979,6 +979,9 @@ void Spell::SelectExplicitTargets()
     if (Unit* target = m_targets.GetUnitTarget())
     {
         // check for explicit target redirection, for Grounding Totem for example
+        // (never for a Field Medic shot at an ally - it is not an attack)
+        if (VioletHoldClassBoons::IsFieldMedicHeal(m_caster, m_spellInfo, target))
+            return;
         if ((m_spellInfo->GetExplicitTargetMask() & TARGET_FLAG_UNIT_ENEMY) ||
             ((m_spellInfo->GetExplicitTargetMask() & TARGET_FLAG_UNIT) && !m_caster->IsFriendlyTo(target)))
         {
@@ -1839,8 +1842,25 @@ void Spell::SelectImplicitChainTargets(SpellEffectInfo const& spellEffectInfo, S
         m_applyMultiplierMask |= effMask;
 
         std::list<WorldObject*> targets;
-        SearchChainTargets(targets, maxTargets - 1, target, targetType.GetObjectType(), targetType.GetCheckType()
+        // Violet Hold Field Medic: the shot jumps to the nearest units whatever
+        // side they are on - allies are healed, enemies hit. A unit that can be
+        // neither (a vendor, a flagged-off player) is passed over, so a few
+        // extra are searched for and the list trimmed back to the jump count.
+        bool const fieldMedic = VioletHoldClassBoons::ShootsAllies(m_caster, m_spellInfo);
+        SearchChainTargets(targets, maxTargets - 1 + (fieldMedic ? 10 : 0), target, targetType.GetObjectType(),
+            fieldMedic ? TARGET_CHECK_DEFAULT : targetType.GetCheckType()
             , spellEffectInfo.ImplicitTargetConditions, targetType.GetTarget() == TARGET_UNIT_TARGET_CHAINHEAL_ALLY);
+        if (fieldMedic)
+        {
+            targets.remove_if([this](WorldObject* object)
+            {
+                Unit* unit = object->ToUnit();
+                return !unit || unit == m_caster || (!m_caster->IsValidAttackTarget(unit, m_spellInfo)
+                    && !VioletHoldClassBoons::IsFieldMedicHeal(m_caster, m_spellInfo, unit));
+            });
+            if (targets.size() > maxTargets - 1)
+                targets.resize(maxTargets - 1);
+        }
 
         // Chain primary target is added earlier
         CallScriptObjectAreaTargetSelectHandlers(targets, spellEffectInfo.EffectIndex, targetType);
@@ -2460,6 +2480,9 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
     // Calculate hit result
     WorldObject* caster = m_originalCaster ? m_originalCaster : m_caster;
     targetInfo.MissCondition = caster->SpellHitResult(target, m_spellInfo, m_canReflect && !(IsPositive() && m_caster->IsFriendlyTo(target)), &targetInfo.heartbeatResistChance);
+    // Violet Hold Field Medic: a shot at an ally always lands (as a heal).
+    if (targetInfo.MissCondition != SPELL_MISS_NONE && VioletHoldClassBoons::IsFieldMedicHeal(caster, m_spellInfo, target))
+        targetInfo.MissCondition = SPELL_MISS_NONE;
 
     // Spell have speed - need calculate incoming time
     // Incoming time is zero for self casts. At least I think so.
@@ -2793,8 +2816,19 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
         uint32 procSpellType = PROC_SPELL_TYPE_NONE;
         uint32 hitMask = PROC_HIT_NONE;
 
+        // Violet Hold Field Medic: a hunter's shot at an ally heals what it
+        // would have hit for (before the target's armour - it is not an
+        // attack) and sets off none of the hunter's on-hit procs.
+        bool const fieldMedic = spell->m_damage > 0
+            && VioletHoldClassBoons::IsFieldMedicHeal(caster, spell->m_spellInfo, spell->unitTarget);
+        if (fieldMedic)
+        {
+            spell->m_healing += spell->m_damage;
+            spell->m_damage = 0;
+        }
+
         // Spells with this flag cannot trigger if effect is cast on self
-        bool const canEffectTrigger = !spell->m_spellInfo->HasAttribute(SPELL_ATTR3_CANT_TRIGGER_PROC) && spell->unitTarget->CanProc() &&
+        bool const canEffectTrigger = !fieldMedic && !spell->m_spellInfo->HasAttribute(SPELL_ATTR3_CANT_TRIGGER_PROC) && spell->unitTarget->CanProc() &&
             (spell->CanExecuteTriggersOnHit(EffectMask) || MissCondition == SPELL_MISS_IMMUNE || MissCondition == SPELL_MISS_IMMUNE2);
 
         // Trigger info was not filled in Spell::prepareDataForTriggerSystem - we do it now
@@ -3940,6 +3974,10 @@ void Spell::_cast(bool skipCheck)
     // misses and full resists are turned into hits now.
     if (Unit* unitCaster = m_caster->ToUnit())
     {
+        // Class boons hung off a chosen cast (Aegis: Divine Shield).
+        if (!IsTriggered())
+            VioletHoldClassBoons::OnSpellCast(unitCaster, m_spellInfo);
+
         if (VioletHoldBoons::OnSpellCast(unitCaster, m_spellInfo, IsTriggered(), m_triggeredByAuraSpell != nullptr))
         {
             m_violetHoldEmpowered = true;
@@ -6003,7 +6041,9 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             if (m_spellInfo->ExcludeCasterAuraSpell && unitCaster->HasAura(sSpellMgr->GetSpellIdForDifficulty(m_spellInfo->ExcludeCasterAuraSpell, unitCaster)))
                 return SPELL_FAILED_CASTER_AURASTATE;
 
-            if (reqCombat && unitCaster->IsInCombat() && !m_spellInfo->CanBeUsedInCombat())
+            // (Violet Hold Second Coming: the charged Resurrection is allowed.)
+            if (reqCombat && unitCaster->IsInCombat() && !m_spellInfo->CanBeUsedInCombat()
+                && !VioletHoldClassBoons::IsSecondComingResurrection(unitCaster, m_spellInfo))
                 return SPELL_FAILED_AFFECTING_COMBAT;
         }
 

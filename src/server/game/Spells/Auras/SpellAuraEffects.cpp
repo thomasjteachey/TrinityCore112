@@ -1932,6 +1932,11 @@ void AuraEffect::HandleAuraModShapeshift(AuraApplication const* aurApp, uint8 mo
             {
                 // Remove movement impairing effects also when shifting out
                 target->RemoveAurasByShapeShift();
+
+                // Violet Hold Wildcaller: back in caster form (a living
+                // druid choosing it - not a form lost to death).
+                if (target->IsAlive() && aurApp->GetRemoveMode() == AURA_REMOVE_BY_CANCEL)
+                    VioletHoldClassBoons::OnCasterForm(target);
             }
         }
 

@@ -36,6 +36,7 @@
 #include "SpellMgr.h"
 #include "Vehicle.h"
 #include "VioletHoldBoons.h"
+#include "VioletHoldClassBoons.h"
 
 uint32 GetTargetFlagMask(SpellTargetObjectTypes objType)
 {
@@ -1998,6 +1999,9 @@ SpellCastResult SpellInfo::CheckExplicitTarget(WorldObject const* caster, WorldO
             if (neededTargets & TARGET_FLAG_UNIT_ENEMY)
                 if (caster->IsValidAttackTarget(unitTarget, this))
                     return SPELL_CAST_OK;
+            // Violet Hold Field Medic: the holder's shots may be aimed at an ally.
+            if ((neededTargets & TARGET_FLAG_UNIT_ENEMY) && VioletHoldClassBoons::IsFieldMedicHeal(caster, this, unitTarget))
+                return SPELL_CAST_OK;
             if ((neededTargets & TARGET_FLAG_UNIT_ALLY)
                 || ((neededTargets & TARGET_FLAG_UNIT_PARTY) && unitCaster && unitCaster->IsInPartyWith(unitTarget))
                 || ((neededTargets & TARGET_FLAG_UNIT_RAID) && unitCaster && unitCaster->IsInRaidWith(unitTarget)))
@@ -3652,6 +3656,10 @@ int32 SpellInfo::CalcPowerCost(WorldObject const* caster, SpellSchoolMask school
 
     // PCT mod from user auras by school
     powerCost = int32(powerCost * (1.0f + unitCaster->GetFloatValue(UNIT_FIELD_POWER_COST_MULTIPLIER + AsUnderlyingType(school))));
+
+    // Violet Hold Wildcaller's caster-form rally: mana spells only.
+    if (PowerType == POWER_MANA)
+        powerCost = VioletHoldClassBoons::ModManaCost(unitCaster, powerCost);
 
     if (powerCost < 0)
         powerCost = 0;

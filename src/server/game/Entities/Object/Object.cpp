@@ -2722,6 +2722,10 @@ void WorldObject::ModSpellCastTime(SpellInfo const* spellInfo, int32& castTime, 
         if (int32 boonMs = VioletHoldBoons::GetMountCastTimeReductionMs(unitCaster))
             castTime = std::max(castTime - boonMs, 0);
 
+    // Violet Hold Second Coming: the charged Resurrection is instant.
+    if (castTime > 0 && VioletHoldClassBoons::IsSecondComingResurrection(unitCaster, spellInfo))
+        castTime = 0;
+
     // Moonkitty 5pc, macro casts only: see the header. Returns 0 when the
     // stacking aura already covers this cast, so the two cannot both apply.
     if (castTime > 0 && spell)

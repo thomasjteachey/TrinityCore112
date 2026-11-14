@@ -304,8 +304,11 @@ void OnStripped(Player* player)
     if (Holds(player, SPELL_TOTEM_LORD) && player->IsInWorld())
         player->UnsummonAllTotems();
 
-    // Serenity's charge is not a boon aura of its own; it goes with the boon.
+    // Serenity's and Second Coming's charges are not boon auras of their own;
+    // they go with the boon.
     player->RemoveAurasDueToSpell(SPELL_SERENITY_READY);
+    player->RemoveAurasDueToSpell(SPELL_SECOND_COMING_READY);
+    player->RemoveAurasDueToSpell(SPELL_PLAGUE_BURDEN);
 }
 
 // ---- warrior -----------------------------------------------------------------
@@ -428,6 +431,47 @@ bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo)
     return spellInfo && spellInfo->Id == 75 && Holds(caster, SPELL_POINT_BLANK);
 }
 
+bool ShootsAllies(WorldObject const* caster, SpellInfo const* spellInfo)
+{
+    if (!caster || !spellInfo || spellInfo->SpellFamilyName != SPELLFAMILY_HUNTER
+        || spellInfo->DmgClass != SPELL_DAMAGE_CLASS_RANGED)
+        return false;
+
+    // A shot that only hurts: nothing it does but the hit may land on a
+    // friend (no stings, dazes, scatters or Tranquilizing Shot on an ally).
+    bool hits = false;
+    for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+    {
+        switch (effect.Effect)
+        {
+            case SPELL_EFFECT_NONE:
+                break;
+            case SPELL_EFFECT_SCHOOL_DAMAGE:
+            case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+            case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+            case SPELL_EFFECT_WEAPON_DAMAGE:
+            case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+                hits = true;
+                break;
+            default:
+                return false;
+        }
+    }
+    if (!hits)
+        return false;
+
+    Unit const* hunter = caster->ToUnit();
+    return hunter && hunter->GetClass() == CLASS_HUNTER && Holds(hunter, SPELL_FIELD_MEDIC);
+}
+
+bool IsFieldMedicHeal(WorldObject const* caster, SpellInfo const* spellInfo, Unit const* target)
+{
+    if (!target || !ShootsAllies(caster, spellInfo))
+        return false;
+    // An enemy (a duel partner included) is still shot.
+    return !caster->IsValidAttackTarget(target, spellInfo) && caster->IsValidAssistTarget(target);
+}
+
 bool HoldsThroughDamage(Aura const* aura)
 {
     // Freezing Trap Effect, every rank. The trap casts it for its owner, so
@@ -477,6 +521,42 @@ bool FearHoldsThroughDamage(Unit const* caster, SpellInfo const* fear)
 }
 
 // ---- mage --------------------------------------------------------------------
+
+void FreeFromStunAndRoot(Unit* unit)
+{
+    if (!unit)
+        return;
+    unit->RemoveAurasWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_ROOT), AURA_REMOVE_BY_DEFAULT, 0);
+    unit->RemoveAurasByType(SPELL_AURA_MOD_STUN, ObjectGuid::Empty, nullptr, true, false);
+    unit->RemoveAurasByType(SPELL_AURA_MOD_ROOT, ObjectGuid::Empty, nullptr, true, false);
+}
+
+std::vector<ObjectGuid> SlipstreamPassengers(Unit* mage)
+{
+    std::vector<ObjectGuid> out;
+    if (!mage || mage->GetClass() != CLASS_MAGE || !Holds(mage, SPELL_SLIPSTREAM))
+        return out;
+    for (Player* ally : AlliesOf(mage))
+        if (ally != mage && ally->IsAlive() && !ally->IsInFlight() && !ally->GetVehicle()
+            && ally->IsWithinDistInMap(mage, SLIPSTREAM_RADIUS))
+            out.push_back(ally->GetGUID());
+    return out;
+}
+
+void SlipstreamArrive(Unit* mage, std::vector<ObjectGuid> const& passengers)
+{
+    if (!mage || !mage->IsInWorld())
+        return;
+    FreeFromStunAndRoot(mage);
+    for (ObjectGuid guid : passengers)
+    {
+        Player* ally = ObjectAccessor::GetPlayer(*mage, guid);
+        if (!ally || !ally->IsInWorld() || !ally->IsAlive() || !ally->IsInMap(mage) || ally->IsBeingTeleported())
+            continue;
+        FreeFromStunAndRoot(ally);
+        ally->NearTeleportTo(mage->GetPositionX(), mage->GetPositionY(), mage->GetPositionZ(), ally->GetOrientation());
+    }
+}
 
 uint32 GetSingleTargetLimit(Unit const* caster, SpellInfo const* spellInfo)
 {
@@ -537,10 +617,15 @@ bool IsUndispellable(Aura const* aura, Unit const* auraTarget)
     return caster && caster->GetClass() == CLASS_WARLOCK && Holds(caster, SPELL_INDELIBLE);
 }
 
-void OnUnitDying(Unit* victim)
+void OnUnitDying(Unit* victim, Unit* attacker)
 {
     if (!victim || !victim->IsInWorld())
         return;
+
+    // Vengeance: every kill while berserk heals the warrior (a pet's kill counts).
+    if (Unit* killer = attacker ? attacker->GetCharmerOrOwnerOrSelf() : nullptr)
+        if (killer != victim && killer->IsAlive() && killer->HasAura(SPELL_VENGEANCE_FURY))
+            killer->ModifyHealth(int32(killer->CountPctFromMaxHealth(VENGEANCE_KILL_HEAL_PCT)));
 
     JumpDamageOverTime(victim);
 
@@ -556,9 +641,41 @@ bool ShiftsThroughControl(Unit const* caster, SpellInfo const* spellInfo)
         && Holds(caster, SPELL_UNTAMED);
 }
 
+namespace
+{
+// Wildcaller: `buff` on the druid and every ally within WILDCALLER_RANGE.
+void RallyParty(Unit* druid, uint32 buff)
+{
+    if (!druid->IsAlive() || !druid->IsInWorld())
+        return;
+    for (Player* ally : AlliesOf(druid))
+        if (ally->IsAlive() && (ally == druid || ally->IsWithinDistInMap(druid, WILDCALLER_RANGE)))
+            druid->AddAura(buff, ally);
+}
+}
+
 void OnShapeshift(Unit* target, SpellInfo const* form)
 {
-    if (!target || !form || form->SpellFamilyName != SPELLFAMILY_DRUID || !Holds(target, SPELL_UNTAMED))
+    if (!target || !form || form->SpellFamilyName != SPELLFAMILY_DRUID)
+        return;
+
+    if (target->GetClass() == CLASS_DRUID && Holds(target, SPELL_WILDCALLER))
+    {
+        int32 shape = -1;
+        for (SpellEffectInfo const& effect : form->GetEffects())
+            if (effect.ApplyAuraName == SPELL_AURA_MOD_SHAPESHIFT)
+                shape = effect.MiscValue;
+        switch (shape)
+        {
+            case FORM_CAT:      RallyParty(target, SPELL_WILDCALLER_CAT); break;
+            case FORM_BEAR:
+            case FORM_DIREBEAR: RallyParty(target, SPELL_WILDCALLER_BEAR); break;
+            case FORM_MOONKIN:  RallyParty(target, SPELL_OWL_CHOIR); break;
+            default: break;
+        }
+    }
+
+    if (!Holds(target, SPELL_UNTAMED))
         return;
 
     // Stunned, feared or polymorphed (Polymorph is a confuse aura): the shift
@@ -566,6 +683,19 @@ void OnShapeshift(Unit* target, SpellInfo const* form)
     target->RemoveAurasByType(SPELL_AURA_MOD_STUN, ObjectGuid::Empty, nullptr, true, false);
     target->RemoveAurasByType(SPELL_AURA_MOD_FEAR, ObjectGuid::Empty, nullptr, true, false);
     target->RemoveAurasByType(SPELL_AURA_MOD_CONFUSE, ObjectGuid::Empty, nullptr, true, false);
+}
+
+void OnCasterForm(Unit* target)
+{
+    if (target && target->GetClass() == CLASS_DRUID && Holds(target, SPELL_WILDCALLER))
+        RallyParty(target, SPELL_WILDCALLER_CLARITY);
+}
+
+int32 ModManaCost(Unit const* caster, int32 cost)
+{
+    if (cost <= 0 || !caster || !caster->HasAura(SPELL_WILDCALLER_CLARITY))
+        return cost;
+    return cost - int32(CalculatePct(cost, WILDCALLER_MANA_CUT_PCT));
 }
 
 void OnManaChange(Unit* unit, int32 before, int32 after)
@@ -600,10 +730,214 @@ void OnManaChange(Unit* unit, int32 before, int32 after)
 
 void OnWaveRestored(Player* player)
 {
-    if (!player || player->GetClass() != CLASS_DRUID || !Holds(player, SPELL_SERENITY))
+    if (!player)
         return;
-    if (!player->HasAura(SPELL_SERENITY_READY))
+    if (player->GetClass() == CLASS_DRUID && Holds(player, SPELL_SERENITY) && !player->HasAura(SPELL_SERENITY_READY))
         player->CastSpell(player, SPELL_SERENITY_READY, TRIGGERED_FULL_MASK);
+    if (player->GetClass() == CLASS_PRIEST && Holds(player, SPELL_SECOND_COMING) && !player->HasAura(SPELL_SECOND_COMING_READY))
+        player->CastSpell(player, SPELL_SECOND_COMING_READY, TRIGGERED_FULL_MASK);
+}
+
+bool IsSecondComingResurrection(Unit const* caster, SpellInfo const* spellInfo)
+{
+    return spellInfo && caster && spellInfo->SpellFamilyName == SPELLFAMILY_PRIEST
+        && spellInfo->HasEffect(SPELL_EFFECT_RESURRECT_NEW) && caster->HasAura(SPELL_SECOND_COMING_READY);
+}
+
+// ---- the rest of the second block -------------------------------------------
+
+namespace
+{
+// Vengeance's crowd-control immunity (the fury's aura 147 carries the same
+// mask); what is already on the warrior is broken too.
+constexpr uint32 VENGEANCE_CC_MASK =
+      (1 << MECHANIC_CHARM) | (1 << MECHANIC_DISORIENTED) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_ROOT)
+    | (1 << MECHANIC_SILENCE) | (1 << MECHANIC_SLEEP) | (1 << MECHANIC_SNARE) | (1 << MECHANIC_STUN)
+    | (1 << MECHANIC_FREEZE) | (1 << MECHANIC_KNOCKOUT) | (1 << MECHANIC_POLYMORPH) | (1 << MECHANIC_BANISH)
+    | (1 << MECHANIC_SHACKLE) | (1 << MECHANIC_HORROR) | (1 << MECHANIC_DAZE) | (1 << MECHANIC_SAPPED);
+
+// A harmful effect Plaguebearer can take or counts: cast on `bearer` by an
+// enemy, timed, not passive and not one that outlives death.
+bool IsCarriedHarm(Aura const* aura, Unit const* bearer)
+{
+    SpellInfo const* info = aura->GetSpellInfo();
+    if (aura->IsPassive() || info->IsPositive() || info->IsDeathPersistent() || aura->GetDuration() <= 0)
+        return false;
+    if (aura->GetCasterGUID() == bearer->GetGUID())
+        return false;
+    Unit const* caster = aura->GetCaster();
+    return caster && caster->IsHostileTo(bearer);
+}
+
+void SyncPlagueBurden(Player* lock)
+{
+    uint32 carried = 0;
+    for (auto const& [spellId, aurApp] : lock->GetAppliedAuras())
+        if (IsCarriedHarm(aurApp->GetBase(), lock))
+            ++carried;
+    carried = std::min<uint32>(carried, PLAGUEBEARER_MAX_STACKS);
+
+    Aura* burden = lock->GetAura(SPELL_PLAGUE_BURDEN);
+    if (!carried)
+    {
+        if (burden)
+            burden->Remove();
+        return;
+    }
+    if (!burden)
+        burden = lock->AddAura(SPELL_PLAGUE_BURDEN, lock);
+    if (burden && burden->GetStackAmount() != carried)
+        burden->SetStackAmount(uint8(carried));
+}
+
+// One harmful effect off the nearest-listed ally onto the warlock, with the
+// time it had left. Its caster must still be there to put it back on.
+void PullOnePlague(Player* lock)
+{
+    for (Player* ally : AlliesOf(lock))
+    {
+        if (ally == lock || !ally->IsAlive() || !ally->IsWithinDistInMap(lock, PLAGUEBEARER_RADIUS))
+            continue;
+
+        Aura* taken = nullptr;
+        for (auto const& [spellId, aurApp] : ally->GetAppliedAuras())
+            if (IsCarriedHarm(aurApp->GetBase(), ally) && aurApp->GetBase()->GetCaster()->IsInMap(lock))
+            {
+                taken = aurApp->GetBase();
+                break;
+            }
+        if (!taken)
+            continue;
+
+        Unit* caster = taken->GetCaster();
+        SpellInfo const* info = taken->GetSpellInfo();
+        int32 const left = taken->GetDuration();
+        uint8 const stacks = taken->GetStackAmount();
+        uint8 const effMask = taken->GetEffectMask();
+        if (Aura* moved = caster->AddAura(info, effMask, lock))
+        {
+            if (left > 0 && left < moved->GetMaxDuration())
+            {
+                moved->SetMaxDuration(left);
+                moved->SetDuration(left);
+            }
+            if (stacks > 1)
+                moved->SetStackAmount(stacks);
+            ally->RemoveAura(taken);
+        }
+        return;
+    }
+}
+
+void EvenOutHealth(Player* shaman)
+{
+    std::vector<Player*> linked;
+    for (Player* ally : AlliesOf(shaman))
+        if (ally->IsAlive() && (ally == shaman || ally->IsWithinDistInMap(shaman, SPIRIT_LINK_RADIUS)))
+            linked.push_back(ally);
+    if (linked.size() < 2)
+        return;
+
+    uint64 health = 0, maxHealth = 0;
+    for (Player* member : linked)
+    {
+        health += member->GetHealth();
+        maxHealth += member->GetMaxHealth();
+    }
+    if (!maxHealth)
+        return;
+    double const share = double(health) / double(maxHealth);
+    for (Player* member : linked)
+        member->SetHealth(std::max<uint32>(1, uint32(member->GetMaxHealth() * share)));
+}
+}
+
+void OnSpellCast(Unit* caster, SpellInfo const* spellInfo)
+{
+    if (!caster || !Is(spellInfo, SPELLFAMILY_PALADIN, "Divine Shield") || !Holds(caster, SPELL_AEGIS))
+        return;
+    for (Player* ally : AlliesOf(caster))
+        if (ally != caster && ally->IsAlive() && ally->IsWithinDistInMap(caster, AEGIS_RADIUS))
+            caster->AddAura(SPELL_AEGIS_SHIELD, ally);
+}
+
+void OnAllyDied(Player* dead)
+{
+    if (!dead)
+        return;
+    for (Player* warrior : AlliesOf(dead))
+    {
+        if (warrior == dead || warrior->GetClass() != CLASS_WARRIOR || !warrior->IsAlive()
+            || !Holds(warrior, SPELL_VENGEANCE))
+            continue;
+        warrior->RemoveAurasWithMechanic(VENGEANCE_CC_MASK, AURA_REMOVE_BY_DEFAULT, 0);
+        warrior->CastSpell(warrior, SPELL_VENGEANCE_FURY, TRIGGERED_FULL_MASK);
+    }
+}
+
+void OnAllyDamaged(Unit* victim, uint32 damage)
+{
+    // Every hit on the server passes here: the cheap tests first.
+    if (!damage || !victim || victim->GetTypeId() != TYPEID_PLAYER || !victim->IsAlive())
+        return;
+    uint32 const health = victim->GetHealth();
+    uint32 const threshold = uint32(victim->CountPctFromMaxHealth(BODY_DOUBLE_HEALTH_PCT));
+    if (damage >= health || health <= threshold || health - damage > threshold)
+        return;
+    Player* ally = victim->ToPlayer();
+    Battleground* bg = ally->GetBattleground();
+    if (!bg || bg->GetTypeID() != BATTLEGROUND_VHR)
+        return;
+
+    for (Player* rogue : AlliesOf(ally))
+    {
+        if (rogue == ally || rogue->GetClass() != CLASS_ROGUE || !rogue->IsAlive() || !Holds(rogue, SPELL_BODY_DOUBLE)
+            || !rogue->IsWithinDistInMap(ally, BODY_DOUBLE_RANGE) || rogue->GetSpellHistory()->HasCooldown(SPELL_BODY_DOUBLE))
+            continue;
+
+        rogue->GetSpellHistory()->AddCooldown(SPELL_BODY_DOUBLE, 0, std::chrono::milliseconds(BODY_DOUBLE_COOLDOWN_MS));
+        // After the hit that called it has landed: nothing moves in the
+        // middle of the damage pass.
+        ObjectGuid const allyGuid = ally->GetGUID();
+        rogue->m_Events.AddEventAtOffset([rogue, allyGuid]()
+        {
+            Player* saved = ObjectAccessor::GetPlayer(*rogue, allyGuid);
+            if (!saved || !saved->IsAlive() || !rogue->IsAlive() || !saved->IsInMap(rogue)
+                || saved->IsBeingTeleported() || rogue->IsBeingTeleported())
+                return;
+            Position const roguePos = rogue->GetPosition();
+            Position const allyPos = saved->GetPosition();
+            rogue->NearTeleportTo(allyPos.GetPositionX(), allyPos.GetPositionY(), allyPos.GetPositionZ(), rogue->GetOrientation());
+            saved->NearTeleportTo(roguePos.GetPositionX(), roguePos.GetPositionY(), roguePos.GetPositionZ(), saved->GetOrientation());
+            rogue->AddAura(SPELL_BODY_DOUBLE_VEIL, saved);
+            rogue->CastSpell(rogue, SPELL_ROGUE_EVASION, TRIGGERED_FULL_MASK);
+        }, std::chrono::milliseconds(1));
+        return;
+    }
+}
+
+void UpdateRun(BattlegroundVHR* run, uint32 tick)
+{
+    if (!run)
+        return;
+    for (auto const& [guid, bgPlayer] : run->GetPlayers())
+    {
+        if (bgPlayer.Team != run->GetHumanTeam())
+            continue;
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player || !player->IsInWorld())
+            continue;
+
+        if (player->GetClass() == CLASS_WARLOCK && Holds(player, SPELL_PLAGUEBEARER))
+        {
+            if (player->IsAlive() && tick % 3 == 0)
+                PullOnePlague(player);
+            SyncPlagueBurden(player);
+        }
+
+        if (tick % 2 == 0 && player->GetClass() == CLASS_SHAMAN && player->IsAlive() && Holds(player, SPELL_SPIRIT_LINK))
+            EvenOutHealth(player);
+    }
 }
 
 // ---- shaman ------------------------------------------------------------------

@@ -174,6 +174,18 @@ namespace VioletHoldBoons
         Atonement,      // healers: once per wave, the 5th heal makes the next damaging spell x10, unmissable
         Gale,           // casters (no paladins): damaging spells have a 15% chance to throw the target up
 
+        // A fourth class boon per class, the second artifact block (2026-11-14
+        // onward). Keep contiguous: IsArtifact checks this range too.
+        FieldMedic,     // hunter: every shot (Auto Shot too) can target an ally and heals them
+        Slipstream,     // mage: Blink takes every ally within 10 yd along, freed of stuns and roots
+        SecondComing,   // priest: once per wave Resurrection is instant, works in combat, full health
+        Aegis,          // paladin: Divine Shield also shields every ally within 10 yd for 4 sec
+        Vengeance,      // warrior: an ally dying within 30 yd sends you berserk for 12 sec
+        BodyDouble,     // rogue: swap places with an ally falling below 25%; they vanish, untouchable, 6 sec
+        Plaguebearer,   // warlock: pull your allies' harmful effects onto yourself, +10% damage each
+        Wildcaller,     // druid: each form you shift into gives the party its own buff
+        SpiritLink,     // shaman: every 2 sec the health of allies near you is evened out
+
         Max
     };
 
@@ -331,6 +343,23 @@ namespace VioletHoldBoons
         SPELL_BOON_ATONEMENT     = 94379,
         SPELL_ATONEMENT_EMPOWERED = 94380,
         SPELL_BOON_GALE          = 94381,
+
+        // The second artifact block's record auras (Communion's shape). Their
+        // ids are not contiguous with the first block; the hooks name them
+        // (VioletHoldClassBoons). The client half of Field Medic is the
+        // client-tweaks DLL (clientedits rulerelax.cpp, rule `fieldmedic`).
+        SPELL_BOON_FIELD_MEDIC   = 94383,
+        SPELL_BOON_SLIPSTREAM    = 94384,
+        SPELL_BOON_SECOND_COMING = 94385,   // 94386 is its once-per-wave charge (not a boon aura)
+        // The rest of the second block. The even ids between them (94388,
+        // 94390, ...) and 94396-94399 are what they put on people, not boon
+        // auras - see VioletHoldClassBoons.h.
+        SPELL_BOON_AEGIS         = 94387,
+        SPELL_BOON_VENGEANCE     = 94389,
+        SPELL_BOON_BODY_DOUBLE   = 94391,
+        SPELL_BOON_PLAGUEBEARER  = 94393,
+        SPELL_BOON_WILDCALLER    = 94395,
+        SPELL_BOON_SPIRIT_LINK   = 94400,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -502,7 +531,8 @@ namespace VioletHoldBoons
     constexpr uint32 ROLL_QUARTERS_PER_WEIGHT = 4;
     constexpr uint32 VERY_RARE_ROLL_QUARTERS = 1;
 
-    // The artifact tier (class boons, Boon::Juggernaut .. Boon::Ancestors).
+    // The artifact tier (class boons, Boon::Juggernaut .. Boon::Ancestors,
+    // and the second block from Boon::FieldMedic).
     // Every legendary weapon rolls at weight 2 = 8 quarters; an artifact rolls
     // at 6, three quarters of a legendary's odds. Their kBoons weight column
     // is ignored. Shown on the top (tier 6) card frame.

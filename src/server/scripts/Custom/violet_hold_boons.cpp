@@ -32,6 +32,7 @@
 #include "StringFormat.h"
 #include "Util.h"
 #include "VioletHoldBoons.h"
+#include "VioletHoldClassBoons.h"
 #include "WorldSession.h"
 #include "WrappedSpells.h"
 
@@ -1363,6 +1364,8 @@ public:
     {
         if (damage)
             NoteHit(attacker, victim);
+        // Boon of the Body Double: a party member about to drop below 25%.
+        VioletHoldClassBoons::OnAllyDamaged(victim, damage);
     }
 };
 

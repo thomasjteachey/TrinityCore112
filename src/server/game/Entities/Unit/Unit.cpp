@@ -13405,7 +13405,7 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
 
     // Violet Hold Contagion (DoTs jump) and Eternal Pact (the demon returns):
     // the victim's auras and owner are still there to read.
-    VioletHoldClassBoons::OnUnitDying(victim);
+    VioletHoldClassBoons::OnUnitDying(victim, attacker);
 
     // Spirit of Redemption
     // if talent known but not triggered

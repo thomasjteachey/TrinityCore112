@@ -36,9 +36,11 @@
 #define TRINITYCORE_VIOLET_HOLD_CLASS_BOONS_H
 
 #include "Define.h"
+#include "ObjectGuid.h"
 #include <vector>
 
 class Aura;
+class BattlegroundVHR;
 class Creature;
 class GameObject;
 class Player;
@@ -95,6 +97,27 @@ namespace VioletHoldClassBoons
         // all at once; the cast spends it. Given on taking the boon and as
         // every wave falls (OnWaveRestored).
         SPELL_SERENITY_READY    = 94382,
+
+        // The second artifact block (a fourth boon per class).
+        SPELL_FIELD_MEDIC       = 94383,   // hunter
+        SPELL_SLIPSTREAM        = 94384,   // mage
+        SPELL_SECOND_COMING     = 94385,   // priest record aura
+        SPELL_SECOND_COMING_READY = 94386, // its once-per-wave charge (OnWaveRestored)
+        SPELL_AEGIS             = 94387,   // paladin record
+        SPELL_AEGIS_SHIELD      = 94388,   // the allies' 4 sec bubble (Undying's immunities)
+        SPELL_VENGEANCE         = 94389,   // warrior record
+        SPELL_VENGEANCE_FURY    = 94390,   // 12 sec: +50% damage, crowd-control immunity
+        SPELL_BODY_DOUBLE       = 94391,   // rogue record; also the 30 sec cooldown's id
+        SPELL_BODY_DOUBLE_VEIL  = 94392,   // the ally's 6 sec: stealth + total immunity
+        SPELL_PLAGUEBEARER      = 94393,   // warlock record
+        SPELL_PLAGUE_BURDEN     = 94394,   // +10% damage per stack = per harmful effect carried
+        SPELL_WILDCALLER        = 94395,   // druid record
+        SPELL_WILDCALLER_CAT    = 94396,   // +15% damage done, 8 sec
+        SPELL_WILDCALLER_BEAR   = 94397,   // 15% less damage taken, 8 sec
+        SPELL_WILDCALLER_CLARITY = 94398,  // 25% cheaper mana costs, 8 sec (ModManaCost)
+        SPELL_OWL_CHOIR         = 94399,   // moonkin look + 50% Echoes, 8 sec (spell_vhr_boon_echoes)
+        SPELL_SPIRIT_LINK       = 94400,   // shaman record
+        SPELL_ROGUE_EVASION     = 5277,
 
         // Stock "Resurrection Impact Visual", the Ancestors' rising.
         SPELL_ANCESTORS_VISUAL  = 24171,
@@ -160,6 +183,19 @@ namespace VioletHoldClassBoons
     // Trapper: a holder's Freezing Trap does not break on damage
     // (Unit::RemoveAurasWithInterruptFlags, AURA_INTERRUPT_FLAG_TAKE_DAMAGE).
     TC_GAME_API bool HoldsThroughDamage(Aura const* aura);
+    // Field Medic: the holder's damaging shots (hunter family, ranged damage
+    // class, nothing but damage effects - Auto Shot, Arcane Shot, Multi-Shot,
+    // Aimed Shot...) may be aimed at an ally and heal what they would have hit
+    // for. ShootsAllies: this cast is such a shot from a holder.
+    // IsFieldMedicHeal: and `target` is an ally it heals (not attackable,
+    // assistable) - asked by SpellInfo::CheckExplicitTarget (target allowed),
+    // Spell::SelectExplicitTargets (no redirect), Spell::AddUnitTarget (no
+    // miss roll) and Spell::TargetInfo::DoDamageAndTriggers (damage -> heal,
+    // no procs). Multi-Shot's jumps go to the nearest units whatever side
+    // they are on (Spell::SelectImplicitChainTargets). The client half is the
+    // client-tweaks DLL rule `fieldmedic`.
+    TC_GAME_API bool ShootsAllies(WorldObject const* caster, SpellInfo const* spellInfo);
+    TC_GAME_API bool IsFieldMedicHeal(WorldObject const* caster, SpellInfo const* spellInfo, Unit const* target);
 
     // ---- rogue -------------------------------------------------------------
     // Assassin: Backstab from the front (Spell::CheckCast) and unavoidable
@@ -182,17 +218,67 @@ namespace VioletHoldClassBoons
     // aura on at once (Unit::_AddAura); 0 = no say, the caller's own limit.
     constexpr uint32 TRANSMUTATION_POLYMORPH_TARGETS = 3;
     TC_GAME_API uint32 GetSingleTargetLimit(Unit const* caster, SpellInfo const* spellInfo);
+    // Slipstream: the allies (players) within SLIPSTREAM_RADIUS of a holder
+    // about to Blink (spell_vhr_frostwalker's BeforeCast, which carries Blink
+    // for both boons) ...
+    constexpr float SLIPSTREAM_RADIUS = 15.0f;
+    TC_GAME_API std::vector<ObjectGuid> SlipstreamPassengers(Unit* mage);
+    // ... are put where the mage landed and freed of every stun and root
+    // (once the mage's own near teleport has gone through).
+    TC_GAME_API void SlipstreamArrive(Unit* mage, std::vector<ObjectGuid> const& passengers);
+    // Stun and root auras off `unit` (hostile ones), Slipstream's freeing.
+    TC_GAME_API void FreeFromStunAndRoot(Unit* unit);
     // Frostwalker: the Frost Nova rank this mage knows (0 if none).
     TC_GAME_API uint32 GetFrostNovaRank(Unit const* caster);
     // Spellbreaker: Spell::EffectInterruptCast, after something was interrupted.
     TC_GAME_API void OnSuccessfulInterrupt(Unit* caster, SpellInfo const* spellInfo);
+
+    // ---- priest (Second Coming) ---------------------------------------------
+    // While the charge is up, priest Resurrection (family 6, RESURRECT_NEW) is
+    // instant (WorldObject::ModSpellCastTime), castable in combat (Spell::
+    // CheckCast) and full health (spell_vhr_second_coming, which also spends
+    // the charge). The client half is the client-tweaks rule `secondcoming`.
+    TC_GAME_API bool IsSecondComingResurrection(Unit const* caster, SpellInfo const* spellInfo);
+
+    // ---- the rest of the second block (2026-11-14) -------------------------
+    constexpr float AEGIS_RADIUS            = 20.0f;
+    constexpr int32 VENGEANCE_KILL_HEAL_PCT = 10;
+    constexpr float BODY_DOUBLE_RANGE       = 30.0f;
+    constexpr uint32 BODY_DOUBLE_HEALTH_PCT = 25;
+    constexpr uint32 BODY_DOUBLE_COOLDOWN_MS = 30000;
+    constexpr float PLAGUEBEARER_RADIUS     = 20.0f;
+    constexpr uint8 PLAGUEBEARER_MAX_STACKS = 50;
+    constexpr float WILDCALLER_RANGE        = 40.0f;
+    constexpr uint32 WILDCALLER_MANA_CUT_PCT = 25;
+    constexpr float SPIRIT_LINK_RADIUS      = 20.0f;
+
+    // Spell::_cast, a cast the caster chose (not triggered): Aegis spreads
+    // Divine Shield's bubble.
+    TC_GAME_API void OnSpellCast(Unit* caster, SpellInfo const* spellInfo);
+    // BattlegroundVHR::HandleKillPlayer, a member of the party fell:
+    // every Vengeance holder in the run goes berserk, wherever they stand.
+    TC_GAME_API void OnAllyDied(Player* dead);
+    // The UnitScript damage hook, before `damage` lands on `victim`: a hit
+    // that takes a party member below BODY_DOUBLE_HEALTH_PCT (not a lethal
+    // one) calls a Body Double holder in.
+    TC_GAME_API void OnAllyDamaged(Unit* victim, uint32 damage);
+    // Once a second from BattlegroundVHR::PostUpdateImpl (`tick` counts up):
+    // Plaguebearer's burden every tick and its pull every 3rd, Spirit Link
+    // every 2nd.
+    TC_GAME_API void UpdateRun(BattlegroundVHR* run, uint32 tick);
+    // Wildcaller: the druid just came back to caster form
+    // (AuraEffect::HandleAuraModShapeshift, the last form gone).
+    TC_GAME_API void OnCasterForm(Unit* target);
+    // SpellInfo::CalcPowerCost, mana spells: Wildcaller's caster-form rally.
+    TC_GAME_API int32 ModManaCost(Unit const* caster, int32 cost);
 
     // ---- warlock -----------------------------------------------------------
     // Indelible: Aura::CalcDispelChance -> 0.
     TC_GAME_API bool IsUndispellable(Aura const* aura, Unit const* auraTarget);
     // Contagion and Eternal Pact: Unit::Kill, while the victim still has its
     // auras (any unit, not only in the Violet Hold - the holders only exist there).
-    TC_GAME_API void OnUnitDying(Unit* victim);
+    // Vengeance: a berserk killer (or its pet's owner) heals for the kill.
+    TC_GAME_API void OnUnitDying(Unit* victim, Unit* attacker);
 
     // ---- druid -------------------------------------------------------------
     // Untamed: a shapeshift ignores stun/fear/confuse on the server
