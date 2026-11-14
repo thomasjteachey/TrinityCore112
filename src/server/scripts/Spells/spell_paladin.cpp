@@ -1333,9 +1333,7 @@ class spell_pal_immunities : public SpellScript
             target = caster;
 
         // "Cannot be used within $61987d. of using Avenging Wrath."
-        // (Violet Hold Unbound Light: no Forbearance for or from a holder.)
-        if ((target->HasAura(SPELL_PALADIN_FORBEARANCE) || target->HasAura(SPELL_PALADIN_AVENGING_WRATH_MARKER))
-            && !VioletHoldClassBoons::IgnoresForbearance(caster, target))
+        if (target->HasAura(SPELL_PALADIN_FORBEARANCE) || target->HasAura(SPELL_PALADIN_AVENGING_WRATH_MARKER))
             return SPELL_FAILED_TARGET_AURASTATE;
 
         return SPELL_CAST_OK;
@@ -1345,9 +1343,6 @@ class spell_pal_immunities : public SpellScript
     {
         if (Unit* target = GetHitUnit())
         {
-            if (VioletHoldClassBoons::IgnoresForbearance(GetCaster(), target))
-                return;
-
             // Blizz seems to just apply aura without bothering to cast
             GetCaster()->AddAura(SPELL_PALADIN_FORBEARANCE, target);
             GetCaster()->AddAura(SPELL_PALADIN_AVENGING_WRATH_MARKER, target);
@@ -1605,9 +1600,11 @@ private:
         AuraEffect const* judgedSeal = nullptr;
         // Ret T1 8pc (Zealot's Persistence, 90133): every active seal fires
         // its judgement, not just the freshest. Collected here, cast after
-        // the iteration - casting inside would invalidate the list.
+        // the iteration - casting inside would invalidate the list. Violet
+        // Hold's Boon of the Sealkeeper does the same with every seal it
+        // lets the paladin keep up at once.
         std::vector<uint32> extraSealJudgements;
-        bool const judgeAllSeals = caster->HasAura(90133);
+        bool const judgeAllSeals = caster->HasAura(90133) || VioletHoldClassBoons::JudgesEverySeal(caster);
         Unit::AuraEffectList const& auras = caster->GetAuraEffectsByType(SPELL_AURA_DUMMY);
         for (Unit::AuraEffectList::const_iterator i = auras.begin(); i != auras.end(); ++i)
         {
@@ -1635,8 +1632,9 @@ private:
         {
             spellId2 = judgedSeal->GetAmount();
 
+            // (A Sealkeeper's seals cost nothing, so there is nothing to refund.)
             if (Aura* sanctifiedSeals = caster->GetAuraOfRankedSpell(SPELL_PALADIN_SANCTIFIED_SEALS))
-                if (sanctifiedSeals->GetSpellInfo())
+                if (sanctifiedSeals->GetSpellInfo() && !VioletHoldClassBoons::JudgesEverySeal(caster))
                     sealManaRefund = judgedSeal->GetSpellInfo()->ManaCost * 8 / 10;
         }
 
@@ -1653,8 +1651,9 @@ private:
             for (uint32 extra : extraSealJudgements)
                 caster->CastSpell(hitUnit, extra, true);
 
-            // Violet Hold Judgement Day: the same judgement on every enemy
-            // around the paladin, before the seal is spent below.
+            // Violet Hold Judgement Day: the same judgement - every seal's,
+            // for a Sealkeeper - on every enemy around the target, before the
+            // seals are spent below.
             std::vector<Unit*> splash;
             VioletHoldClassBoons::CollectJudgementSplash(caster, hitUnit, splash);
             for (Unit* enemy : splash)
@@ -1841,7 +1840,7 @@ class spell_pal_lay_on_hands : public SpellScript
     {
         Unit* caster = GetCaster();
         if (Unit* target = GetExplTargetUnit())
-            if (caster == target && !VioletHoldClassBoons::IgnoresForbearance(caster, target))
+            if (caster == target)
                 if (target->HasAura(SPELL_PALADIN_FORBEARANCE) || target->HasAura(SPELL_PALADIN_AVENGING_WRATH_MARKER) || target->HasAura(SPELL_PALADIN_IMMUNE_SHIELD_MARKER))
                     return SPELL_FAILED_TARGET_AURASTATE;
 
@@ -1851,7 +1850,7 @@ class spell_pal_lay_on_hands : public SpellScript
     void HandleScript()
     {
         Unit* caster = GetCaster();
-        if (caster == GetHitUnit() && !VioletHoldClassBoons::IgnoresForbearance(caster, caster))
+        if (caster == GetHitUnit())
         {
             caster->CastSpell(caster, SPELL_PALADIN_AVENGING_WRATH_MARKER, true);
             caster->CastSpell(caster, SPELL_PALADIN_IMMUNE_SHIELD_MARKER, true);

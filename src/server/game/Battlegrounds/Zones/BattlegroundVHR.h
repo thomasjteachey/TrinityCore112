@@ -318,6 +318,11 @@ enum BG_VHR_Constants
     //                           each nearby enemy's health, and knocked back
     //   Bright Reflection (green) a copy of the taker fights beside them
     //                           until the wave falls
+    //   Mana Surge (violet)     15 sec of spells that cost no mana and are
+    //                           instant (94372 -> its class's 94373-94378).
+    //                           Casters only: it is only in the roll while a
+    //                           caster spec is in the party
+    //                           (VioletHoldBoons::IsCasterSpec)
     // The runes outlive the gate window, so the last three can be held for
     // the fight. Speed is deliberately not in the roll, and neither is
     // Restoration: the party is put back to full as every wave falls.
@@ -325,6 +330,7 @@ enum BG_VHR_Constants
     BG_VHR_GO_GLACIAL_STASIS_BUFF    = 300501,
     BG_VHR_GO_VOLATILE_CORE_BUFF     = 300502,
     BG_VHR_GO_BRIGHT_REFLECTION_BUFF = 300503,
+    BG_VHR_GO_MANA_SURGE_BUFF        = 300504,
 
     // What a rune looks like while it waits for the wave (UpdateRuneDisplays):
     // grey, see-through copies of the rune models (tools/violet_hold/
@@ -612,6 +618,9 @@ public:
     // Once-per-wave class boons (VioletHoldClassBoons: Ancestors, Wellspring):
     // true the first time `guid` spends boon `boonSpellId` this wave.
     bool ClaimOncePerWave(uint32 boonSpellId, ObjectGuid guid) { return _oncePerWave[boonSpellId].insert(guid).second; }
+    // Per-wave tallies (Boon of Atonement's heals): adds one and returns the
+    // new count. Cleared with the once-per-wave claims.
+    uint32 CountPerWave(uint32 boonSpellId, ObjectGuid guid) { return ++_perWaveCounts[boonSpellId][guid]; }
     void ClaimRunUniqueBoon(uint8 boonIndex) { if (boonIndex < 64) _claimedRunUniqueBoons |= uint64(1) << boonIndex; }
     std::vector<VhrAllyRequest> const& GetPendingAllyRequests() const { return _allyRequests; }
     // Fellowship's own requests and allies only - the reflections are not its.
@@ -874,6 +883,7 @@ private:
     // Once-per-wave class boons (Ancestors, Wellspring): boon spell -> who
     // already spent it this wave. Cleared in CompleteWave.
     std::unordered_map<uint32, GuidSet> _oncePerWave;
+    std::unordered_map<uint32, std::unordered_map<ObjectGuid, uint32>> _perWaveCounts;
     // Boon of Focus Fire: victim -> party-side attacker -> game time (ms) of
     // the last hit. Cleared every wave.
     std::unordered_map<ObjectGuid, std::unordered_map<ObjectGuid, uint32>> _recentHits;

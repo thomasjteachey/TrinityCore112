@@ -62,6 +62,12 @@ constexpr uint32 MASK_CASTER = ClassBit(CLASS_PALADIN) | ClassBit(CLASS_PRIEST) 
                              | ClassBit(CLASS_MAGE) | ClassBit(CLASS_WARLOCK) | ClassBit(CLASS_DRUID);
 
 constexpr uint32 MASK_MANA   = MASK_CASTER | ClassBit(CLASS_HUNTER);
+
+// Classes with a heal of their own (Boon of Atonement: anyone with a heal may
+// take it; it only ROLLS for a healing spec - SuitsSpec).
+constexpr uint32 MASK_HEALS  = ClassBit(CLASS_PALADIN) | ClassBit(CLASS_PRIEST) | ClassBit(CLASS_SHAMAN) | ClassBit(CLASS_DRUID);
+// Boon of the Gale: the casters, paladins left out (owner, 2026-11-14).
+constexpr uint32 MASK_GALE   = MASK_CASTER & ~ClassBit(CLASS_PALADIN);
 constexpr uint32 MASK_RAGE   = ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_DRUID);
 constexpr uint32 MASK_ENERGY = ClassBit(CLASS_ROGUE) | ClassBit(CLASS_DRUID);
 
@@ -166,12 +172,12 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Juggernaut,    94340, 1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Juggernaut",    "Charge and Intercept stun every enemy within 8 yd of your target", "" },
     { Boon::Relentless,    94341, 1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Relentless",    "Overpower and Revenge are always usable - no dodge, block or parry needed", "" },
     { Boon::Warlord,       94342, 1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Warlord",       "Shield Wall, Recklessness and Retaliation no longer share a cooldown", "" },
-    { Boon::UnboundLight,  94343, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Unbound Light",     "Forbearance no longer exists for you", "" },
+    { Boon::Sealkeeper,    94343, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Sealkeeper",    "every seal can be up at once and Judgement judges all of them; your seals cost no mana, have 0.5 sec less global cooldown and last twice as long", "" },
     { Boon::RadiantHost,   94344, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Radiant Host",  "all of your Auras can be active at once", "" },
     { Boon::JudgementDay,  94345, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Judgement Day",     "Judgement also strikes every enemy within 20 yd of your target", "" },
-    { Boon::PointBlank,    94346, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of Point Blank",       "no dead zone: Auto Shot and your shots work in melee range", "" },
-    { Boon::Trapper,       94347, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Trapper",       "your traps no longer share a cooldown and can be laid in combat, and you can have one of each trap down", "" },
-    { Boon::Skirmisher,    94348, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Skirmisher",    "you can move while Auto Shot is firing", "" },
+    { Boon::PointBlank,    94346, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of Point Blank",       "no dead zone: Auto Shot and your shots work in melee range, and you can move while Auto Shot is firing", "" },
+    { Boon::Trapper,       94347, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Trapper",       "Freezing Trap no longer breaks on damage", "" },
+    { Boon::Barrage,       94348, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Barrage",       "your Multi-Shot hits any number of targets", "" },
     { Boon::Assassin,      94349, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Assassin",      "Backstab works from the front and is never dodged, parried or blocked; Sinister Strike also hits a second enemy; Hemorrhage gives 1 extra combo point", "" },
     { Boon::Unseen,        94350, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Unseen",        "damage and hostile effects no longer break your Stealth", "" },
     { Boon::Crippler,      94351, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Crippler",      "Kidney Shot lasts three times as long", "" },
@@ -180,16 +186,22 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Agony,         94354, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of Agony",             "Shadow Word: Pain deals all of its damage at once", "" },
     { Boon::Frostwalker,   94355, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Frostwalker",   "Blink casts Frost Nova where you leave and where you land", "" },
     { Boon::Spellbreaker,  94356, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Spellbreaker",  "a successful Counterspell clears every spell school lockout on you and your allies", "" },
-    { Boon::Transmutation, 94357, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of Transmutation",     "Polymorph is instant", "" },
+    { Boon::Transmutation, 94357, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of Transmutation",     "Polymorph is instant, and you can polymorph up to 3 targets at once", "" },
     { Boon::Contagion,     94358, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of Contagion",         "when a target dies, your damage over time effects on it jump to the nearest enemy", "" },
     { Boon::Indelible,     94359, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Indelible",     "your harmful effects cannot be dispelled", "" },
     { Boon::EternalPact,   94360, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Eternal Pact",  "your demon comes back at once when it dies - no cast, no Soul Shard (once every 20 sec)", "" },
     { Boon::Untamed,       94361, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Untamed",       "you can shapeshift while stunned, feared or polymorphed, and the shift breaks it", "" },
     { Boon::Wellspring,    94362, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Wellspring",    "falling below 50% mana gives you and your party a 5 sec Innervate (once per wave)", "" },
-    { Boon::Serenity,      94363, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Serenity",          "Tranquility heals its full amount at once, with no channel", "" },
+    { Boon::Serenity,      94363, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Serenity",          "once per wave, Tranquility costs no mana and heals its full amount at once, with no channel", "" },
     { Boon::Stormcaller,   94364, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Stormcaller",   "Purge removes every magic buff on the target", "" },
     { Boon::TotemLord,     94365, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Totem Lord",    "your totems slowly follow you, never expire and no longer share a slot by element", "" },
-    { Boon::Ancestors,     94366, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Ancestors",     "once per wave a killing blow Reincarnates you on the spot instead (no cooldown, no Ankh; Improved Reincarnation adds to it)", "" }
+    { Boon::Ancestors,     94366, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Ancestors",     "once per wave a killing blow Reincarnates you on the spot instead (no cooldown, no Ankh; Improved Reincarnation adds to it)", "" },
+
+    // By spec, not class (SuitsSpec): Atonement only rolls while a healing
+    // spec is in the party, though anyone with a heal may take it; the Gale
+    // rolls for a caster spec. Both unique.
+    { Boon::Atonement,     SPELL_BOON_ATONEMENT, 1, 1, MASK_HEALS, 3, "Boon of Atonement",  "once per wave, your fifth heal makes your next damaging spell deal 10 times damage - it cannot miss or be resisted (unique)", "" },
+    { Boon::Gale,          SPELL_BOON_GALE,      1, 1, MASK_GALE,  4, "Boon of the Gale",   "your damaging spells have a 15% chance to knock the target into the air (unique)", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -732,6 +744,8 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_HERALD
         || spellId == SPELL_BOON_PACK_LEADER
         || spellId == SPELL_BOON_UNDYING
+        || spellId == SPELL_BOON_ATONEMENT
+        || spellId == SPELL_BOON_GALE
         || (spellId >= SPELL_BOON_CLASS_FIRST && spellId <= SPELL_BOON_CLASS_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
@@ -1031,13 +1045,18 @@ bool SuitsSpec(Player const* player, Offer const& offer)
     if (offer.kind != Offer::Kind::Boon || offer.index >= uint8(Boon::Max))
         return true;
 
+    // Atonement rolls only for somebody actually specced to heal - not for a
+    // class that merely could, and not for anyone with no talents spent.
+    if (Boon(offer.index) == Boon::Atonement)
+        return GetSpecRole(player) == SPEC_HEALER;
+
     // The swing and spell halves: a Balance druid stops pulling Flurry, Haste,
     // Fury or Vigor into the pool and a Feral one stops pulling Echoes. Rage
     // and energy are the druid's cat and bear forms, so they go with melee.
     // Mana stays for everyone: a Feral druid still shifts on it.
     uint32 const mask = kBoons[offer.index].classMask;
     bool const meleeBoon = mask == MASK_MELEE || mask == MASK_SWING || mask == MASK_RAGE || mask == MASK_ENERGY;
-    if (!meleeBoon && mask != MASK_CASTER)
+    if (!meleeBoon && mask != MASK_CASTER && mask != MASK_GALE)
         return true;
 
     uint8 const role = GetSpecRole(player);
@@ -1441,6 +1460,7 @@ void StripAll(Player* player)
         player->RemoveAurasDueToSpell(id);
     player->RemoveAurasDueToSpell(SPELL_DIVINITY_SHIELD);
     player->RemoveAurasDueToSpell(SPELL_UNDYING_STATE);
+    player->RemoveAurasDueToSpell(SPELL_ATONEMENT_EMPOWERED);
     player->RemoveAurasDueToSpell(SPELL_KNOWLEDGE_MARKER);
     player->RemoveAurasDueToSpell(SPELL_CACHE_MARKER);
 
@@ -1700,6 +1720,8 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Herald:
         case Boon::PackLeader:
         case Boon::Undying:
+        case Boon::Atonement:
+        case Boon::Gale:
             return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:
             return Trinity::StringFormat("{}: +1 {}{}", info.name, info.summary, blocked);
@@ -2080,6 +2102,8 @@ void CopyBoonsTo(Player const* source, Player* target)
             // Its clock lives on the party's run, and TryUndying ignores
             // anyone who is not the party.
             case Boon::Undying:
+            // Counts heals on the party's run - nothing on a clone.
+            case Boon::Atonement:
                 return false;
             default:
                 // The class (artifact) boons never go onto a clone.
@@ -2377,5 +2401,109 @@ void UpdatePackLeader(BattlegroundVHR* run)
                 holder->AddAura(SPELL_PACK_LEADER_GUARD, ally);
         }
     }
+}
+
+// --- Spec boons and the Mana Surge rune (2026-11-14) -------------------------
+
+bool IsCasterSpec(Player const* player)
+{
+    if (!player)
+        return false;
+    switch (player->GetClass())
+    {
+        case CLASS_MAGE:
+        case CLASS_WARLOCK:
+        case CLASS_PRIEST:
+            return true;
+        case CLASS_PALADIN:
+        case CLASS_SHAMAN:
+        case CLASS_DRUID:
+            // Holy, Elemental, Restoration and Balance cast; Protection,
+            // Retribution, Enhancement and Feral do not.
+            return !(GetSpecRole(player) & (SPEC_MELEE | SPEC_TANK));
+        default:
+            return false;
+    }
+}
+
+namespace
+{
+// A class spell the caster chose to cast, or one half of such a spell (Holy
+// Shock, Penance) - never a proc, an item, a potion or the boons' own helpers.
+bool IsOwnClassCast(SpellInfo const* spellInfo, bool triggered, bool byAura)
+{
+    return spellInfo->SpellFamilyName != SPELLFAMILY_GENERIC && !(triggered && byAura) && !spellInfo->IsPassive();
+}
+
+// Direct damage only: Atonement's charge multiplies the hit, so a pure DoT
+// would spend it for nothing.
+bool IsDirectDamageSpell(SpellInfo const* spellInfo)
+{
+    if (spellInfo->IsPositive())
+        return false;
+    for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+    {
+        switch (effect.Effect)
+        {
+            case SPELL_EFFECT_SCHOOL_DAMAGE:
+            case SPELL_EFFECT_HEALTH_LEECH:
+            case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+            case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+            case SPELL_EFFECT_WEAPON_DAMAGE:
+            case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
+bool IsHealingSpell(SpellInfo const* spellInfo)
+{
+    return spellInfo->HasEffect(SPELL_EFFECT_HEAL) || spellInfo->HasEffect(SPELL_EFFECT_HEAL_PCT)
+        || spellInfo->HasAura(SPELL_AURA_PERIODIC_HEAL);
+}
+}
+
+bool OnSpellCast(Unit* caster, SpellInfo const* spellInfo, bool triggered, bool byAura)
+{
+    Player* player = caster ? caster->ToPlayer() : nullptr;
+    if (!player || !spellInfo || !player->HasAura(SPELL_BOON_ATONEMENT) || !IsOwnClassCast(spellInfo, triggered, byAura))
+        return false;
+
+    // The charge, spent by the next damaging spell.
+    if (IsDirectDamageSpell(spellInfo))
+    {
+        if (!player->HasAura(SPELL_ATONEMENT_EMPOWERED))
+            return false;
+        player->RemoveAurasDueToSpell(SPELL_ATONEMENT_EMPOWERED);
+        return true;
+    }
+
+    if (!IsHealingSpell(spellInfo))
+        return false;
+
+    // Heals count on the party's run, per wave; the fifth one charges it, and
+    // only once a wave.
+    BattlegroundVHR* run = GetRunOf(player);
+    if (!run || player->GetBGTeam() != run->GetHumanTeam())
+        return false;
+    if (run->CountPerWave(SPELL_BOON_ATONEMENT, player->GetGUID()) != ATONEMENT_HEALS)
+        return false;
+    if (run->ClaimOncePerWave(SPELL_BOON_ATONEMENT, player->GetGUID()))
+        player->CastSpell(player, SPELL_ATONEMENT_EMPOWERED, TRIGGERED_FULL_MASK);
+    return false;
+}
+
+void OnSpellDamageDealt(Unit* caster, Unit* victim, SpellInfo const* spellInfo, bool triggered, bool byAura)
+{
+    if (!caster || !victim || caster == victim || !spellInfo || !caster->HasAura(SPELL_BOON_GALE))
+        return;
+    if (!victim->IsAlive() || !victim->IsInWorld() || !IsOwnClassCast(spellInfo, triggered, byAura))
+        return;
+    if (!roll_chance_i(int(GALE_CHANCE_PCT)))
+        return;
+    victim->KnockbackFrom(caster->GetPositionX(), caster->GetPositionY(), GALE_SPEED_XY, GALE_SPEED_Z);
 }
 }

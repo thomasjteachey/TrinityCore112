@@ -12,15 +12,20 @@
  * callers stay cheap: one HasAura on the unit asking.
  *
  * What the client has to agree with, and how it is told:
- *  - Relentless, Trapper: the record aura carries ABILITY_IGNORE_AURASTATE
- *    (262) on Overpower/Revenge and (misc 1, combat) on the trap spells. The
- *    client honours 262 itself (Taste for Blood, Warbringer). Overpower also
- *    needs a combo point on the target client side, so the holder keeps one
- *    on whatever they have selected (RefreshReactives).
+ *  - Relentless: the record aura carries ABILITY_IGNORE_AURASTATE (262) on
+ *    Overpower/Revenge. The client honours 262 itself (Taste for Blood,
+ *    Warbringer). Overpower also needs a combo point on the target client
+ *    side, so the holder keeps one on whatever they have selected
+ *    (RefreshReactives).
  *  - Transmutation: the record aura is a -100% cast-time spellmod on Polymorph.
- *  - Warlord, Trapper: the cast's shared category cooldown is re-sent as a
- *    per-spell cooldown after SMSG_SPELL_GO (SpellHistory::
- *    SyncUnboundCategoryToClient, the T2 unbound-shock recipe).
+ *  - Sealkeeper (2026-11-14): the record aura IS three seal spellmods
+ *    (duration +100%, cost -100%, global cooldown -500 ms, paladin mask
+ *    0x0A000200 = every seal), so the client shows and times them itself.
+ *  - Barrage: the record aura is a +97 JUMP_TARGETS spellmod on Multi-Shot.
+ *  - Serenity's ready charge (94382) is a -100% cost spellmod on Tranquility.
+ *  - Warlord: the cast's shared category cooldown is re-sent as a per-spell
+ *    cooldown after SMSG_SPELL_GO (SpellHistory::SyncUnboundCategoryToClient,
+ *    the T2 unbound-shock recipe).
  *  - Spellbreaker: every cleared lockout is an SMSG_CLEAR_COOLDOWN.
  *  - NOT reachable without the client DLL (see the report): Point Blank's
  *    minimum range, the Untamed shapeshift while stunned/feared/polymorphed,
@@ -50,12 +55,12 @@ namespace VioletHoldClassBoons
         SPELL_JUGGERNAUT        = 94340,
         SPELL_RELENTLESS        = 94341,
         SPELL_WARLORD           = 94342,
-        SPELL_UNBOUND_LIGHT     = 94343,
+        SPELL_SEALKEEPER        = 94343,   // was Unbound Light (no Forbearance) until 2026-11-14
         SPELL_RADIANT_HOST      = 94344,
         SPELL_JUDGEMENT_DAY     = 94345,
         SPELL_POINT_BLANK       = 94346,
         SPELL_TRAPPER           = 94347,
-        SPELL_SKIRMISHER        = 94348,
+        SPELL_BARRAGE           = 94348,   // was Skirmisher until 2026-11-14 (folded into Point Blank)
         SPELL_ASSASSIN          = 94349,
         SPELL_UNSEEN            = 94350,
         SPELL_CRIPPLER          = 94351,
@@ -84,6 +89,12 @@ namespace VioletHoldClassBoons
         SPELL_AGONY_DAMAGE      = 94369,   // Shadow Word: Pain, all at once
         SPELL_SERENITY_HEAL     = 94370,   // Tranquility, all at once
         SPELL_WELLSPRING_MANA   = 94371,   // the 5 sec Innervate
+
+        // Serenity's once-per-wave charge: while it is up Tranquility costs
+        // nothing (its own -100% cost spellmod, so the client agrees) and lands
+        // all at once; the cast spends it. Given on taking the boon and as
+        // every wave falls (OnWaveRestored).
+        SPELL_SERENITY_READY    = 94382,
 
         // Stock "Resurrection Impact Visual", the Ancestors' rising.
         SPELL_ANCESTORS_VISUAL  = 24171,
@@ -123,32 +134,32 @@ namespace VioletHoldClassBoons
     TC_GAME_API void RefreshReactives(Unit* unit);
     // Relentless: Overpower needs no combo point on the server (Spell::CheckCast).
     TC_GAME_API bool IgnoresComboRequirement(Unit const* caster, SpellInfo const* spellInfo);
-    // Warlord / Trapper: this spell keeps its category cooldown to itself
-    // (every rank of the same spell shares it) - SpellHistory.
+    // Warlord: this spell keeps its category cooldown to itself (every rank of
+    // the same spell shares it) - SpellHistory.
     TC_GAME_API bool IsCategoryUnbound(Unit const* owner, SpellInfo const* spellInfo);
-    // Trapper: one of each trap down. Every trap-laying spell shares a summon
-    // slot, so a new trap would otherwise take the last one up whatever its
-    // kind; with the boon it replaces only the caster's earlier trap of the
-    // same kind (any rank) - Spell::EffectSummonObject.
-    TC_GAME_API bool KeepsOneOfEachTrap(Unit const* caster, SpellInfo const* spellInfo);
-    TC_GAME_API std::vector<GameObject*> SameKindTraps(Unit const* caster, SpellInfo const* spellInfo);
 
     // ---- paladin -----------------------------------------------------------
-    // Unbound Light: Forbearance (and its two markers) are not put on, and do
-    // not stop, a holder casting or being targeted (spell_paladin.cpp).
-    TC_GAME_API bool IgnoresForbearance(Unit const* caster, Unit const* target);
-    // Radiant Host: the caster's auras do not push each other off (Aura::CanStackWith).
+    // Radiant Host: the caster's Auras do not push each other off. Sealkeeper:
+    // nor do their seals, nor the judgements those seals leave on a target
+    // (Aura::CanStackWith).
     TC_GAME_API bool AurasStackFreely(Unit const* caster, SpellInfo const* a, SpellInfo const* b);
+    // Sealkeeper: Judgement judges every seal the paladin has up, not only the
+    // freshest (spell_paladin.cpp, Zealot's Persistence's path). Judgement Day
+    // then carries every one of them to each enemy it splashes.
+    TC_GAME_API bool JudgesEverySeal(Unit const* caster);
     // Judgement Day: every other enemy within JUDGEMENT_DAY_RADIUS of the judged
     // target, who is judged too (spell_paladin.cpp).
     TC_GAME_API void CollectJudgementSplash(Unit* caster, Unit* mainTarget, std::vector<Unit*>& out);
 
     // ---- hunter ------------------------------------------------------------
-    // Point Blank: no minimum range for the hunter's shots (Spell::GetMinMaxRange).
+    // Point Blank: no minimum range for the hunter's shots (Spell::GetMinMaxRange),
+    // and Auto Shot keeps firing on the move (Unit::_UpdateAutoRepeatSpell,
+    // Spell::CheckCast) - Skirmisher was folded into it 2026-11-14.
     TC_GAME_API bool IgnoresMinRange(Unit const* caster, SpellInfo const* spellInfo);
-    // Skirmisher: Auto Shot keeps firing on the move (Unit::_UpdateAutoRepeatSpell,
-    // Spell::CheckCast).
     TC_GAME_API bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo);
+    // Trapper: a holder's Freezing Trap does not break on damage
+    // (Unit::RemoveAurasWithInterruptFlags, AURA_INTERRUPT_FLAG_TAKE_DAMAGE).
+    TC_GAME_API bool HoldsThroughDamage(Aura const* aura);
 
     // ---- rogue -------------------------------------------------------------
     // Assassin: Backstab from the front (Spell::CheckCast) and unavoidable
@@ -167,6 +178,10 @@ namespace VioletHoldClassBoons
     TC_GAME_API bool FearHoldsThroughDamage(Unit const* caster, SpellInfo const* fear);
 
     // ---- mage --------------------------------------------------------------
+    // Transmutation: how many targets the caster may keep this single-target
+    // aura on at once (Unit::_AddAura); 0 = no say, the caller's own limit.
+    constexpr uint32 TRANSMUTATION_POLYMORPH_TARGETS = 3;
+    TC_GAME_API uint32 GetSingleTargetLimit(Unit const* caster, SpellInfo const* spellInfo);
     // Frostwalker: the Frost Nova rank this mage knows (0 if none).
     TC_GAME_API uint32 GetFrostNovaRank(Unit const* caster);
     // Spellbreaker: Spell::EffectInterruptCast, after something was interrupted.
@@ -186,6 +201,9 @@ namespace VioletHoldClassBoons
     TC_GAME_API void OnShapeshift(Unit* target, SpellInfo const* form);
     // Wellspring: Unit::ModifyPower, mana going from `before` to `after`.
     TC_GAME_API void OnManaChange(Unit* unit, int32 before, int32 after);
+    // Serenity: a wave just fell and `player` was put back on their feet
+    // (BattlegroundVHR::RestorePartyAfterWave) - the ready charge comes back.
+    TC_GAME_API void OnWaveRestored(Player* player);
 
     // ---- shaman ------------------------------------------------------------
     // Stormcaller: Purge's dispel count becomes "everything" (Spell::EffectDispel).

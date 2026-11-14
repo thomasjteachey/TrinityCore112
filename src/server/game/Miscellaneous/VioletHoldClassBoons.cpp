@@ -282,6 +282,9 @@ bool InAnySlot(Unit const* owner, ObjectGuid guid)
 void OnTaken(Player* player)
 {
     RefreshReactives(player);
+    // Serenity's first charge comes with the boon; each wave that falls
+    // brings the next (OnWaveRestored).
+    OnWaveRestored(player);
 }
 
 void OnStripped(Player* player)
@@ -300,6 +303,9 @@ void OnStripped(Player* player)
     // Day-long totems do not leave the Hold with their shaman.
     if (Holds(player, SPELL_TOTEM_LORD) && player->IsInWorld())
         player->UnsummonAllTotems();
+
+    // Serenity's charge is not a boon aura of its own; it goes with the boon.
+    player->RemoveAurasDueToSpell(SPELL_SERENITY_READY);
 }
 
 // ---- warrior -----------------------------------------------------------------
@@ -360,48 +366,44 @@ bool IsCategoryUnbound(Unit const* owner, SpellInfo const* spellInfo)
         case SPELLFAMILY_WARRIOR:
             // Shield Wall, Recklessness, Retaliation: category 132, 30 min.
             return spellInfo->GetCategory() == 132 && Holds(owner, SPELL_WARLORD);
-        case SPELLFAMILY_HUNTER:
-            // The trap-laying spells (family flag 0x80; the trap effects are not).
-            return (spellInfo->SpellFamilyFlags[0] & 0x80) && Holds(owner, SPELL_TRAPPER);
         default:
             return false;
     }
 }
 
-bool KeepsOneOfEachTrap(Unit const* caster, SpellInfo const* spellInfo)
-{
-    return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER
-        && (spellInfo->SpellFamilyFlags[0] & 0x80) && Holds(caster, SPELL_TRAPPER);
-}
-
-std::vector<GameObject*> SameKindTraps(Unit const* caster, SpellInfo const* spellInfo)
-{
-    std::vector<GameObject*> out;
-    if (!caster || !spellInfo)
-        return out;
-
-    // By name, not spell id: a lower rank laid earlier is still the same trap.
-    for (GameObject* go : caster->GetAllGameObjects())
-        if (go && SameSpell(sSpellMgr->GetSpellInfo(go->GetSpellId()), spellInfo))
-            out.push_back(go);
-    return out;
-}
-
 // ---- paladin -----------------------------------------------------------------
 
-bool IgnoresForbearance(Unit const* caster, Unit const* target)
+namespace
 {
-    return Holds(caster, SPELL_UNBOUND_LIGHT) || Holds(target, SPELL_UNBOUND_LIGHT);
+// Seal of Justice (20164) sits outside the seal family-flag collection, the
+// same exception spell_pal_judgement and Unit::IsTwistableSeal make.
+bool IsSeal(SpellInfo const* spellInfo)
+{
+    return spellInfo->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || spellInfo->Id == 20164;
+}
 }
 
 bool AurasStackFreely(Unit const* caster, SpellInfo const* a, SpellInfo const* b)
 {
-    if (!a || !b || a->GetSpellSpecific() != SPELL_SPECIFIC_AURA || b->GetSpellSpecific() != SPELL_SPECIFIC_AURA)
+    if (!a || !b)
         return false;
-    // Another rank of the same aura still replaces the old one.
+    // Another rank of the same spell still replaces the old one.
     if (SameSpell(a, b))
         return false;
-    return Holds(caster, SPELL_RADIANT_HOST);
+
+    SpellSpecificType const sa = a->GetSpellSpecific();
+    SpellSpecificType const sb = b->GetSpellSpecific();
+    if (sa == SPELL_SPECIFIC_AURA && sb == SPELL_SPECIFIC_AURA)
+        return Holds(caster, SPELL_RADIANT_HOST);
+    // Every seal at once, and every judgement they leave on one target.
+    if ((IsSeal(a) && IsSeal(b)) || (sa == SPELL_SPECIFIC_JUDGEMENT && sb == SPELL_SPECIFIC_JUDGEMENT))
+        return Holds(caster, SPELL_SEALKEEPER);
+    return false;
+}
+
+bool JudgesEverySeal(Unit const* caster)
+{
+    return caster && caster->GetClass() == CLASS_PALADIN && Holds(caster, SPELL_SEALKEEPER);
 }
 
 void CollectJudgementSplash(Unit* caster, Unit* mainTarget, std::vector<Unit*>& out)
@@ -423,7 +425,16 @@ bool IgnoresMinRange(Unit const* caster, SpellInfo const* spellInfo)
 bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo)
 {
     // Auto Shot only: wands and the hunter's other casts keep their rules.
-    return spellInfo && spellInfo->Id == 75 && Holds(caster, SPELL_SKIRMISHER);
+    return spellInfo && spellInfo->Id == 75 && Holds(caster, SPELL_POINT_BLANK);
+}
+
+bool HoldsThroughDamage(Aura const* aura)
+{
+    // Freezing Trap Effect, every rank. The trap casts it for its owner, so
+    // the aura's caster is the hunter.
+    if (!aura || !Is(aura->GetSpellInfo(), SPELLFAMILY_HUNTER, "Freezing Trap Effect"))
+        return false;
+    return Holds(aura->GetCaster(), SPELL_TRAPPER);
 }
 
 // ---- rogue -------------------------------------------------------------------
@@ -466,6 +477,14 @@ bool FearHoldsThroughDamage(Unit const* caster, SpellInfo const* fear)
 }
 
 // ---- mage --------------------------------------------------------------------
+
+uint32 GetSingleTargetLimit(Unit const* caster, SpellInfo const* spellInfo)
+{
+    if (spellInfo && spellInfo->GetSpellSpecific() == SPELL_SPECIFIC_MAGE_POLYMORPH
+        && caster && caster->GetClass() == CLASS_MAGE && Holds(caster, SPELL_TRANSMUTATION))
+        return TRANSMUTATION_POLYMORPH_TARGETS;
+    return 0;
+}
 
 uint32 GetFrostNovaRank(Unit const* caster)
 {
@@ -577,6 +596,14 @@ void OnManaChange(Unit* unit, int32 before, int32 after)
         args.AddSpellBP0(int32(perTick));
         player->CastSpell(ally, SPELL_WELLSPRING_MANA, args);
     }
+}
+
+void OnWaveRestored(Player* player)
+{
+    if (!player || player->GetClass() != CLASS_DRUID || !Holds(player, SPELL_SERENITY))
+        return;
+    if (!player->HasAura(SPELL_SERENITY_READY))
+        player->CastSpell(player, SPELL_SERENITY_READY, TRIGGERED_FULL_MASK);
 }
 
 // ---- shaman ------------------------------------------------------------------

@@ -4609,20 +4609,7 @@ void Spell::EffectSummonObject()
     uint32 go_id = effectInfo->MiscValue;
     uint8 slot = effectInfo->Effect - SPELL_EFFECT_SUMMON_OBJECT_SLOT1;
 
-    // Boon of the Trapper: one of each trap down. Only the caster's earlier
-    // trap of the same kind goes; one of another kind holding the slot stays
-    // up (still owned, it runs out or springs on its own).
-    if (VioletHoldClassBoons::KeepsOneOfEachTrap(unitCaster, m_spellInfo))
-    {
-        for (GameObject* obj : VioletHoldClassBoons::SameKindTraps(unitCaster, m_spellInfo))
-        {
-            if (m_spellInfo->Id == obj->GetSpellId())
-                obj->SetSpellId(0);
-            unitCaster->RemoveGameObject(obj, true);
-        }
-        unitCaster->m_ObjectSlot[slot].Clear();
-    }
-    else if (ObjectGuid guid = unitCaster->m_ObjectSlot[slot])
+    if (ObjectGuid guid = unitCaster->m_ObjectSlot[slot])
     {
         if (GameObject* obj = unitCaster->GetMap()->GetGameObject(guid))
         {

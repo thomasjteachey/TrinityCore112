@@ -3392,7 +3392,26 @@ enum VioletHoldRunes
     SPELL_VHR_GLACIAL_STASIS_FREEZE = 94313,  // stun, enemies within 20 yd, 5 sec
     SPELL_VHR_VOLATILE_CORE_BLAST   = 94314,  // enemies within 15 yd, knocked up
     SPELL_VISUAL_KIT_VOLATILE_CORE_EXPLOSION = 1424,  // SpellVisualKit: Goblin Sapper Charge's detonation (visual 2899's cast kit)
+    SPELL_VHR_MANA_SURGE_RUNE       = 94372,
 };
+
+// Mana Surge's buff, one per caster class: a cost or cast-time spellmod only
+// reaches the class's own spell family (client side too), so each class has
+// its own copy - 15 sec, -100% cost and -100% cast time on every spell of the
+// family. Classes with no entry get nothing from the rune.
+static uint32 GetManaSurgeBuffFor(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_PALADIN: return 94373;
+        case CLASS_PRIEST:  return 94374;
+        case CLASS_SHAMAN:  return 94375;
+        case CLASS_MAGE:    return 94376;
+        case CLASS_WARLOCK: return 94377;
+        case CLASS_DRUID:   return 94378;
+        default:            return 0;
+    }
+}
 
 // 94310 - Glacial Stasis: the taker freezes every enemy around them. The runes
 // outlive the gate window, so it can be kept for the moment the cells open.
@@ -3468,6 +3487,31 @@ class spell_vhr_volatile_core_blast : public SpellScript
     void Register() override
     {
         OnEffectHitTarget += SpellEffectFn(spell_vhr_volatile_core_blast::HandleDamage, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
+// 94372 - Mana Surge: 15 sec of spells that cost nothing and are instant, for
+// whoever takes it - in the taker's class's own copy (GetManaSurgeBuffFor).
+// The rune only drops while the party has a caster (BattlegroundVHR).
+class spell_vhr_mana_surge_rune : public SpellScript
+{
+    PrepareSpellScript(spell_vhr_mana_surge_rune);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 94373, 94374, 94375, 94376, 94377, 94378 });
+    }
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        if (Player* player = GetHitPlayer())
+            if (uint32 buff = GetManaSurgeBuffFor(player->GetClass()))
+                player->CastSpell(player, buff, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_mana_surge_rune::HandleHit, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 
@@ -5151,6 +5195,7 @@ void AddSC_generic_spell_scripts()
     RegisterSpellScript(spell_vhr_volatile_core_rune);
     RegisterSpellScript(spell_vhr_volatile_core_blast);
     RegisterSpellScript(spell_vhr_bright_reflection);
+    RegisterSpellScript(spell_vhr_mana_surge_rune);
     RegisterSpellScript(spell_gen_diminished);
     RegisterSpellAndAuraScriptPair(spell_gen_replenishment, spell_gen_replenishment_aura);
     RegisterSpellScript(spell_gen_remove_on_health_pct);

@@ -258,8 +258,11 @@ class spell_vhr_frostwalker : public SpellScript
     uint32 _nova = 0;
 };
 
-// Boon of Serenity: Tranquility heals everything its whole channel would have,
-// at once, to every party member in its radius - then the channel ends.
+// Boon of Serenity: once per wave, Tranquility heals everything its whole
+// channel would have, at once, to every party member in its radius - then the
+// channel ends. The charge for it is SPELL_SERENITY_READY, which also made the
+// cast free (its -100% cost spellmod, read when the cast began); this spends
+// it. Without the charge Tranquility is the ordinary channel.
 class spell_vhr_serenity : public SpellScript
 {
     PrepareSpellScript(spell_vhr_serenity);
@@ -269,8 +272,10 @@ class spell_vhr_serenity : public SpellScript
         Unit* caster = GetCaster();
         Aura* aura = GetHitAura();
         // The area aura's owner is the druid; party members get theirs from it.
-        if (!caster || GetHitUnit() != caster || !aura || !caster->HasAura(SPELL_SERENITY))
+        if (!caster || GetHitUnit() != caster || !aura || !caster->HasAura(SPELL_SERENITY)
+            || !caster->HasAura(SPELL_SERENITY_READY))
             return;
+        caster->RemoveAurasDueToSpell(SPELL_SERENITY_READY);
 
         AuraEffect const* heal = nullptr;
         for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)

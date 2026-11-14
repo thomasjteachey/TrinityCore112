@@ -31,6 +31,7 @@ local NAMES = {
 	[300501] = { "Freeze Enemies",       0.45, 0.75, 1.00 },
 	[300502] = { "You're a Timebomb",    1.00, 0.60, 0.20 },
 	[300503] = { "Spawn a Clone of You", 1.00, 0.90, 0.35 },
+	[300504] = { "Free Instant Spells",  0.75, 0.45, 1.00 },   -- Mana Surge, casters only
 };
 
 local layer = CreateFrame("Frame", "CENTURION_VioletHoldRunes", WorldFrame);

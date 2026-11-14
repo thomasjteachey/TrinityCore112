@@ -313,6 +313,7 @@ void BattlegroundVHR::Reset()
     _claimedRunUniqueBoons = 0;
     _multitudesThisWave = 0;
     _oncePerWave.clear();
+    _perWaveCounts.clear();
     _undying.clear();
     _recentHits.clear();
     _inherited.clear();
@@ -1206,6 +1207,7 @@ void BattlegroundVHR::CompleteWave()
     DismissFleetingAllies();
     _multitudesThisWave = 0;
     _oncePerWave.clear();
+    _perWaveCounts.clear();
     // Undying runs out on the wave, not on the holder: ended here without a
     // death, so the restore below finds them standing and fills them up.
     EndUndying();
@@ -1421,29 +1423,43 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
 
     // Speed is deliberately not in the roll - the party is not chasing anyone -
     // nor Restoration, whose health and mana the wave clear has just refilled.
-    // Reset Cooldowns and Spawn a Clone of You are the strongest of the five
-    // and roll half as often as the rest.
+    // Reset Cooldowns and Spawn a Clone of You are the strongest of the six
+    // and roll half as often as the rest. Mana Surge is for casters, so it
+    // only rolls while the party has one (a caster spec, not a feral druid,
+    // retribution paladin or enhancement shaman).
     struct WeightedRune
     {
         uint32 entry;
         uint32 weight;
+        bool castersOnly;
     };
     static WeightedRune const kBuffEntries[] =
     {
-        { BG_OBJECTID_BERSERKERBUFF_ENTRY,  2 },
-        { BG_VHR_GO_RECHARGE_BUFF,          1 },
-        { BG_VHR_GO_GLACIAL_STASIS_BUFF,    2 },
-        { BG_VHR_GO_VOLATILE_CORE_BUFF,     2 },
-        { BG_VHR_GO_BRIGHT_REFLECTION_BUFF, 1 }
+        { BG_OBJECTID_BERSERKERBUFF_ENTRY,  2, false },
+        { BG_VHR_GO_RECHARGE_BUFF,          1, false },
+        { BG_VHR_GO_GLACIAL_STASIS_BUFF,    2, false },
+        { BG_VHR_GO_VOLATILE_CORE_BUFF,     2, false },
+        { BG_VHR_GO_BRIGHT_REFLECTION_BUFF, 1, false },
+        { BG_VHR_GO_MANA_SURGE_BUFF,        2, true  }
     };
-    auto rollRune = []()
+    std::vector<Player const*> party;
+    CollectHumanPlayers(party);
+    bool const partyHasCaster = std::any_of(party.begin(), party.end(), [](Player const* member)
+    {
+        return VioletHoldBoons::IsCasterSpec(member);
+    });
+    auto inRoll = [partyHasCaster](WeightedRune const& rune) { return !rune.castersOnly || partyHasCaster; };
+    auto rollRune = [&inRoll]()
     {
         uint32 total = 0;
         for (WeightedRune const& rune : kBuffEntries)
-            total += rune.weight;
+            if (inRoll(rune))
+                total += rune.weight;
         uint32 roll = urand(0, total - 1);
         for (WeightedRune const& rune : kBuffEntries)
         {
+            if (!inRoll(rune))
+                continue;
             if (roll < rune.weight)
                 return rune.entry;
             roll -= rune.weight;
@@ -2281,6 +2297,10 @@ void BattlegroundVHR::RestorePartyAfterWave()
         }
 
         RestoreHealthAndMana(player);
+
+        // Once-per-wave class boons that hand their holder a fresh charge
+        // (Serenity's free, instant Tranquility).
+        VioletHoldClassBoons::OnWaveRestored(player);
     }
 
     // Fellowship allies are transient sessions and not on the human roster,

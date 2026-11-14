@@ -2744,6 +2744,10 @@ void Unit::HandleEmoteCommand(Emote emoteId)
 
     int32 absorbIgnoringDamage = CalculatePct(damageInfo.GetDamage(), auraAbsorbMod);
 
+    // Violet Hold Atonement: the empowered spell cannot be resisted, partly either.
+    if (spell && spell->IsVioletHoldEmpowered())
+        resistedDamage = 0;
+
     if (spell)
         spell->CallScriptOnResistAbsorbCalculateHandlers(damageInfo, resistedDamage, absorbIgnoringDamage);
 
@@ -4092,7 +4096,7 @@ void Unit::_UpdateAutoRepeatSpell()
     SpellInfo const* autoRepeatSpellInfo = m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_spellInfo;
 
     // check "realtime" interrupts
-    // (Violet Hold Skirmisher: Auto Shot keeps firing on the move.)
+    // (Violet Hold Point Blank: Auto Shot keeps firing on the move.)
     if ((GetTypeId() == TYPEID_PLAYER && ToPlayer()->isMoving() && !VioletHoldClassBoons::ShootsWhileMoving(this, autoRepeatSpellInfo))
         || IsNonMeleeSpellCast(false, false, true, autoRepeatSpellInfo->Id == 75))
     {
@@ -4612,6 +4616,10 @@ static uint32 GetSingleTargetAuraLimit(Unit const* caster, SpellInfo const* spel
         if (caster->HasAura(SPELL_DRUID_NATURES_REACH_RANK_1))
             return 2;
     }
+
+    // Violet Hold Transmutation: Polymorph on up to three targets.
+    if (uint32 boonLimit = VioletHoldClassBoons::GetSingleTargetLimit(caster, spellInfo))
+        return boonLimit;
 
     return 1;
 }
@@ -5533,6 +5541,10 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except, bool skipMo
         if ((aura->GetSpellInfo()->AuraInterruptFlags & flag) && (!except || aura->GetId() != except))
         {
             if (skipMountedAuras && aura->HasEffectType(SPELL_AURA_MOUNTED))
+                continue;
+
+            // Violet Hold Trapper: the holder's Freezing Trap holds through damage.
+            if ((flag & AURA_INTERRUPT_FLAG_TAKE_DAMAGE) && VioletHoldClassBoons::HoldsThroughDamage(aura))
                 continue;
 
             if ((HasAura(81439) || HasAura(89783)) && aura->HasEffectType(SPELL_AURA_MOD_STEALTH))

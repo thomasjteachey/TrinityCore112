@@ -423,6 +423,9 @@ class TC_GAME_API Spell
         void SetAutoRepeat(bool rep) { m_autoRepeat = rep; }
         void ReSetTimer() { m_timer = m_casttime > 0 ? m_casttime : 0; }
         bool IsTriggered() const;
+        // Violet Hold Atonement: this cast spent the holder's charge - ten times
+        // the damage, and it cannot miss or be resisted.
+        bool IsVioletHoldEmpowered() const { return m_violetHoldEmpowered; }
         bool IsIgnoringCooldowns() const;
         bool IsFocusDisabled() const;
         bool IsProcDisabled() const;
@@ -497,6 +500,7 @@ class TC_GAME_API Spell
         int32 m_casttime;                                   // Calculated spell cast time initialized only in Spell::prepare
         int32 m_channeledDuration;                          // Calculated channeled spell duration in order to calculate correct pushback.
         bool m_canReflect;                                  // can reflect this spell?
+        bool m_violetHoldEmpowered = false;                 // IsVioletHoldEmpowered
         bool m_autoRepeat;
         uint8 m_runesState;
 

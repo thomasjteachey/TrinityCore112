@@ -3170,21 +3170,22 @@ void SpellMgr::LoadSpellInfoCorrections()
     // custom-attributes pass runs after these corrections and would re-mark a
     // bare dummy aura negative, which is what made the buff break stealth and
     // land as a debuff). The Violet Hold's own runes - 94310 Glacial Stasis,
-    // 94311 Volatile Core, 94312 Bright Reflection - are the same trap-cast
-    // dummy aura and get the same treatment.
-    ApplySpellFix({ 90200, 94310, 94311, 94312 }, [](SpellInfo* spellInfo)
+    // 94311 Volatile Core, 94312 Bright Reflection, 94372 Mana Surge - are the
+    // same trap-cast dummy aura and get the same treatment.
+    ApplySpellFix({ 90200, 94310, 94311, 94312, 94372 }, [](SpellInfo* spellInfo)
     {
         spellInfo->Attributes |= SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY;
         spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT;
         spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_HIT_RESULT | SPELL_ATTR3_NO_INITIAL_AGGRO;
     });
 
-    // Recharge, Glacial Stasis and Bright Reflection do all their work on the
-    // hit (spell_generic.cpp); their DBC aura did nothing but put a buff icon
-    // up for something that is not a buff. A dummy effect instead: the same
-    // hit, the same scripts, and nothing left on the player. Volatile Core
-    // keeps its aura - that one is the fuse.
-    ApplySpellFix({ 90200, 94310, 94312 }, [](SpellInfo* spellInfo)
+    // Recharge, Glacial Stasis, Bright Reflection and Mana Surge do all their
+    // work on the hit (spell_generic.cpp); their DBC aura did nothing but put
+    // a buff icon up for something that is not a buff (Mana Surge's real buff
+    // is its class copy). A dummy effect instead: the same hit, the same
+    // scripts, and nothing left on the player. Volatile Core keeps its aura -
+    // that one is the fuse.
+    ApplySpellFix({ 90200, 94310, 94312, 94372 }, [](SpellInfo* spellInfo)
     {
         spellInfo->_GetEffect(EFFECT_0).Effect = SPELL_EFFECT_DUMMY;
         spellInfo->_GetEffect(EFFECT_0).ApplyAuraName = SPELL_AURA_NONE;

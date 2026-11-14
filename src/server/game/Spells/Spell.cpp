@@ -19,6 +19,7 @@
 #include "Spell.h"
 #include "Configuration/Config.h"
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <utility>
 #include "AccountMgr.h"
@@ -218,6 +219,7 @@ namespace
             case 23505: case 24378:                 // Berserking
             case 90200:                             // Recharge
             case 94310: case 94311: case 94312:     // Violet Hold: Glacial Stasis, Volatile Core, Bright Reflection
+            case 94372:                             // Violet Hold: Mana Surge
                 return true;
             default:
                 return false;
@@ -2892,6 +2894,11 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
             {
                 caster->SetLastDamagedTargetGuid(spell->unitTarget->GetGUID());
 
+                // Violet Hold Atonement: the empowered spell hits ten times as hard.
+                if (spell->IsVioletHoldEmpowered())
+                    spell->m_damage = int32(std::min<int64>(int64(spell->m_damage) * VioletHoldBoons::ATONEMENT_DAMAGE_MULTIPLIER,
+                        std::numeric_limits<int32>::max()));
+
                 // Add bonuses and fill damageInfo struct
                 caster->CalculateSpellDamageTaken(&damageInfo, spell->m_damage, spell->m_spellInfo, spell->m_attackType, IsCrit, MissCondition == SPELL_MISS_BLOCK, spell);
                 Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
@@ -2904,6 +2911,10 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
 
                 spell->m_damage = damageInfo.damage;
                 caster->DealSpellDamage(&damageInfo, true);
+
+                // Violet Hold Gale: the holder's spells may throw the target up.
+                VioletHoldBoons::OnSpellDamageDealt(caster, spell->unitTarget, spell->m_spellInfo,
+                    spell->IsTriggered(), spell->GetTriggeredByAuraSpell() != nullptr);
             }
 
             // Do triggers for unit
@@ -3922,6 +3933,34 @@ void Spell::_cast(bool skipCheck)
     PrepareTriggersExecutedOnHit();
 
     CallScriptOnCastHandlers();
+
+    // Violet Hold boons that count a holder's casts (Atonement's heals) or are
+    // spent by one (Atonement's empowered damaging spell). The cast is going
+    // ahead from here. Targets were rolled above, so an empowered cast's
+    // misses and full resists are turned into hits now.
+    if (Unit* unitCaster = m_caster->ToUnit())
+    {
+        if (VioletHoldBoons::OnSpellCast(unitCaster, m_spellInfo, IsTriggered(), m_triggeredByAuraSpell != nullptr))
+        {
+            m_violetHoldEmpowered = true;
+            for (TargetInfo& target : m_UniqueTargetInfo)
+            {
+                switch (target.MissCondition)
+                {
+                    case SPELL_MISS_MISS:
+                    case SPELL_MISS_RESIST:
+                    case SPELL_MISS_DODGE:
+                    case SPELL_MISS_PARRY:
+                    case SPELL_MISS_BLOCK:
+                    case SPELL_MISS_DEFLECT:
+                        target.MissCondition = SPELL_MISS_NONE;
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+    }
 
     // traded items have trade slot instead of guid in m_itemTargetGUID
     // set to real guid to be sent later to the client
@@ -5973,7 +6012,7 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         if (unitCaster->GetTypeId() == TYPEID_PLAYER && unitCaster->ToPlayer()->isMoving() && (!unitCaster->IsCharmed() || !unitCaster->GetCharmerGUID().IsCreature()))
         {
             // skip stuck spell to allow use it in falling case and apply spell limitations at movement
-            // Violet Hold Skirmisher: Auto Shot starts on the move too.
+            // Violet Hold Point Blank: Auto Shot starts on the move too.
             if ((!unitCaster->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR) || !m_spellInfo->HasEffect(SPELL_EFFECT_STUCK)) &&
                 (IsAutoRepeat() || (m_spellInfo->AuraInterruptFlags & AURA_INTERRUPT_FLAG_NOT_SEATED) != 0)
                 && !(IsAutoRepeat() && VioletHoldClassBoons::ShootsWhileMoving(unitCaster, m_spellInfo)))

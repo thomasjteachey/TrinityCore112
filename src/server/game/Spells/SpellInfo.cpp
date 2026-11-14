@@ -3849,6 +3849,7 @@ bool _isPositiveEffectImpl(SpellInfo const* spellInfo, SpellEffectInfo const& ef
                 case 94310: // Glacial Stasis (Violet Hold rune) - the same kind of dummy
                 case 94311: // Volatile Core (Violet Hold rune)
                 case 94312: // Bright Reflection (Violet Hold rune)
+                case 94372: // Mana Surge (Violet Hold rune)
                     return true;
                 default:
                     break;

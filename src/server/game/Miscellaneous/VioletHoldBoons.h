@@ -145,12 +145,12 @@ namespace VioletHoldBoons
         Juggernaut,     // warrior: Charge / Intercept stun every enemy near the target
         Relentless,     // warrior: Overpower and Revenge always usable
         Warlord,        // warrior: Shield Wall / Recklessness / Retaliation stop sharing a cooldown
-        UnboundLight,   // paladin: no Forbearance
+        Sealkeeper,     // paladin: every seal at once, all judged; seals free, -0.5 s GCD, twice as long (was Unbound Light)
         RadiantHost,    // paladin: every Aura at once
         JudgementDay,   // paladin: Judgement hits every enemy within 20 yd of the target
-        PointBlank,     // hunter: no dead zone
-        Trapper,        // hunter: traps stop sharing a cooldown, can be laid in combat
-        Skirmisher,     // hunter: Auto Shot while moving
+        PointBlank,     // hunter: no dead zone, and Auto Shot while moving (Skirmisher folded in)
+        Trapper,        // hunter: Freezing Trap does not break on damage
+        Barrage,        // hunter: Multi-Shot hits any number of targets (was Skirmisher)
         Assassin,       // rogue: Backstab from the front, unavoidable; Sinister Strike cleaves; Hemorrhage +1 combo point
         Unseen,         // rogue: Stealth does not break from damage or effects
         Crippler,       // rogue: Kidney Shot lasts 3x as long
@@ -159,16 +159,20 @@ namespace VioletHoldBoons
         Agony,          // priest: Shadow Word: Pain all at once
         Frostwalker,    // mage: Blink casts Frost Nova where you leave and where you land
         Spellbreaker,   // mage: a successful Counterspell clears every lockout on you and your allies
-        Transmutation,  // mage: instant Polymorph
+        Transmutation,  // mage: instant Polymorph, on up to three targets
         Contagion,      // warlock: DoTs jump when their target dies
         Indelible,      // warlock: undispellable debuffs
         EternalPact,    // warlock: the demon returns at once when it dies (20 sec)
         Untamed,        // druid: shapeshift out of stun / fear / polymorph
         Wellspring,     // druid: below 50% mana -> 5 sec party Innervate (once per wave)
-        Serenity,       // druid: Tranquility all at once
+        Serenity,       // druid: once per wave Tranquility is free and lands all at once
         Stormcaller,    // shaman: Purge removes every magic buff
         TotemLord,      // shaman: totems follow, never expire, no shared slots
         Ancestors,      // shaman: once per wave a killing blow Reincarnates you on the spot (Phoenix-style)
+
+        // 2026-11-14. Not artifacts - offered by spec, not by class.
+        Atonement,      // healers: once per wave, the 5th heal makes the next damaging spell x10, unmissable
+        Gale,           // casters (no paladins): damaging spells have a 15% chance to throw the target up
 
         Max
     };
@@ -317,6 +321,16 @@ namespace VioletHoldBoons
         // VioletHoldClassBoons.h). 94367-94371 are what the hooks cast.
         SPELL_BOON_CLASS_FIRST  = 94340,
         SPELL_BOON_CLASS_LAST   = 94366,
+
+        // 2026-11-14. Boon of Atonement (Communion's record shape) and the
+        // charge it builds: "your next damaging spell deals 10x and cannot miss
+        // or be resisted" (a visible dummy; the cast that spends it is marked
+        // Spell::IsVioletHoldEmpowered). Boon of the Gale, the same record
+        // shape; the knock-up is done in code (Unit::KnockbackFrom). 94380 is
+        // not a boon aura. 94372-94378 are the Mana Surge rune (spell_generic.cpp).
+        SPELL_BOON_ATONEMENT     = 94379,
+        SPELL_ATONEMENT_EMPOWERED = 94380,
+        SPELL_BOON_GALE          = 94381,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -718,6 +732,33 @@ namespace VioletHoldBoons
     constexpr float PACK_LEADER_RANGE = 30.0f;
     constexpr uint32 PACK_LEADER_TICK_MS = 1000;
     TC_GAME_API void UpdatePackLeader(BattlegroundVHR* run);
+
+    // --- Spec boons and the Mana Surge rune (2026-11-14) ---------------------
+
+    // A member who casts for a living: every mage, warlock and priest, and a
+    // druid, shaman or paladin whose talents are not feral / enhancement /
+    // protection / retribution (no talents spent counts as a caster). The
+    // Mana Surge rune only drops while one is in the party.
+    TC_GAME_API bool IsCasterSpec(Player const* player);
+
+    // Boon of Atonement: heals counted toward the charge, once per wave.
+    constexpr uint32 ATONEMENT_HEALS = 5;
+    constexpr int32 ATONEMENT_DAMAGE_MULTIPLIER = 10;
+    // Spell::_cast, once the cast is going ahead. Counts a holder's heals
+    // (the fifth of the wave puts SPELL_ATONEMENT_EMPOWERED up, once per wave)
+    // and, for a damaging spell, spends that charge. True = this cast is the
+    // empowered one. `triggered` / `byAura`: a triggered cast only counts when
+    // nothing triggered it from an aura and it is a class spell - Holy Shock's
+    // and Penance's halves, not procs or the boons' own helper spells.
+    TC_GAME_API bool OnSpellCast(Unit* caster, SpellInfo const* spellInfo, bool triggered, bool byAura);
+
+    // Boon of the Gale: GALE_CHANCE_PCT per damaging spell hit to throw the
+    // target into the air - half the height of the Volatile Core blast (94314:
+    // 18 up, 4 out), so 18 / sqrt(2) up. Spell::TargetInfo::DoDamageAndTriggers.
+    constexpr uint32 GALE_CHANCE_PCT = 15;
+    constexpr float GALE_SPEED_Z = 12.73f;
+    constexpr float GALE_SPEED_XY = 4.0f;
+    TC_GAME_API void OnSpellDamageDealt(Unit* caster, Unit* victim, SpellInfo const* spellInfo, bool triggered, bool byAura);
 }
 
 #endif // TRINITYCORE_VIOLET_HOLD_BOONS_H
