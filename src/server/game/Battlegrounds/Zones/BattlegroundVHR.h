@@ -856,6 +856,9 @@ private:
     uint8 _brokerBonusOffers;
     uint8 _bonusBrokersPerWave;
     uint8 _bonusRunesPerWave = 0;
+    // Fraction of a boon broker a big party has banked toward its next extra
+    // one (Centurion.VioletHold.BrokersPerExtraPlayer).
+    float _bigPartyBrokerCarry = 0.0f;
     std::vector<VhrAllyRequest> _allyRequests;
     uint32 _nextAllyRequestId;
     uint32 _allyRetryMs;

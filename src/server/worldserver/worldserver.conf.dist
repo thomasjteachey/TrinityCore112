@@ -6750,6 +6750,15 @@ Centurion.Marks.HonorCostMultiplier = 0
 #                     change the run's gold or the honor paid at the cap.
 #                     Live: `.reload config` applies to the next payout.
 #        Default:     1.5
+#
+#    Centurion.VioletHold.BrokersPerExtraPlayer
+#        Description: Extra boon brokers per wave for each player past the third (4+ player
+#                     parties; smaller ones already get a short-handed broker). The fraction
+#                     carries over between waves, so 0.05 with ten players (7 past the third)
+#                     is 0.35 a wave - an extra broker about every third wave. Clamped 0-1.
+#                     Live: `.reload config` applies to the next wave clear.
+#        Default:     0.05
+#                     0    - (Off: one broker per three players, as before)
 
 Centurion.VioletHold.PrepSeconds = 30
 Centurion.VioletHold.CountdownFromSeconds = 15
@@ -6759,6 +6768,7 @@ Centurion.VioletHold.HordeDiminishedStacks = 70
 Centurion.VioletHold.CopiesInheritBoons = 0
 Centurion.VioletHold.MenagerieTrace = 0
 Centurion.VioletHold.ExperienceMultiplier = 1.5
+Centurion.VioletHold.BrokersPerExtraPlayer = 0.05
 
 ###############################################################################
 

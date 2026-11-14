@@ -303,6 +303,7 @@ void BattlegroundVHR::Reset()
     _brokerBonusOffers = 0;
     _bonusBrokersPerWave = 0;
     _bonusRunesPerWave = 0;
+    _bigPartyBrokerCarry = 0.0f;
     _allyRequests.clear();
     _nextAllyRequestId = 0;
     _allyRetryMs = 0;
@@ -1495,7 +1496,23 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
     // broker is per wave, not per player, so it closes the gap without turning
     // a duo into the best way to play.
     uint32 const shortHandedBrokers = GetPartyStrength() < BG_VHR_SHORT_HANDED_PARTY ? 1u : 0u;
-    uint32 brokersWanted = wanted + _bonusBrokersPerWave + shortHandedBrokers;
+
+    // The other end of the same gap: one broker per three players still leaves
+    // a big party with fewer offers per head than a small one. Every player
+    // past the short-handed line banks a fraction of a broker each wave
+    // (Centurion.VioletHold.BrokersPerExtraPlayer, live on `.reload config`);
+    // each whole one banked comes out as an extra broker. At the default 0.05
+    // a full ten banks 0.35 a wave, about one extra broker every three waves.
+    uint32 bigPartyBrokers = 0;
+    if (_partySize >= BG_VHR_SHORT_HANDED_PARTY)
+    {
+        float const perPlayer = sWorld->getFloatConfig(CONFIG_CENTURION_VHR_BROKERS_PER_EXTRA_PLAYER);
+        _bigPartyBrokerCarry += perPlayer * float(_partySize - (BG_VHR_SHORT_HANDED_PARTY - 1));
+        bigPartyBrokers = uint32(_bigPartyBrokerCarry);
+        _bigPartyBrokerCarry -= float(bigPartyBrokers);
+    }
+
+    uint32 brokersWanted = wanted + _bonusBrokersPerWave + shortHandedBrokers + bigPartyBrokers;
 
     // Before the champion, a few more; before the final wave, ten at least.
     uint32 const nextWave = _waveNumber + 1;
