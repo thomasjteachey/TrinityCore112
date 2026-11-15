@@ -369,9 +369,31 @@ bool IsCategoryUnbound(Unit const* owner, SpellInfo const* spellInfo)
         case SPELLFAMILY_WARRIOR:
             // Shield Wall, Recklessness, Retaliation: category 132, 30 min.
             return spellInfo->GetCategory() == 132 && Holds(owner, SPELL_WARLORD);
+        case SPELLFAMILY_HUNTER:
+            // The trap-laying spells (family flag 0x80; the trap effects are not).
+            return (spellInfo->SpellFamilyFlags[0] & 0x80) && Holds(owner, SPELL_TRAPPER);
         default:
             return false;
     }
+}
+
+bool KeepsOneOfEachTrap(Unit const* caster, SpellInfo const* spellInfo)
+{
+    return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER
+        && (spellInfo->SpellFamilyFlags[0] & 0x80) && Holds(caster, SPELL_TRAPPER);
+}
+
+std::vector<GameObject*> SameKindTraps(Unit const* caster, SpellInfo const* spellInfo)
+{
+    std::vector<GameObject*> out;
+    if (!caster || !spellInfo)
+        return out;
+
+    // By name, not spell id: a lower rank laid earlier is still the same trap.
+    for (GameObject* go : caster->GetAllGameObjects())
+        if (go && SameSpell(sSpellMgr->GetSpellInfo(go->GetSpellId()), spellInfo))
+            out.push_back(go);
+    return out;
 }
 
 // ---- paladin -----------------------------------------------------------------

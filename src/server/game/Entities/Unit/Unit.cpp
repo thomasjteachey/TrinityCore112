@@ -9472,10 +9472,23 @@ uint32 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, u
 {
     float TakenTotalMod = 1.0f;
 
-    // Healing taken percent
-    float minval = float(GetMaxNegativeAuraModifier(SPELL_AURA_MOD_HEALING_PCT));
+    // Healing taken percent. The strongest reduction wins (Mortal Strike,
+    // Interloped, ...) - except Violet Hold Aggression's Mortal Wound, which
+    // is applied on top of it rather than competing with it.
+    float minval = float(GetMaxNegativeAuraModifier(SPELL_AURA_MOD_HEALING_PCT, [](AuraEffect const* aurEff)
+    {
+        return aurEff->GetId() != VioletHoldBoons::SPELL_AGGRESSION_WOUND;
+    }));
     if (minval)
         AddPct(TakenTotalMod, minval);
+
+    // (Several Aggression holders each leave their own wound: the strongest counts.)
+    float const wound = float(GetMaxNegativeAuraModifier(SPELL_AURA_MOD_HEALING_PCT, [](AuraEffect const* aurEff)
+    {
+        return aurEff->GetId() == VioletHoldBoons::SPELL_AGGRESSION_WOUND;
+    }));
+    if (wound)
+        AddPct(TakenTotalMod, wound);
 
     float maxval = float(GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HEALING_PCT));
     if (maxval)

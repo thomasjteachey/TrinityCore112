@@ -12,19 +12,19 @@
  * callers stay cheap: one HasAura on the unit asking.
  *
  * What the client has to agree with, and how it is told:
- *  - Relentless: the record aura carries ABILITY_IGNORE_AURASTATE (262) on
- *    Overpower/Revenge. The client honours 262 itself (Taste for Blood,
- *    Warbringer). Overpower also needs a combo point on the target client
- *    side, so the holder keeps one on whatever they have selected
- *    (RefreshReactives).
+ *  - Relentless, Trapper: the record aura carries ABILITY_IGNORE_AURASTATE
+ *    (262) on Overpower/Revenge and (misc 1, combat) on the trap spells. The
+ *    client honours 262 itself (Taste for Blood, Warbringer). Overpower also
+ *    needs a combo point on the target client side, so the holder keeps one
+ *    on whatever they have selected (RefreshReactives).
  *  - Transmutation: the record aura is a -100% cast-time spellmod on Polymorph.
  *  - Sealkeeper (2026-11-14): the record aura IS three seal spellmods
  *    (duration +100%, cost -100%, global cooldown -500 ms, paladin mask
  *    0x0A000200 = every seal), so the client shows and times them itself.
  *  - Barrage: the record aura is a +97 JUMP_TARGETS spellmod on Multi-Shot.
  *  - Serenity's ready charge (94382) is a -100% cost spellmod on Tranquility.
- *  - Warlord: the cast's shared category cooldown is re-sent as a per-spell
- *    cooldown after SMSG_SPELL_GO (SpellHistory::SyncUnboundCategoryToClient,
+ *  - Warlord, Trapper: the cast's shared category cooldown is re-sent as a
+ *    per-spell cooldown after SMSG_SPELL_GO (SpellHistory::SyncUnboundCategoryToClient,
  *    the T2 unbound-shock recipe).
  *  - Spellbreaker: every cleared lockout is an SMSG_CLEAR_COOLDOWN.
  *  - NOT reachable without the client DLL (see the report): Point Blank's
@@ -157,9 +157,15 @@ namespace VioletHoldClassBoons
     TC_GAME_API void RefreshReactives(Unit* unit);
     // Relentless: Overpower needs no combo point on the server (Spell::CheckCast).
     TC_GAME_API bool IgnoresComboRequirement(Unit const* caster, SpellInfo const* spellInfo);
-    // Warlord: this spell keeps its category cooldown to itself (every rank of
-    // the same spell shares it) - SpellHistory.
+    // Warlord / Trapper: this spell keeps its category cooldown to itself
+    // (every rank of the same spell shares it) - SpellHistory.
     TC_GAME_API bool IsCategoryUnbound(Unit const* owner, SpellInfo const* spellInfo);
+    // Trapper: one of each trap down. Every trap-laying spell shares a summon
+    // slot, so a new trap would otherwise take the last one up whatever its
+    // kind; with the boon it replaces only the caster's earlier trap of the
+    // same kind (any rank) - Spell::EffectSummonObject.
+    TC_GAME_API bool KeepsOneOfEachTrap(Unit const* caster, SpellInfo const* spellInfo);
+    TC_GAME_API std::vector<GameObject*> SameKindTraps(Unit const* caster, SpellInfo const* spellInfo);
 
     // ---- paladin -----------------------------------------------------------
     // Radiant Host: the caster's Auras do not push each other off. Sealkeeper:
@@ -180,7 +186,7 @@ namespace VioletHoldClassBoons
     // Spell::CheckCast) - Skirmisher was folded into it 2026-11-14.
     TC_GAME_API bool IgnoresMinRange(Unit const* caster, SpellInfo const* spellInfo);
     TC_GAME_API bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo);
-    // Trapper: a holder's Freezing Trap does not break on damage
+    // Trapper (as well as the trap rules above): a holder's Freezing Trap does not break on damage
     // (Unit::RemoveAurasWithInterruptFlags, AURA_INTERRUPT_FLAG_TAKE_DAMAGE).
     TC_GAME_API bool HoldsThroughDamage(Aura const* aura);
     // Field Medic: the holder's damaging shots (hunter family, ranged damage

@@ -149,7 +149,7 @@ namespace VioletHoldBoons
         RadiantHost,    // paladin: every Aura at once
         JudgementDay,   // paladin: Judgement hits every enemy within 20 yd of the target
         PointBlank,     // hunter: no dead zone, and Auto Shot while moving (Skirmisher folded in)
-        Trapper,        // hunter: Freezing Trap does not break on damage
+        Trapper,        // hunter: traps unshared, in combat, one of each down; Freezing Trap holds through damage
         Barrage,        // hunter: Multi-Shot hits any number of targets (was Skirmisher)
         Assassin,       // rogue: Backstab from the front, unavoidable; Sinister Strike cleaves; Hemorrhage +1 combo point
         Unseen,         // rogue: Stealth does not break from damage or effects
