@@ -10172,6 +10172,10 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             if (coatedBlades)
                 chance += 12.0f;
 
+            // Violet Hold Windlord: Windfury Totem's enchant always procs.
+            if (e_slot == TEMP_ENCHANTMENT_SLOT && VioletHoldClassBoons::WindfuryTotemAlwaysProcs(this, pEnchant->ID))
+                chance = 100.0f;
+
             // .gm diagnostics customauras
             auto customAuraDiag = [](std::string const& msg)
             {

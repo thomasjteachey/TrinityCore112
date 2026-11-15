@@ -713,6 +713,34 @@ void OnCasterForm(Unit* target)
         RallyParty(target, SPELL_WILDCALLER_CLARITY);
 }
 
+float ModProcChance(Aura const* aura, float chance)
+{
+    if (aura && aura->GetId() == SPELL_WINDFURY_WEAPON_PASSIVE && Holds(aura->GetUnitOwner(), SPELL_WINDLORD))
+        return 100.0f;
+    return chance;
+}
+
+bool WindfuryTotemAlwaysProcs(Player const* wielder, uint32 enchantId)
+{
+    // Windfury Totem Effect's temporary enchants (ranks 1-3), the same ids
+    // Unit.cpp's IsWindfuryTotemEnchant knows.
+    if (!wielder || (enchantId != 1783 && enchantId != 563 && enchantId != 564))
+        return false;
+    for (Player* ally : AlliesOf(const_cast<Player*>(wielder)))
+        if (ally->GetClass() == CLASS_SHAMAN && ally->IsAlive() && Holds(ally, SPELL_WINDLORD))
+            return true;
+    return false;
+}
+
+bool KeepsWindfuryWithSeals(Unit const* unit, SpellInfo const* spellInfo)
+{
+    if (spellInfo && !Is(spellInfo, SPELLFAMILY_SHAMAN, "Windfury Totem Effect"))
+        return false;
+    Player const* player = unit ? unit->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+    Battleground const* bg = player ? player->GetBattleground() : nullptr;
+    return bg && bg->GetTypeID() == BATTLEGROUND_VHR;
+}
+
 int32 ModManaCost(Unit const* caster, int32 cost)
 {
     if (cost <= 0 || !caster || !caster->HasAura(SPELL_WILDCALLER_CLARITY))
@@ -957,7 +985,7 @@ void UpdateRun(BattlegroundVHR* run, uint32 tick)
             SyncPlagueBurden(player);
         }
 
-        if (tick % 2 == 0 && player->GetClass() == CLASS_SHAMAN && player->IsAlive() && Holds(player, SPELL_SPIRIT_LINK))
+        if (tick % 2 == 0 && player->GetClass() == CLASS_PRIEST && player->IsAlive() && Holds(player, SPELL_SPIRIT_LINK))
             EvenOutHealth(player);
     }
 }

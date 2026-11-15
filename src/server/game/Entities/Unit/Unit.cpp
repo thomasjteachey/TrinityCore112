@@ -4822,7 +4822,10 @@ void Unit::_ApplyAura(AuraApplication* aurApp, uint8 effMask)
         // Seals and the Windfury Totem weapon buff are mutually exclusive: the
         // totem pulse skips seal carriers (ExcludeTargetAuraState 5) and
         // applying a seal strips an already-present Windfury Totem enchant.
-        if (!aurApp->GetRemoveMode() && IsTwistableSeal(aura->GetSpellInfo()))
+        // (Not in the Violet Hold, where the two coexist as in the base game:
+        // VioletHoldClassBoons::KeepsWindfuryWithSeals.)
+        if (!aurApp->GetRemoveMode() && IsTwistableSeal(aura->GetSpellInfo())
+            && !VioletHoldClassBoons::KeepsWindfuryWithSeals(player, nullptr))
             if (Item* weapon = player->GetWeaponForAttack(BASE_ATTACK))
                 if (IsWindfuryTotemEnchant(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)))
                 {

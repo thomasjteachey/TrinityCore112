@@ -1962,7 +1962,9 @@ SpellCastResult SpellInfo::CheckTarget(WorldObject const* caster, WorldObject co
             if (TargetAuraState && !unitTarget->HasAuraState(AuraStateType(TargetAuraState), this, unitCaster))
                 return SPELL_FAILED_TARGET_AURASTATE;
 
-            if (TargetAuraStateNot && unitTarget->HasAuraState(AuraStateType(TargetAuraStateNot), this, unitCaster))
+            // (Violet Hold: Windfury Totem reaches seal carriers too - VioletHoldClassBoons::KeepsWindfuryWithSeals.)
+            if (TargetAuraStateNot && unitTarget->HasAuraState(AuraStateType(TargetAuraStateNot), this, unitCaster)
+                && !VioletHoldClassBoons::KeepsWindfuryWithSeals(unitTarget, this))
                 return SPELL_FAILED_TARGET_AURASTATE;
         }
     }

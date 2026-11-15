@@ -184,7 +184,8 @@ namespace VioletHoldBoons
         BodyDouble,     // rogue: swap places with an ally falling below 25%; they vanish, untouchable, 6 sec
         Plaguebearer,   // warlock: pull your allies' harmful effects onto yourself, +10% damage each
         Wildcaller,     // druid: each form you shift into gives the party its own buff
-        SpiritLink,     // shaman: every 2 sec the health of allies near you is evened out
+        SpiritLink,     // priest: every 2 sec the health of allies near you is evened out
+        Windlord,       // shaman: Windfury Weapon and Windfury Totem always proc
 
         Max
     };
@@ -360,6 +361,7 @@ namespace VioletHoldBoons
         SPELL_BOON_PLAGUEBEARER  = 94393,
         SPELL_BOON_WILDCALLER    = 94395,
         SPELL_BOON_SPIRIT_LINK   = 94400,
+        SPELL_BOON_WINDLORD      = 94401,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,

@@ -116,7 +116,9 @@ namespace VioletHoldClassBoons
         SPELL_WILDCALLER_BEAR   = 94397,   // 15% less damage taken, 8 sec
         SPELL_WILDCALLER_CLARITY = 94398,  // 25% cheaper mana costs, 8 sec (ModManaCost)
         SPELL_OWL_CHOIR         = 94399,   // moonkin look + 50% Echoes, 8 sec (spell_vhr_boon_echoes)
-        SPELL_SPIRIT_LINK       = 94400,   // shaman record
+        SPELL_SPIRIT_LINK       = 94400,   // priest record (was the shaman's until 2026-11-15)
+        SPELL_WINDLORD          = 94401,   // shaman record
+        SPELL_WINDFURY_WEAPON_PASSIVE = 33757,
         SPELL_ROGUE_EVASION     = 5277,
 
         // Stock "Resurrection Impact Visual", the Ancestors' rising.
@@ -277,6 +279,19 @@ namespace VioletHoldClassBoons
     TC_GAME_API void OnCasterForm(Unit* target);
     // SpellInfo::CalcPowerCost, mana spells: Wildcaller's caster-form rally.
     TC_GAME_API int32 ModManaCost(Unit const* caster, int32 cost);
+    // Windlord: Windfury Weapon's proc (Aura::CalcProcChance; its 3 sec
+    // internal cooldown still applies) ...
+    TC_GAME_API float ModProcChance(Aura const* aura, float chance);
+    // ... and Windfury Totem's weapon enchant on anyone in a holder's party
+    // (Player::CastItemCombatSpell) always proc.
+    TC_GAME_API bool WindfuryTotemAlwaysProcs(Player const* wielder, uint32 enchantId);
+
+    // Inside the Violet Hold, seals and Windfury Totem coexist as in the base
+    // game: the realm's "a seal strips the totem's weapon buff" rule (Unit::
+    // _ApplyAura) and "the totem skips seal carriers" (Windfury Totem
+    // Effect's ExcludeTargetAuraState, SpellInfo::CheckTarget) are off for a
+    // unit in a Violet Hold run. `spellInfo` null = the seal-strips-buff rule.
+    TC_GAME_API bool KeepsWindfuryWithSeals(Unit const* unit, SpellInfo const* spellInfo);
 
     // ---- warlock -----------------------------------------------------------
     // Indelible: Aura::CalcDispelChance -> 0.

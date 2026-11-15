@@ -99,7 +99,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Crit,         SPELL_BOON_CRIT,         3, 100, MASK_MELEE,    5, "Boon of Precision",    "melee and ranged crit",                   "%" },
     { Boon::SpellCrit,    SPELL_BOON_SPELL_CRIT,   3, 100, MASK_CASTER,   5, "Boon of Insight",      "spell crit",                              "%" },
     { Boon::AttackSpeed,  SPELL_BOON_ATTACK_SPEED, 4, 255, MASK_MELEE,    6, "Boon of Haste",        "attack speed",                            "%" },
-    { Boon::CastSpeed,    SPELL_BOON_CAST_SPEED,   6, 100, MASK_CASTER,   6, "Boon of Celerity",     "casting speed",                           "%" },
+    { Boon::CastSpeed,    SPELL_BOON_CAST_SPEED,  12, 100, MASK_CASTER,   6, "Boon of Celerity",     "casting speed",                           "%" },
     { Boon::MountSpeed,   SPELL_BOON_MOUNT_SPEED,  1,   1, MASK_ALL,     2, "Boon of the Outrider", "mounts summon instantly, even in combat (unique)", "" },
     { Boon::Cooldown,     SPELL_BOON_COOLDOWN,    10, 100, MASK_ALL,     4, "Boon of Alacrity",     "cooldown reduction",                      "%" },
     { Boon::Resistance,   SPELL_BOON_RESISTANCE,   8, 255, MASK_ALL,      6, "Boon of Warding",      "to all resistances",                      "" },
@@ -212,7 +212,8 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::BodyDouble,    SPELL_BOON_BODY_DOUBLE,  1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Body Double",  "when an ally within 30 yd drops below 25% health, you swap places with them and gain Evasion; they are stealthed and immune to all damage and effects for 6 sec (once every 30 sec)", "" },
     { Boon::Plaguebearer,  SPELL_BOON_PLAGUEBEARER, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Plaguebearer", "every 3 sec one harmful effect on an ally within 20 yd jumps onto you; +10% damage for every harmful effect you carry", "" },
     { Boon::Wildcaller,    SPELL_BOON_WILDCALLER,   1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Wildcaller",   "shifting forms rallies your party for 8 sec: Cat +15% damage, Bear 15% less damage taken, caster form 25% cheaper mana costs, Moonkin turns them into moonkins whose spells have a 50% chance to cast twice", "" },
-    { Boon::SpiritLink,    SPELL_BOON_SPIRIT_LINK,  1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Spirit Link",  "every 2 sec the health of you and your allies within 20 yd is evened out", "" }
+    { Boon::SpiritLink,    SPELL_BOON_SPIRIT_LINK,  1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Spirit Link",  "every 2 sec the health of you and your allies within 20 yd is evened out", "" },
+    { Boon::Windlord,      SPELL_BOON_WINDLORD,     1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Windlord",     "Windfury Weapon and Windfury Totem have a 100% chance to proc", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -766,6 +767,7 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_PLAGUEBEARER
         || spellId == SPELL_BOON_WILDCALLER
         || spellId == SPELL_BOON_SPIRIT_LINK
+        || spellId == SPELL_BOON_WINDLORD
         || (spellId >= SPELL_BOON_CLASS_FIRST && spellId <= SPELL_BOON_CLASS_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
@@ -774,7 +776,7 @@ bool IsBoonSpell(uint32 spellId)
 bool IsArtifact(Boon boon)
 {
     return (boon >= Boon::Juggernaut && boon <= Boon::Ancestors)
-        || (boon >= Boon::FieldMedic && boon <= Boon::SpiritLink);
+        || (boon >= Boon::FieldMedic && boon <= Boon::Windlord);
 }
 
 // The artifact rows must sit on their spell ids in order: the class boon hooks
@@ -912,11 +914,11 @@ PickResult CanTake(Player const* player, Offer offer)
 
         // Sharing with nobody is nothing: the party boons are for a party of
         // two or more. (Herald also helps a lone holder, so it is not here.)
-        // The whole second artifact block (Field Medic .. Spirit Link) acts
+        // The whole second artifact block (Field Medic .. Windlord) acts
         // on allies - no allies, no use.
         if (info.boon == Boon::Communion || info.boon == Boon::Deliverance || info.boon == Boon::Inheritance
             || info.boon == Boon::Kinship || info.boon == Boon::FocusFire || info.boon == Boon::PackLeader
-            || (info.boon >= Boon::FieldMedic && info.boon <= Boon::SpiritLink))
+            || (info.boon >= Boon::FieldMedic && info.boon <= Boon::Windlord))
         {
             BattlegroundVHR const* run = GetRunOf(player);
             if (!run)
