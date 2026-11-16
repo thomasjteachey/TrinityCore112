@@ -219,7 +219,9 @@ namespace
         if (victim->GetTypeId() == TYPEID_PLAYER && victim->ToPlayer()->IsGameMaster())
             return "target is a game master";
 
-        if (me->GetPhaseMask() != victim->GetPhaseMask())
+        // Phase masks are sets: a pet in normal + a private owner phase still
+        // shares the normal world with a target in normal alone.
+        if (!me->InSamePhase(victim))
             return "phase mismatch - pet and target are no longer in the same phase";
 
         if (!me->CanSeeOrDetect(victim))

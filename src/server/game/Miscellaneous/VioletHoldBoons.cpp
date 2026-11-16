@@ -213,7 +213,12 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Plaguebearer,  SPELL_BOON_PLAGUEBEARER, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Plaguebearer", "every 3 sec one harmful effect on an ally within 20 yd jumps onto you; +10% damage for every harmful effect you carry", "" },
     { Boon::Wildcaller,    SPELL_BOON_WILDCALLER,   1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Wildcaller",   "shifting forms rallies your party for 8 sec: Cat +15% damage, Bear 15% less damage taken, caster form 25% cheaper mana costs, Moonkin turns them into moonkins whose spells have a 50% chance to cast twice", "" },
     { Boon::SpiritLink,    SPELL_BOON_SPIRIT_LINK,  1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Spirit Link",  "every 2 sec the health of you and your allies within 20 yd is evened out", "" },
-    { Boon::Windlord,      SPELL_BOON_WINDLORD,     1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Windlord",     "Windfury Weapon and Windfury Totem have a 100% chance to proc", "" }
+    { Boon::Windlord,      SPELL_BOON_WINDLORD,     1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Windlord",     "Windfury Weapon and Windfury Totem have a 100% chance to proc", "" },
+
+    { Boon::Overflow,      SPELL_BOON_OVERFLOW,       1, 1, MASK_HEALS,             3, "Boon of Overflow",       "25% of your overhealing jumps to the lowest-health ally within 40 yd (unique)", "" },
+    { Boon::SecondOpinion, SPELL_BOON_SECOND_OPINION, 1, 1, MASK_ALL,               3, "Boon of Second Opinion", "three times this run, the party may reroll a broker's whole hand (run-wide, unique)", "" },
+    { Boon::Crucible,      SPELL_BOON_CRUCIBLE,       1, 1, MASK_ALL,               1, "Boon of the Crucible",   "a deathless wave calls an extra broker for the next wave who offers only common boons (run-wide, unique)", "" },
+    { Boon::PrimalEcho,    SPELL_BOON_PRIMAL_ECHO,    1, 1, ClassBit(CLASS_DRUID),  0, "Boon of the Primal Echo", "shifting leaves the form you left beside you for 12 sec, fighting or healing in your place", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -395,6 +400,8 @@ int32 RunHeld(Player const* player, Boon boon)
         case Boon::Hoarder:
         case Boon::Fellowship:
         case Boon::Abundance:
+        case Boon::SecondOpinion:
+        case Boon::Crucible:
             break;
         default:
             return -1;
@@ -404,15 +411,25 @@ int32 RunHeld(Player const* player, Boon boon)
     if (!run)
         return 0;
 
+    // In personal-broker mode Greed and Hoarder are ordinary holder auras;
+    // returning -1 makes GetStacks read that aura instead of the legacy
+    // run-wide counters.
+    if (run->UsesPersonalBrokers() && (boon == Boon::Greed || boon == Boon::Hoarder))
+        return -1;
+
     switch (boon)
     {
-        case Boon::Greed:      return int32(run->GetBrokerBonusOffers());
-        case Boon::Hoarder:    return int32(run->GetBonusBrokersPerWave());
+        case Boon::Greed:      return int32(run->GetBrokerBonusOffers(player));
+        case Boon::Hoarder:    return int32(run->GetBonusBrokersPerWave(player));
         case Boon::Abundance:  return int32(run->GetBonusRunesPerWave());
         // Spawned allies plus the requests still with the driver, so a pick
         // already promised is not offered twice and the [x/cap] readout says
         // the same thing the cap check does.
         case Boon::Fellowship: return int32(run->GetAllyCount() + run->GetPendingAllyRequestCount());
+        case Boon::SecondOpinion: return run->UsesPersonalBrokers()
+            ? (player->HasAura(SPELL_BOON_SECOND_OPINION) ? 1 : 0)
+            : (run->GetSecondOpinionCharges(player) ? 1 : 0);
+        case Boon::Crucible:      return run->HasCrucible(player) ? 1 : 0;
         default:               return 0;
     }
 }
@@ -768,6 +785,10 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_WILDCALLER
         || spellId == SPELL_BOON_SPIRIT_LINK
         || spellId == SPELL_BOON_WINDLORD
+        || spellId == SPELL_BOON_OVERFLOW
+        || spellId == SPELL_BOON_SECOND_OPINION
+        || spellId == SPELL_BOON_CRUCIBLE
+        || spellId == SPELL_BOON_PRIMAL_ECHO
         || (spellId >= SPELL_BOON_CLASS_FIRST && spellId <= SPELL_BOON_CLASS_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
@@ -776,7 +797,8 @@ bool IsBoonSpell(uint32 spellId)
 bool IsArtifact(Boon boon)
 {
     return (boon >= Boon::Juggernaut && boon <= Boon::Ancestors)
-        || (boon >= Boon::FieldMedic && boon <= Boon::Windlord);
+        || (boon >= Boon::FieldMedic && boon <= Boon::Windlord)
+        || boon == Boon::PrimalEcho;
 }
 
 // The artifact rows must sit on their spell ids in order: the class boon hooks
@@ -791,7 +813,8 @@ bool SharesRunes(Player const* player)
 
 bool IsRunUnique(Boon boon)
 {
-    return boon == Boon::Multitudes || boon == Boon::Herald || boon == Boon::PackLeader || boon == Boon::Undying;
+    return boon == Boon::Multitudes || boon == Boon::Herald || boon == Boon::PackLeader || boon == Boon::Undying
+        || boon == Boon::SecondOpinion || boon == Boon::Crucible;
 }
 
 bool CallsMultitudes(Player const* player)
@@ -918,6 +941,7 @@ PickResult CanTake(Player const* player, Offer offer)
         // on allies - no allies, no use.
         if (info.boon == Boon::Communion || info.boon == Boon::Deliverance || info.boon == Boon::Inheritance
             || info.boon == Boon::Kinship || info.boon == Boon::FocusFire || info.boon == Boon::PackLeader
+            || info.boon == Boon::Overflow
             || (info.boon >= Boon::FieldMedic && info.boon <= Boon::Windlord))
         {
             BattlegroundVHR const* run = GetRunOf(player);
@@ -937,7 +961,9 @@ PickResult CanTake(Player const* player, Offer offer)
 
         // One per run: somebody already took it, so nobody else can - and
         // with nobody able to, it neither rolls nor stays on a board.
-        if (IsRunUnique(info.boon))
+        bool const personalBrokerUnique = GetRunOf(player) && GetRunOf(player)->UsesPersonalBrokers()
+            && (info.boon == Boon::SecondOpinion || info.boon == Boon::Crucible);
+        if (IsRunUnique(info.boon) && !personalBrokerUnique)
         {
             BattlegroundVHR const* run = GetRunOf(player);
             if (!run)
@@ -1075,6 +1101,8 @@ bool SuitsSpec(Player const* player, Offer const& offer)
     // class that merely could, and not for anyone with no talents spent.
     if (Boon(offer.index) == Boon::Atonement)
         return GetSpecRole(player) == SPEC_HEALER;
+    if (Boon(offer.index) == Boon::Overflow)
+        return GetSpecRole(player) == SPEC_HEALER;
 
     // The swing and spell halves: a Balance druid stops pulling Flurry, Haste,
     // Fury or Vigor into the pool and a Feral one stops pulling Echoes. Rage
@@ -1113,7 +1141,7 @@ uint32 GetOfferWeight(Offer const& offer)
     return 0;
 }
 
-std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count)
+std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count, bool commonBoonsOnly)
 {
     // "Only rolls when it makes sense": something is in the pool while at
     // least one person on the team could take it. Two hunters and one who
@@ -1132,16 +1160,16 @@ std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 co
     for (uint8 i = 0; i < uint8(Boon::Max); ++i)
     {
         Offer offer{ Offer::Kind::Boon, i };
-        if (anyoneCan(offer))
+        if ((!commonBoonsOnly || kBoons[i].weight >= 8) && anyoneCan(offer))
             pool.push_back(offer);
     }
-    for (uint8 i = 0; i < CLASS_SPELL_COUNT; ++i)
+    for (uint8 i = 0; !commonBoonsOnly && i < CLASS_SPELL_COUNT; ++i)
     {
         Offer offer{ Offer::Kind::ClassSpell, i };
         if (anyoneCan(offer))
             pool.push_back(offer);
     }
-    for (uint8 i = 0; i < ITEM_GRANT_COUNT; ++i)
+    for (uint8 i = 0; !commonBoonsOnly && i < ITEM_GRANT_COUNT; ++i)
     {
         Offer offer{ Offer::Kind::Item, i };
         if (anyoneCan(offer))
@@ -1281,7 +1309,9 @@ PickResult Take(Player* player, Offer offer)
         aura->ModStackAmount(info.grantStacks);
 
     // Taken for the whole run, whatever becomes of the aura from here.
-    if (IsRunUnique(info.boon))
+    bool const personalBrokerUnique = GetRunOf(player) && GetRunOf(player)->UsesPersonalBrokers()
+        && (info.boon == Boon::SecondOpinion || info.boon == Boon::Crucible);
+    if (IsRunUnique(info.boon) && !personalBrokerUnique)
         if (BattlegroundVHR* run = GetRunOf(player))
             run->ClaimRunUniqueBoon(offer.index);
 
@@ -1295,15 +1325,23 @@ PickResult Take(Player* player, Offer offer)
     {
         case Boon::Greed:
             if (BattlegroundVHR* run = GetRunOf(player))
-                run->AddBrokerBonusOffers(info.grantStacks);
+                run->AddBrokerBonusOffers(player, info.grantStacks);
             break;
         case Boon::Hoarder:
             if (BattlegroundVHR* run = GetRunOf(player))
-                run->AddBonusBrokersPerWave(info.grantStacks);
+                run->AddBonusBrokersPerWave(player, info.grantStacks);
             break;
         case Boon::Abundance:
             if (BattlegroundVHR* run = GetRunOf(player))
                 run->AddBonusRunesPerWave(info.grantStacks);
+            break;
+        case Boon::SecondOpinion:
+            if (BattlegroundVHR* run = GetRunOf(player))
+                run->AddSecondOpinionCharges(player, 3);
+            break;
+        case Boon::Crucible:
+            if (BattlegroundVHR* run = GetRunOf(player))
+                run->EnableCrucible(player);
             break;
         case Boon::Fellowship:
             if (BattlegroundVHR* run = GetRunOf(player))
@@ -1599,6 +1637,56 @@ void ReturnBorrowedLevels(Player* player)
     player->RemoveAurasDueToSpell(SPELL_BOON_LEVEL);
 }
 
+void ShareOverflow(HealInfo const& healInfo)
+{
+    Unit* healer = healInfo.GetHealer();
+    Unit* originalTarget = healInfo.GetTarget();
+    SpellInfo const* originalSpell = healInfo.GetSpellInfo();
+    if (!healer || !originalTarget || !originalSpell || originalSpell->Id == SPELL_BOON_OVERFLOW
+        || BlocksHealing(originalTarget))
+        return;
+
+    Player* holder = healer->GetCharmerOrOwnerPlayerOrPlayerItself();
+    BattlegroundVHR* run = GetRunOf(holder);
+    if (!holder || !run || holder->GetBGTeam() != run->GetHumanTeam() || run->IsAlly(holder->GetGUID())
+        || !holder->HasAura(SPELL_BOON_OVERFLOW))
+        return;
+
+    uint32 const landed = healInfo.GetHeal();
+    uint32 const effective = healInfo.GetEffectiveHeal();
+    if (landed <= effective)
+        return;
+
+    uint32 const amount = uint32((uint64(landed - effective) * 25u) / 100u);
+    if (!amount)
+        return;
+
+    std::vector<Player const*> roster;
+    run->CollectHumanPlayers(roster);
+    Player* lowest = nullptr;
+    for (Player const* candidateConst : roster)
+    {
+        Player* candidate = const_cast<Player*>(candidateConst);
+        if (!candidate || candidate == originalTarget || !candidate->IsAlive() || !candidate->IsInWorld()
+            || candidate->GetMap() != holder->GetMap() || !candidate->IsWithinDistInMap(holder, 40.0f)
+            || candidate->GetHealth() >= candidate->GetMaxHealth())
+            continue;
+
+        if (!lowest || uint64(candidate->GetHealth()) * lowest->GetMaxHealth()
+            < uint64(lowest->GetHealth()) * candidate->GetMaxHealth())
+            lowest = candidate;
+    }
+    if (!lowest)
+        return;
+
+    SpellInfo const* overflowSpell = sSpellMgr->GetSpellInfo(SPELL_BOON_OVERFLOW);
+    if (!overflowSpell)
+        return;
+
+    HealInfo overflow(holder, lowest, amount, overflowSpell, SPELL_SCHOOL_MASK_HOLY);
+    holder->HealBySpell(overflow);
+}
+
 bool DestroyGrantedItemByGuidLow(Player* player, uint32 itemGuidLow)
 {
     if (!player || !itemGuidLow)
@@ -1731,6 +1819,22 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
     if (IsArtifact(info.boon))
         return Trinity::StringFormat("{} (artifact): {}{}", info.name, info.summary, blocked);
 
+    if (BattlegroundVHR const* run = GetRunOf(viewer); run && run->UsesPersonalBrokers())
+        switch (info.boon)
+        {
+            case Boon::Greed:
+                return Trinity::StringFormat("{}: extra option at each of your brokers [{}/{}]{}", info.name,
+                    uint32(held), uint32(info.maxStacks), blocked);
+            case Boon::Hoarder:
+                return Trinity::StringFormat("{}: an extra private broker after every wave{}", info.name, blocked);
+            case Boon::SecondOpinion:
+                return Trinity::StringFormat("{}: three whole-hand rerolls for your brokers{}", info.name, blocked);
+            case Boon::Crucible:
+                return Trinity::StringFormat("{}: a deathless wave calls you an extra common-boon broker{}", info.name, blocked);
+            default:
+                break;
+        }
+
     switch (info.boon)
     {
         case Boon::MountSpeed:
@@ -1748,6 +1852,9 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Undying:
         case Boon::Atonement:
         case Boon::Gale:
+        case Boon::Overflow:
+        case Boon::SecondOpinion:
+        case Boon::Crucible:
             return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:
             return Trinity::StringFormat("{}: +1 {}{}", info.name, info.summary, blocked);
@@ -2105,6 +2212,8 @@ void CopyBoonsTo(Player const* source, Player* target)
             case Boon::Hoarder:
             case Boon::Fellowship:
             case Boon::Abundance:
+            case Boon::SecondOpinion:
+            case Boon::Crucible:
             case Boon::Menagerie:
             // Calls copies onto the PARTY's side (BattlegroundVHR::
             // RequestReflection refuses anyone else) - nothing on a clone.

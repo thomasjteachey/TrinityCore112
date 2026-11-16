@@ -48,6 +48,7 @@ using namespace VioletHoldBoons;
 namespace
 {
 constexpr uint32 ACTION_PICK_BASE = GOSSIP_ACTION_INFO_DEF + 100;   // + uint8(Boon)
+constexpr uint32 ACTION_REROLL = GOSSIP_ACTION_INFO_DEF + 500;
 
 // "%s takes the %s." - see sql/custom/world/2026_08_15_00_world_violet_hold_boons.sql
 constexpr uint32 STRING_BOON_TAKEN = 20101;
@@ -69,7 +70,7 @@ BattlegroundVHR* GetRun(Creature const* broker)
 
 // Only the party may trade with him: the clones are Players too, and on the
 // other team.
-bool MayTrade(Player const* player, BattlegroundVHR const* run)
+bool MayTrade(Player const* player, BattlegroundVHR const* run, ObjectGuid brokerGuid = ObjectGuid::Empty)
 {
     if (!player || !run)
         return false;
@@ -81,7 +82,8 @@ bool MayTrade(Player const* player, BattlegroundVHR const* run)
     if (player->GetBattleground() != run)
         return false;
 
-    return player->GetBGTeam() == run->GetHumanTeam();
+    return player->GetBGTeam() == run->GetHumanTeam()
+        && (!brokerGuid || run->MayUseBoonBroker(player, brokerGuid));
 }
 
 BattlegroundVHR* RunOfPlayer(Player const* player)
@@ -101,7 +103,7 @@ BattlegroundVHR* RunOfPlayer(Player const* player)
 //
 // Server -> addon, CCGAME whispers, fields split on '^' (Field() keeps them
 // out of the text), <broker> written the way UnitGUID writes it:
-//   VHBOON:DEAL:<broker>^<wave>^<final wave>^<greed>^<abundance>^<hoarder>[^<name>^<class id>]...
+//   VHBOON:DEAL:<broker>^<wave>^<final wave>^<greed>^<abundance>^<hoarder>^<second opinions>^<common only>[^<name>^<class id>]...
 //   VHBOON:CARD:<broker>^<code>^<kind B|S|I>^<tier 1-6>^<run-wide>^<greed card>^<icon S<spell>|I<item>>
 //               ^<name>^<headline>^<text>^<held>^<after>^<cap>^<unit>^<PickResult for you>[^<who can take it>]...
 //   VHBOON:DECK:<broker>[^<tier>^<name>^<value>]...      (several lines when long)
@@ -109,9 +111,11 @@ BattlegroundVHR* RunOfPlayer(Player const* player)
 //   VHBOON:LOOK:<broker>^<name>^<code>                   a party member is looking at a card
 //   VHBOON:TAKEN:<broker>^<name>^<code>                  the deal is over
 //   VHBOON:GONE:<broker>                                 the broker left with nothing taken
+//   VHBOON:REROLLED:<broker>^<name>                       its fixed hand was replaced
 // Addon -> server, CCGAMEREQ whispers to self:
 //   VHBOON:PICK:<broker>:<code>
 //   VHBOON:LOOK:<broker>:<code>
+//   VHBOON:REROLL:<broker>:0
 // Codes are Offer::Encode(); CODE_NONE is "looking at nothing".
 constexpr uint32 CODE_NONE = 999;
 // One addon line stays inside what a chat message may carry.
@@ -141,9 +145,13 @@ std::string Field(std::string_view text)
     return out;
 }
 
-bool IsRunWideBoon(Boon boon)
+bool IsRunWideBoon(Boon boon, Player const* viewer = nullptr)
 {
-    return boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::Fellowship || boon == Boon::Abundance;
+    if (BattlegroundVHR* run = RunOfPlayer(viewer); run && run->UsesPersonalBrokers())
+        if (boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::SecondOpinion || boon == Boon::Crucible)
+            return false;
+    return boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::Fellowship || boon == Boon::Abundance
+        || boon == Boon::SecondOpinion || boon == Boon::Crucible;
 }
 
 // The card's frame colour, read off the roll weight so a card that looks rare
@@ -187,6 +195,30 @@ void SendToParty(BattlegroundVHR const* run, std::string const& line, Player con
     }
 }
 
+void CollectBrokerRoster(BattlegroundVHR const* run, ObjectGuid brokerGuid, std::vector<Player const*>& out)
+{
+    if (ObjectGuid const ownerGuid = run->GetBoonBrokerOwner(brokerGuid))
+    {
+        if (Player const* owner = ObjectAccessor::FindPlayer(ownerGuid))
+            out.push_back(owner);
+        return;
+    }
+    run->CollectHumanPlayers(out);
+}
+
+void SendToBrokerAudience(BattlegroundVHR const* run, ObjectGuid brokerGuid, std::string const& line,
+    Player const* except = nullptr)
+{
+    if (ObjectGuid const ownerGuid = run->GetBoonBrokerOwner(brokerGuid))
+    {
+        if ((!except || except->GetGUID() != ownerGuid))
+            if (Player* owner = ObjectAccessor::FindPlayer(ownerGuid))
+                Battleground::SendSquadFeedLine(owner, line);
+        return;
+    }
+    SendToParty(run, line, except);
+}
+
 std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, bool greedCard,
     std::vector<Player const*> const& roster)
 {
@@ -227,12 +259,21 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
             BoonInfo const& info = GetBoon(Boon(offer.index));
             icon = "S" + std::to_string(GetBoonSpellFor(info.boon, viewer->GetClass()));
             name = info.name;
-            runWide = IsRunWideBoon(info.boon);
+            runWide = IsRunWideBoon(info.boon, viewer);
             held = GetStacks(viewer, info.boon);
             cap = info.maxStacks;
             after = std::min<uint32>(held + info.grantStacks, cap);
             unit = info.unit;
             text = info.summary;
+            if (BattlegroundVHR* run = RunOfPlayer(viewer); run && run->UsesPersonalBrokers())
+                switch (info.boon)
+                {
+                    case Boon::Greed:        text = "extra option at each of your brokers from now on"; break;
+                    case Boon::Hoarder:      text = "an extra private broker after every wave from now on"; break;
+                    case Boon::SecondOpinion:text = "three whole-hand rerolls for your brokers this run"; break;
+                    case Boon::Crucible:     text = "a deathless wave calls you an extra common-boon broker"; break;
+                    default: break;
+                }
             if (cap > 1)
                 headline = Trinity::StringFormat("+{}{}", uint32(info.grantStacks), info.unit);
             if (info.boon == Boon::Healthstone)
@@ -272,7 +313,7 @@ void SendDeck(Player* viewer, std::string const& tag)
     for (uint8 i = 0; i < uint8(Boon::Max); ++i)
     {
         BoonInfo const& info = GetBoon(Boon(i));
-        if (IsRunWideBoon(info.boon))
+        if (IsRunWideBoon(info.boon, viewer))
             continue;
         uint8 const stacks = GetStacks(viewer, info.boon);
         if (!stacks)
@@ -335,7 +376,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
     bool OnGossipHello(Player* player) override
     {
         BattlegroundVHR* run = GetRun(me);
-        if (!MayTrade(player, run) || _consumed)
+        if (!MayTrade(player, run, me->GetGUID()) || _consumed)
         {
             CloseGossipMenuFor(player);
             return true;
@@ -356,7 +397,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
                 session->SendNotification("The broker has nothing left that would help anyone here.");
             CloseGossipMenuFor(player);
             _consumed = true;
-            SendToParty(run, "VHBOON:GONE:" + BrokerTag(me->GetGUID()));
+            SendToBrokerAudience(run, me->GetGUID(), "VHBOON:GONE:" + BrokerTag(me->GetGUID()));
             // Frees the slot and removes the creature at the end of the
             // update. Nothing below may touch `me` after this.
             run->ConsumeBoonBroker(me->GetGUID());
@@ -370,6 +411,10 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         for (Offer const& offer : offers)
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, DescribeOffer(player, offer),
                 GOSSIP_SENDER_MAIN, ACTION_PICK_BASE + offer.Encode());
+        if (run->GetSecondOpinionCharges(player))
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                Trinity::StringFormat("Ask for a second opinion ({} left)", uint32(run->GetSecondOpinionCharges(player))),
+                GOSSIP_SENDER_MAIN, ACTION_REROLL);
 
         SendGossipMenuFor(player, NPC_TEXT_BOON_BROKER, me->GetGUID());
         return true;
@@ -380,6 +425,13 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
         CloseGossipMenuFor(player);
 
+        if (action == ACTION_REROLL)
+        {
+            if (Reroll(player))
+                OnGossipHello(player);
+            return true;
+        }
+
         Offer offer;
         if (action < ACTION_PICK_BASE || !Offer::Decode(action - ACTION_PICK_BASE, offer))
             return true;
@@ -388,11 +440,26 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         return true;
     }
 
+    bool Reroll(Player* player)
+    {
+        BattlegroundVHR* run = GetRun(me);
+        if (!MayTrade(player, run, me->GetGUID()) || _consumed || !_rolled
+            || !player->GetNPCIfCanInteractWith(me->GetGUID(), UNIT_NPC_FLAG_GOSSIP)
+            || !run->SpendSecondOpinion(player))
+            return false;
+
+        _offers.clear();
+        _looks.clear();
+        _rolled = false;
+        SendToBrokerAudience(run, me->GetGUID(), Trinity::StringFormat("VHBOON:REROLLED:{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName())));
+        return true;
+    }
+
     // Both ways in - a gossip line and a card - end here.
     void Pick(Player* player, Offer offer)
     {
         BattlegroundVHR* run = GetRun(me);
-        if (!MayTrade(player, run) || _consumed)
+        if (!MayTrade(player, run, me->GetGUID()) || _consumed)
             return;
 
         // The pick has to be one of the offers this broker is actually
@@ -418,8 +485,9 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
                          : GetItemGrant(offer.index).name;
         if (WorldSession* session = player->GetSession())
             session->SendNotification("You receive %s.", name);
-        run->PSendMessageToAll(STRING_BOON_TAKEN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName().c_str(), name);
-        SendToParty(run, Trinity::StringFormat("VHBOON:TAKEN:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), offer.Encode()));
+        if (!run->UsesPersonalBrokers())
+            run->PSendMessageToAll(STRING_BOON_TAKEN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName().c_str(), name);
+        SendToBrokerAudience(run, me->GetGUID(), Trinity::StringFormat("VHBOON:TAKEN:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), offer.Encode()));
 
         // Frees the slot and removes the creature at the end of the update.
         // Nothing below may touch `me` after this.
@@ -431,7 +499,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
     void Look(Player* player, uint32 code)
     {
         BattlegroundVHR* run = GetRun(me);
-        if (!MayTrade(player, run) || _consumed)
+        if (!MayTrade(player, run, me->GetGUID()) || _consumed)
             return;
 
         Offer offer;
@@ -450,7 +518,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         else
             _looks[player->GetGUID()] = code;
 
-        SendToParty(run, Trinity::StringFormat("VHBOON:LOOK:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), code), player);
+        SendToBrokerAudience(run, me->GetGUID(), Trinity::StringFormat("VHBOON:LOOK:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), code), player);
     }
 
 private:
@@ -458,10 +526,11 @@ private:
     {
         std::string const tag = BrokerTag(me->GetGUID());
         std::vector<Player const*> roster;
-        run->CollectHumanPlayers(roster);
+        CollectBrokerRoster(run, me->GetGUID(), roster);
 
-        std::string deal = Trinity::StringFormat("VHBOON:DEAL:{}^{}^{}^{}^{}^{}", tag, run->GetWaveNumber(), uint32(BG_VHR_FINAL_WAVE),
-            uint32(run->GetBrokerBonusOffers()), uint32(run->GetBonusRunesPerWave()), uint32(run->GetBonusBrokersPerWave()));
+        std::string deal = Trinity::StringFormat("VHBOON:DEAL:{}^{}^{}^{}^{}^{}^{}^{}", tag, run->GetWaveNumber(), uint32(BG_VHR_FINAL_WAVE),
+            uint32(run->GetBrokerBonusOffers(viewer)), uint32(run->GetBonusRunesPerWave()), uint32(run->GetBonusBrokersPerWave(viewer)),
+            uint32(run->GetSecondOpinionCharges(viewer)), run->IsCommonOnlyBroker(me->GetGUID()) ? 1 : 0);
         for (Player const* member : roster)
             if (member && deal.size() < MAX_LINE - 20)
                 deal += Trinity::StringFormat("^{}^{}", Field(member->GetName()), uint32(member->GetClass()));
@@ -496,7 +565,7 @@ private:
     std::vector<Offer> LiveOffersFor(BattlegroundVHR const* run)
     {
         std::vector<Player const*> roster;
-        run->CollectHumanPlayers(roster);
+        CollectBrokerRoster(run, me->GetGUID(), roster);
 
         std::vector<Offer> live;
         for (Offer const& offer : OffersFor(run))
@@ -515,9 +584,11 @@ private:
         if (!_rolled)
         {
             std::vector<Player const*> roster;
-            run->CollectHumanPlayers(roster);
+            CollectBrokerRoster(run, me->GetGUID(), roster);
             // Boon of Greed widens every broker rolled after it.
-            _offers = RollOffers(roster, uint8(std::min<uint32>(OFFERS_PER_BROKER + run->GetBrokerBonusOffers(), 12)));
+            Player const* owner = roster.empty() ? nullptr : roster.front();
+            _offers = RollOffers(roster, uint8(std::min<uint32>(OFFERS_PER_BROKER + run->GetBrokerBonusOffers(owner), 12)),
+                run->IsCommonOnlyBroker(me->GetGUID()));
             _rolled = true;
         }
         return _offers;
@@ -562,6 +633,13 @@ void HandleBoonRequest(Player* sender, std::string_view argument)
     if (parts[0] == "LOOK")
     {
         ai->Look(sender, *code);
+        return;
+    }
+
+    if (parts[0] == "REROLL")
+    {
+        if (ai->Reroll(sender))
+            ai->OnGossipHello(sender);
         return;
     }
 

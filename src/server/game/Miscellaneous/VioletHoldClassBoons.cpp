@@ -25,6 +25,7 @@
 #include "SpellMgr.h"
 #include "Totem.h"
 #include "TotemPackets.h"
+#include "TemporarySummon.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -674,12 +675,51 @@ void RallyParty(Unit* druid, uint32 buff)
         if (ally->IsAlive() && (ally == druid || ally->IsWithinDistInMap(druid, WILDCALLER_RANGE)))
             druid->AddAura(buff, ally);
 }
+
+void LeavePrimalEcho(Unit* druid, uint8 previousForm)
+{
+    if (!druid || druid->GetClass() != CLASS_DRUID || !druid->IsAlive() || !Holds(druid, SPELL_PRIMAL_ECHO))
+        return;
+
+    // One echo at a time. A rapid shift replaces the old memory rather than
+    // filling the chamber with twelve-second summons.
+    std::list<Creature*> oldEchoes;
+    druid->GetCreatureListWithEntryInGrid(oldEchoes, NPC_PRIMAL_ECHO, 100.0f);
+    for (Creature* old : oldEchoes)
+        if (old && old->IsSummon() && old->ToTempSummon()->GetSummonerGUID() == druid->GetGUID())
+            old->DespawnOrUnsummon();
+
+    uint32 const display = druid->GetDisplayId();
+    TempSummon* echo = druid->SummonCreature(NPC_PRIMAL_ECHO, *druid, TEMPSUMMON_TIMED_DESPAWN,
+        Milliseconds(PRIMAL_ECHO_DURATION_MS));
+    if (!echo)
+        return;
+
+    echo->SetFaction(druid->GetFaction());
+    echo->SetLevel(druid->GetLevel());
+    echo->SetDisplayId(display);
+    echo->SetObjectScale(0.85f);
+    uint32 const healthPct = previousForm == FORM_BEAR || previousForm == FORM_DIREBEAR ? 40u : 25u;
+    echo->SetMaxHealth(std::max<uint32>(1, druid->CountPctFromMaxHealth(healthPct)));
+    echo->SetHealth(echo->GetMaxHealth());
+    echo->SetAttackTime(BASE_ATTACK, druid->GetAttackTime(BASE_ATTACK));
+    echo->SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE,
+        std::max<float>(1.0f, druid->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE) * 0.25f));
+    echo->SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE,
+        std::max<float>(2.0f, druid->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE) * 0.25f));
+    echo->UpdateDamagePhysical(BASE_ATTACK);
+    if (echo->IsAIEnabled())
+        echo->AI()->SetData(DATA_PRIMAL_ECHO_FORM, previousForm);
+}
 }
 
 void OnShapeshift(Unit* target, SpellInfo const* form)
 {
     if (!target || !form || form->SpellFamilyName != SPELLFAMILY_DRUID)
         return;
+
+    uint8 const previousForm = uint8(target->GetShapeshiftForm());
+    LeavePrimalEcho(target, previousForm);
 
     if (target->GetClass() == CLASS_DRUID && Holds(target, SPELL_WILDCALLER))
     {
@@ -707,8 +747,9 @@ void OnShapeshift(Unit* target, SpellInfo const* form)
     target->RemoveAurasByType(SPELL_AURA_MOD_CONFUSE, ObjectGuid::Empty, nullptr, true, false);
 }
 
-void OnCasterForm(Unit* target)
+void OnCasterForm(Unit* target, uint8 previousForm)
 {
+    LeavePrimalEcho(target, previousForm);
     if (target && target->GetClass() == CLASS_DRUID && Holds(target, SPELL_WILDCALLER))
         RallyParty(target, SPELL_WILDCALLER_CLARITY);
 }

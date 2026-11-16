@@ -15,6 +15,7 @@
  */
 
 #include "CellImpl.h"
+#include "BattlegroundVHR.h"
 #include "Corpse.h"
 #include "ObjectAccessor.h"
 #include "GridNotifiers.h"
@@ -27,6 +28,8 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "TemporarySummon.h"
+#include "VioletHoldBoons.h"
 #include "VioletHoldClassBoons.h"
 
 #include <algorithm>
@@ -366,6 +369,133 @@ class spell_vhr_serenity : public SpellScript
     }
 };
 
+// Boon of the Primal Echo: the core summons this creature with the display and
+// form being left. Caster and Tree echoes mend the weakest nearby party member;
+// Moonkin echoes throw Wrath; physical forms fight at a quarter of the druid's
+// weapon damage. A newer shift dismisses the previous echo in LeavePrimalEcho.
+class npc_violet_hold_primal_echo : public CreatureScript
+{
+public:
+    npc_violet_hold_primal_echo() : CreatureScript("npc_violet_hold_primal_echo") { }
+
+    struct npc_violet_hold_primal_echoAI : public ScriptedAI
+    {
+        npc_violet_hold_primal_echoAI(Creature* creature) : ScriptedAI(creature) { }
+
+        void Reset() override
+        {
+            _form = FORM_NONE;
+            _pulseMs = 500;
+            me->SetReactState(REACT_DEFENSIVE);
+        }
+
+        void SetData(uint32 type, uint32 value) override
+        {
+            if (type == DATA_PRIMAL_ECHO_FORM)
+                _form = uint8(value);
+        }
+
+        Player* Owner() const
+        {
+            if (!me->IsSummon())
+                return nullptr;
+            Unit* summoner = me->ToTempSummon()->GetSummonerUnit();
+            return summoner ? summoner->ToPlayer() : nullptr;
+        }
+
+        Unit* Enemy(Player* owner)
+        {
+            if (Unit* victim = owner->GetVictim())
+                if (victim->IsAlive() && me->IsValidAttackTarget(victim))
+                    return victim;
+            return me->SelectNearestTarget(40.0f);
+        }
+
+        void Mend(Player* owner)
+        {
+            Battleground* bg = owner->GetBattleground();
+            if (!bg || bg->GetTypeID() != BATTLEGROUND_VHR)
+                return;
+            BattlegroundVHR* run = static_cast<BattlegroundVHR*>(bg);
+
+            std::vector<Player const*> roster;
+            run->CollectHumanPlayers(roster);
+            Player* lowest = nullptr;
+            for (Player const* candidateConst : roster)
+            {
+                Player* candidate = const_cast<Player*>(candidateConst);
+                if (!candidate || !candidate->IsAlive() || !candidate->IsInWorld() || candidate->GetMap() != me->GetMap()
+                    || !candidate->IsWithinDistInMap(me, 40.0f) || candidate->GetHealth() >= candidate->GetMaxHealth())
+                    continue;
+                if (!lowest || uint64(candidate->GetHealth()) * lowest->GetMaxHealth()
+                    < uint64(lowest->GetHealth()) * candidate->GetMaxHealth())
+                    lowest = candidate;
+            }
+            if (!lowest)
+                return;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(SPELL_PRIMAL_ECHO);
+            if (!spellInfo)
+                return;
+            HealInfo heal(owner, lowest, std::max<uint32>(1, lowest->CountPctFromMaxHealth(5)), spellInfo, SPELL_SCHOOL_MASK_NATURE);
+            owner->HealBySpell(heal);
+        }
+
+        void UpdateAI(uint32 diff) override
+        {
+            Player* owner = Owner();
+            if (!owner || !owner->IsAlive() || !owner->IsInWorld())
+            {
+                me->DespawnOrUnsummon();
+                return;
+            }
+
+            if (_pulseMs > diff)
+            {
+                _pulseMs -= diff;
+                if (_form != FORM_NONE && _form != FORM_TREE && _form != FORM_MOONKIN)
+                    DoMeleeAttackIfReady();
+                return;
+            }
+
+            if (_form == FORM_NONE || _form == FORM_TREE)
+            {
+                Mend(owner);
+                _pulseMs = 2000;
+                return;
+            }
+
+            Unit* target = Enemy(owner);
+            if (!target)
+            {
+                _pulseMs = 500;
+                return;
+            }
+
+            if (_form == FORM_MOONKIN)
+            {
+                me->CastSpell(target, VioletHoldBoons::ResolveRank(5176, owner->GetLevel()), TRIGGERED_FULL_MASK);
+                _pulseMs = 2500;
+                return;
+            }
+
+            if (me->GetVictim() != target)
+                AttackStart(target);
+            DoMeleeAttackIfReady();
+            _pulseMs = 500;
+        }
+
+    private:
+        uint8 _form = FORM_NONE;
+        uint32 _pulseMs = 500;
+    };
+
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        return new npc_violet_hold_primal_echoAI(creature);
+    }
+};
+
 void AddSC_violet_hold_class_boons()
 {
     RegisterSpellScript(spell_vhr_juggernaut);
@@ -375,4 +505,5 @@ void AddSC_violet_hold_class_boons()
     RegisterSpellScript(spell_vhr_frostwalker);
     RegisterSpellScript(spell_vhr_second_coming);
     RegisterSpellScript(spell_vhr_serenity);
+    new npc_violet_hold_primal_echo();
 }

@@ -90,7 +90,7 @@ end
 local TAG = "0xF13000DBCD000123";
 
 local function deal()
-	fire("VHBOON:DEAL:" .. TAG .. "^7^30^1^1^0^Baku^4^Kaelen^7^Ysolde^5");
+	fire("VHBOON:DEAL:" .. TAG .. "^7^30^1^1^0^2^0^Baku^4^Kaelen^7^Ysolde^5");
 	fire("VHBOON:CARD:" .. TAG .. "^1^B^2^0^0^S90231^Boon of Might^+3%^damage done^6^9^255^%^0");
 	fire("VHBOON:CARD:" .. TAG .. "^27^B^3^0^0^S90291^Boon of the Vampire^+3%^of damage dealt returned as health^0^3^30^%^0");
 	fire("VHBOON:CARD:" .. TAG .. "^121^S^4^0^0^S51505^Lava Burst^Learn^Shaman spell, taught at the best rank your level allows.^0^0^0^^1^Kaelen");
@@ -113,6 +113,8 @@ check(take and take.text == "Take" and take.enabled, "Take is enabled for a card
 check(card(1).data.held == 6 and card(1).data.after == 9 and card(1).data.cap == 255, "stacks parsed");
 check(card(206).data.greedCard and not card(1).data.greedCard, "the Greed card is marked");
 check(card(29).data.runWide, "run-wide boon flagged");
+local reroll = button("Second opinion");
+check(reroll and reroll.shown and reroll.enabled and reroll.text == "Second opinion (2)", "Second Opinion button shows its run-wide charges");
 
 npcGuid = "0xf13000dbcd000123";
 events.scripts.OnEvent(events, "GOSSIP_SHOW");
@@ -124,6 +126,15 @@ now = now + 5;
 npcGuid = TAG;
 events.scripts.OnEvent(events, "GOSSIP_SHOW");
 check(gossipClosed == 1, "talking to the broker later, without a new deal, keeps the gossip");
+
+-- spend a run-wide reroll; the server closes this fixed hand and follows it
+-- with a newly dealt one from the same broker.
+reroll.scripts.OnClick(reroll);
+check(lastSent() == "VHBOON:REROLL:" .. TAG .. ":0" and not reroll.enabled, "Second Opinion requests one reroll and waits for the server");
+fire("VHBOON:REROLLED:" .. TAG .. "^Baku");
+check(not frame.shown, "REROLLED closes the obsolete hand");
+deal();
+fire("VHBOON:SHOW:" .. TAG);
 
 -- somebody else's card
 card(121).scripts.OnClick(card(121));
@@ -176,18 +187,18 @@ fire("VHBOON:GONE:" .. TAG);
 check(not frame.shown and #sent == before, "GONE closes the hand quietly");
 
 -- a SHOW without its cards, other prefixes, a different broker's cards
-fire("VHBOON:DEAL:" .. TAG .. "^7^30^0^0^0^Baku^4");
+fire("VHBOON:DEAL:" .. TAG .. "^7^30^0^0^0^0^1^Baku^4");
 fire("VHBOON:SHOW:" .. TAG);
 check(not frame.shown, "an empty hand never shows");
 events.scripts.OnEvent(events, "CHAT_MSG_ADDON", "OTHER", "VHBOON:SHOW:" .. TAG);
 check(not frame.shown, "other prefixes are ignored");
 
--- one button, no side panels
+-- Take and Second Opinion, no side panels
 deal();
 fire("VHBOON:SHOW:" .. TAG);
 local buttons = 0;
 for _, f in ipairs(frames) do if f.template == "UIPanelButtonTemplate" then buttons = buttons + 1 end end
-check(buttons == 1, "a single Take button (got " .. buttons .. ")");
+check(buttons == 2, "Take and Second Opinion are the only buttons (got " .. buttons .. ")");
 events.scripts.OnEvent(events, "PLAYER_ENTERING_WORLD");
 check(not frame.shown, "leaving the Hold puts the hand away");
 

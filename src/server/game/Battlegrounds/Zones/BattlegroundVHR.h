@@ -18,7 +18,9 @@
  * Diminished clones, so a small party faces the same forty bodies as a full
  * one without facing forty of itself. Past the champion the horde thins out
  * a wave at a time, and the final wave has none - every clone in it is at
- * full power.
+ * full power. Experimental personal-broker mode instead leaves part of the
+ * horde Diminished for small parties and reaches all forty full-power clones
+ * only at ten players.
  *
  * Wave BG_VHR_MIDBOSS_WAVE is a champion: one oversized clone with a party's
  * worth of health, extra damage and crowd-control resistance, walking out with
@@ -65,6 +67,7 @@
 #include "Position.h"
 #include "VioletHoldBoons.h"
 
+#include <bitset>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -159,8 +162,12 @@ enum BG_VHR_Creatures
     // with room for a couple of waves to go untouched before it fills - and
     // for the BG_VHR_FINALE_BROKERS drop before the last wave on top of that.
     BG_VHR_CREATURE_BOON_BROKER_1  = 0,
-    BG_VHR_CREATURE_BOON_BROKER_MAX = 32,
-    BG_VHR_CREATURE_MAX            = 32
+    BG_VHR_SHARED_BOON_BROKER_MAX  = 32,
+    // Personal-broker mode can have ten players' two ordinary brokers, plus
+    // one Hoarder and one Crucible broker apiece. Keep a little failure room
+    // above that; the previous wave's personal brokers are expired first.
+    BG_VHR_CREATURE_BOON_BROKER_MAX = 64,
+    BG_VHR_CREATURE_MAX            = 64
 };
 
 enum BG_VHR_Constants
@@ -590,16 +597,35 @@ public:
     // between waves.
     bool IsWaveLive() const { return _waveState == WaveState::Fighting; }
 
-    // --- run-wide boons ----------------------------------------------------
-    // Greed: every broker rolled from now on shows this many extra options.
-    uint8 GetBrokerBonusOffers() const { return _brokerBonusOffers; }
-    void AddBrokerBonusOffers(uint8 count);
-    // Hoarder: this many brokers more than runes after every wave from now on.
-    uint8 GetBonusBrokersPerWave() const { return _bonusBrokersPerWave; }
-    void AddBonusBrokersPerWave(uint8 count);
+    // --- broker/run-wide boons --------------------------------------------
+    // Greed: every shared broker, or only the holder's personal brokers,
+    // rolled from now on shows this many extra options.
+    uint8 GetBrokerBonusOffers(Player const* player = nullptr) const;
+    void AddBrokerBonusOffers(Player* player, uint8 count);
+    // Hoarder: this many shared brokers, or private brokers for the holder,
+    // after every wave from now on.
+    uint8 GetBonusBrokersPerWave(Player const* player = nullptr) const;
+    void AddBonusBrokersPerWave(Player* player, uint8 count);
     // Abundance: this many runes more after every wave from now on.
     uint8 GetBonusRunesPerWave() const { return _bonusRunesPerWave; }
     void AddBonusRunesPerWave(uint8 count);
+    // Second Opinion: three run-wide rerolls in legacy mode, personal rerolls
+    // in personal-broker mode. Only the broker being asked changes its hand.
+    uint8 GetSecondOpinionCharges(Player const* player = nullptr) const;
+    void AddSecondOpinionCharges(Player* player, uint8 count);
+    bool SpendSecondOpinion(Player const* player);
+    // Crucible: after a deathless clear, one extra broker in that reward drop
+    // rolls only ordinary common boons (weight >= 8).
+    bool HasCrucible(Player const* player = nullptr) const;
+    void EnableCrucible(Player* player);
+    bool IsCommonOnlyBroker(ObjectGuid guid) const { return _commonOnlyBrokers.find(guid) != _commonOnlyBrokers.end(); }
+
+    // The mode is fixed at the first gate opening. A broker without an owner
+    // is one of the legacy shared brokers.
+    bool UsesPersonalBrokers() const { return _personalBrokerMode; }
+    uint32 GetExtraPlayerPhaseMask(Player const* player) const override;
+    ObjectGuid GetBoonBrokerOwner(ObjectGuid brokerGuid) const;
+    bool MayUseBoonBroker(Player const* player, ObjectGuid brokerGuid) const;
 
     // Fellowship. RequestAlly queues one; the driver polls the queue, and on
     // success calls NotifyAllySpawned. A request that cannot be met right now
@@ -614,14 +640,14 @@ public:
 
     // Boons only one member of a run may ever take (VioletHoldBoons::
     // IsRunUnique), by Boon index. Claimed when taken; never released.
-    bool IsRunUniqueBoonClaimed(uint8 boonIndex) const { return boonIndex < 64 && (_claimedRunUniqueBoons & (uint64(1) << boonIndex)); }
+    bool IsRunUniqueBoonClaimed(uint8 boonIndex) const { return boonIndex < _claimedRunUniqueBoons.size() && _claimedRunUniqueBoons.test(boonIndex); }
     // Once-per-wave class boons (VioletHoldClassBoons: Ancestors, Wellspring):
     // true the first time `guid` spends boon `boonSpellId` this wave.
     bool ClaimOncePerWave(uint32 boonSpellId, ObjectGuid guid) { return _oncePerWave[boonSpellId].insert(guid).second; }
     // Per-wave tallies (Boon of Atonement's heals): adds one and returns the
     // new count. Cleared with the once-per-wave claims.
     uint32 CountPerWave(uint32 boonSpellId, ObjectGuid guid) { return ++_perWaveCounts[boonSpellId][guid]; }
-    void ClaimRunUniqueBoon(uint8 boonIndex) { if (boonIndex < 64) _claimedRunUniqueBoons |= uint64(1) << boonIndex; }
+    void ClaimRunUniqueBoon(uint8 boonIndex) { if (boonIndex < _claimedRunUniqueBoons.size()) _claimedRunUniqueBoons.set(boonIndex); }
     std::vector<VhrAllyRequest> const& GetPendingAllyRequests() const { return _allyRequests; }
     // Fellowship's own requests and allies only - the reflections are not its.
     uint32 GetPendingAllyRequestCount() const;
@@ -799,7 +825,11 @@ private:
     // standing. Also collects the standing brokers' positions so a new drop
     // keeps its distance from them.
     uint32 FindFreeBoonBrokerSlot(std::vector<Position>& occupied) const;
-    bool SpawnBoonBroker(uint32 slot, Position const& spot);
+    bool SpawnBoonBroker(uint32 slot, Position const& spot, bool commonOnly = false,
+        ObjectGuid ownerGuid = ObjectGuid::Empty);
+    void DespawnAllBoonBrokers();
+    uint32 EnsurePersonalBrokerPhase(Player* player);
+    void ApplyPersonalBrokerDifficulty(Player* enemy);
 
     uint32 GetHonorRewardForRun() const;
     void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;
@@ -865,6 +895,14 @@ private:
     uint8 _brokerBonusOffers;
     uint8 _bonusBrokersPerWave;
     uint8 _bonusRunesPerWave = 0;
+    uint8 _secondOpinionCharges = 0;
+    bool _hasCrucible = false;
+    bool _humanDiedThisWave = false;
+    GuidSet _commonOnlyBrokers;
+    bool _personalBrokerMode = false;
+    std::unordered_map<ObjectGuid, ObjectGuid> _brokerOwners;
+    std::unordered_map<ObjectGuid, uint32> _personalBrokerPhases;
+    std::unordered_map<ObjectGuid, uint8> _personalSecondOpinionCharges;
     // Fraction of a boon broker a big party has banked toward its next extra
     // one (Centurion.VioletHold.BrokersPerExtraPlayer).
     float _bigPartyBrokerCarry = 0.0f;
@@ -877,7 +915,7 @@ private:
     GuidSet _fleetingAllies;
     std::vector<ObjectGuid> _alliesToDismiss;
     // Run-unique boons already taken (bit = Boon index).
-    uint64 _claimedRunUniqueBoons = 0;
+    std::bitset<static_cast<std::size_t>(VioletHoldBoons::Boon::Max)> _claimedRunUniqueBoons;
     // Boon of Multitudes copies called this wave (MULTITUDES_MAX_PER_WAVE).
     uint32 _multitudesThisWave = 0;
     // Once-per-wave class boons (Ancestors, Wellspring): boon spell -> who

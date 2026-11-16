@@ -65,6 +65,7 @@
 #include <vector>
 
 class BattlegroundVHR;
+class HealInfo;
 class Player;
 class SpellInfo;
 class Unit;
@@ -186,6 +187,12 @@ namespace VioletHoldBoons
         Wildcaller,     // druid: each form you shift into gives the party its own buff
         SpiritLink,     // priest: every 2 sec the health of allies near you is evened out
         Windlord,       // shaman: Windfury Weapon and Windfury Totem always proc
+
+        // 2026-11-16.
+        Overflow,       // healers: 25% of overhealing jumps to the lowest-health nearby ally
+        SecondOpinion,  // RUN-WIDE, unique: three whole-hand broker rerolls
+        Crucible,       // RUN-WIDE, unique: a deathless clear calls a common-only broker
+        PrimalEcho,     // druid artifact: shifting leaves the previous form beside you for 12 sec
 
         Max
     };
@@ -362,6 +369,11 @@ namespace VioletHoldBoons
         SPELL_BOON_WILDCALLER    = 94395,
         SPELL_BOON_SPIRIT_LINK   = 94400,
         SPELL_BOON_WINDLORD      = 94401,
+
+        SPELL_BOON_OVERFLOW       = 94402,
+        SPELL_BOON_SECOND_OPINION = 94403,
+        SPELL_BOON_CRUCIBLE       = 94404,
+        SPELL_BOON_PRIMAL_ECHO    = 94405,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -590,7 +602,8 @@ namespace VioletHoldBoons
     // `count` distinct offers (OFFERS_PER_BROKER plus the run's Greed bonus)
     // that at least one member of `roster` (the run's human team) could take.
     // Fewer if the pool has run dry.
-    TC_GAME_API std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count = OFFERS_PER_BROKER);
+    TC_GAME_API std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count = OFFERS_PER_BROKER,
+        bool commonBoonsOnly = false);
 
     // Apply one pick. Ok on success; otherwise nothing changed.
     TC_GAME_API PickResult Take(Player* player, Offer offer);
@@ -635,6 +648,11 @@ namespace VioletHoldBoons
     // is paid against the real level (BattlegroundVHR::EndBattleground calls
     // this just before paying). Idempotent.
     TC_GAME_API void ReturnBorrowedLevels(Player* player);
+
+    // Boon of Overflow: after a heal lands, turn 25% of its overheal into a
+    // heal on the lowest-health living party member within 40 yd. The helper
+    // heal is logged under the boon spell and cannot overflow again.
+    TC_GAME_API void ShareOverflow(HealInfo const& healInfo);
 
     // Destroy one broker-granted weapon by its item low guid (cache marker
     // slot content). False if the character no longer has it.

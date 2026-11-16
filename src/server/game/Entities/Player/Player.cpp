@@ -26189,7 +26189,11 @@ void Player::SetPhaseMask(uint32 newPhaseMask, bool update)
     // are given (Centurion.Tournament.PhaseMask), so the NPCs spawned there
     // stay theirs through phase auras, GM mode and back.
     if (newPhaseMask != uint32(PHASEMASK_ANYWHERE))
+    {
         newPhaseMask |= Tournament::GetExtraPhaseMask(this);
+        if (Battleground const* battleground = GetBattleground())
+            newPhaseMask |= battleground->GetExtraPlayerPhaseMask(this);
+    }
 
     if (newPhaseMask == GetPhaseMask())
         return;

@@ -7977,6 +7977,10 @@ void Unit::SetCharm(Unit* charm, bool apply)
 
     if (gain)
         healInfo.SetEffectiveHeal(gain > 0 ? static_cast<uint32>(gain) : 0UL);
+
+    // Violet Hold Boon of Overflow: this must see the post-absorb heal and
+    // the actual health gained, so it runs after EffectiveHeal is final.
+    VioletHoldBoons::ShareOverflow(healInfo);
 }
 
 bool Unit::IsMagnet() const

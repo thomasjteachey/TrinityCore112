@@ -6759,6 +6759,16 @@ Centurion.Marks.HonorCostMultiplier = 0
 #                     Live: `.reload config` applies to the next wave clear.
 #        Default:     0.05
 #                     0    - (Off: one broker per three players, as before)
+#
+#    Centurion.VioletHold.PersonalBrokers
+#        Description: Experimental Violet Hold economy and party scaling. Each player gets
+#                     two owner-only brokers after every cleared wave; Greed, Hoarder,
+#                     Second Opinion and Crucible apply only to their holder. Multiplayer
+#                     waves gain progressive damage and durability, while small parties keep
+#                     some Diminished enemies through the final wave. The value is captured
+#                     when a run starts; `.reload config` applies to the next run.
+#        Default:     0 - (Shared brokers and the original difficulty curve)
+#                     1 - (Two private brokers per player and scaled multiplayer waves)
 
 Centurion.VioletHold.PrepSeconds = 30
 Centurion.VioletHold.CountdownFromSeconds = 15
@@ -6769,6 +6779,7 @@ Centurion.VioletHold.CopiesInheritBoons = 0
 Centurion.VioletHold.MenagerieTrace = 0
 Centurion.VioletHold.ExperienceMultiplier = 1.5
 Centurion.VioletHold.BrokersPerExtraPlayer = 0.05
+Centurion.VioletHold.PersonalBrokers = 0
 
 ###############################################################################
 

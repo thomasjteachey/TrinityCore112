@@ -6,7 +6,7 @@
 -- closes that menu. Without this addon the gossip list works as it always did.
 -- Fields are split on '^'; <broker> is the broker's guid as UnitGUID writes it.
 --
---    VHBOON:DEAL:<broker>^<wave>^<final wave>^<greed>^<abundance>^<hoarder>[^<name>^<class id>]...
+--    VHBOON:DEAL:<broker>^<wave>^<final wave>^<greed>^<abundance>^<hoarder>^<second opinions>^<common only>[^<name>^<class id>]...
 --    VHBOON:CARD:<broker>^<code>^<B|S|I>^<tier 1-6>^<run-wide>^<greed card>^<S<spell>|I<item>>
 --                ^<name>^<headline>^<text>^<held>^<after>^<cap>^<unit>^<status>[^<who can take it>]...
 --    VHBOON:DECK:<broker>[^<tier>^<name>^<value>]...
@@ -14,10 +14,11 @@
 --    VHBOON:LOOK:<broker>^<name>^<code>         (999 = looking at nothing)
 --    VHBOON:TAKEN:<broker>^<name>^<code>
 --    VHBOON:GONE:<broker>
+--    VHBOON:REROLLED:<broker>^<name>
 --
 -- and the addon answers on CCGAMEREQ, whispering itself:
 --
---    VHBOON:PICK:<broker>:<code>     VHBOON:LOOK:<broker>:<code>
+--    VHBOON:PICK:<broker>:<code>     VHBOON:LOOK:<broker>:<code>     VHBOON:REROLL:<broker>:0
 --
 -- The hand is shared: the party sees the same cards, and the first one anybody
 -- takes ends the deal. <status> is the server's PickResult for this character.
@@ -374,7 +375,17 @@ end
 local take = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate");
 take:SetWidth(120);
 take:SetHeight(22);
-take:SetPoint("BOTTOM", frame, "BOTTOM", 0, PAD);
+take:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", PAD, PAD);
+
+local reroll = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate");
+reroll:SetWidth(150);
+reroll:SetHeight(22);
+reroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, PAD);
+reroll:SetScript("OnClick", function()
+	if ( not draft or draft.taken or (draft.secondOpinions or 0) < 1 ) then return; end
+	reroll:Disable();
+	Request("REROLL", 0);
+end);
 
 -- Taking a card ends the deal: the hand goes the moment you pick.
 Take = function()
@@ -398,7 +409,7 @@ Refresh = function()
 	local room = (UIParent:GetWidth() or width) - 40;
 	frame:SetScale(width > room and room / width or 1);
 
-	waveText:SetText(string.format("Wave %d / %d", draft.wave, draft.final));
+	waveText:SetText(string.format("Wave %d / %d%s", draft.wave, draft.final, draft.commonOnly and "  |cffb9b6c4Common only|r" or ""));
 
 	for i, card in ipairs(draft.cards) do
 		DrawCard(cards[i] or MakeCard(i), card, i, count);
@@ -413,6 +424,14 @@ Refresh = function()
 		take:SetText((card.status == 1 and #card.owners > 0) and (card.owners[1] .. " only")
 			or STATUS_TEXT[card.status] or STATUS_TEXT[8]);
 		take:Disable();
+	end
+
+	if ( (draft.secondOpinions or 0) > 0 ) then
+		reroll:SetText(string.format("Second opinion (%d)", draft.secondOpinions));
+		reroll:Enable();
+		reroll:Show();
+	else
+		reroll:Hide();
 	end
 end
 
@@ -462,9 +481,10 @@ function handlers.DEAL(f)
 	pending = {
 		tag = f[1], wave = tonumber(f[2]) or 0, final = tonumber(f[3]) or 0,
 		greed = tonumber(f[4]) or 0, abundance = tonumber(f[5]) or 0, hoarder = tonumber(f[6]) or 0,
+		secondOpinions = tonumber(f[7]) or 0, commonOnly = f[8] == "1",
 		party = {}, classOf = {}, cards = {}, deck = {}, looks = {},
 	};
-	for i = 7, #f - 1, 2 do
+	for i = 9, #f - 1, 2 do
 		local member = { name = f[i], class = tonumber(f[i + 1]) };
 		pending.party[#pending.party + 1] = member;
 		pending.classOf[member.name] = member.class;
@@ -523,6 +543,13 @@ function handlers.GONE(f)
 	end
 end
 
+function handlers.REROLLED(f)
+	if ( draft and SameGuid(draft.tag, f[1]) ) then
+		draft.taken = { name = f[2] or "", code = -1 };
+		frame:Hide();
+	end
+end
+
 local events = CreateFrame("Frame");
 events:RegisterEvent("CHAT_MSG_ADDON");
 events:RegisterEvent("GOSSIP_SHOW");
@@ -558,7 +585,7 @@ local function Demo()
 	for id, token in pairs(CLASS_TOKEN) do if ( token == classToken ) then myClass = id; end end
 	demo = true;
 	Show({
-		tag = "demo", wave = 7, final = 30, greed = 1, abundance = 1, hoarder = 0,
+		tag = "demo", wave = 7, final = 30, greed = 1, abundance = 1, hoarder = 0, secondOpinions = 2, commonOnly = false,
 		party = { { name = me, class = myClass }, { name = "Kaelen", class = 7 }, { name = "Ysolde", class = 5 } },
 		classOf = { [me] = myClass, Kaelen = 7, Ysolde = 5 },
 		looks = { Ysolde = 1, Kaelen = 108 },

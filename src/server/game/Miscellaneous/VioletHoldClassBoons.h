@@ -118,6 +118,7 @@ namespace VioletHoldClassBoons
         SPELL_OWL_CHOIR         = 94399,   // moonkin look + 50% Echoes, 8 sec (spell_vhr_boon_echoes)
         SPELL_SPIRIT_LINK       = 94400,   // priest record (was the shaman's until 2026-11-15)
         SPELL_WINDLORD          = 94401,   // shaman record
+        SPELL_PRIMAL_ECHO       = 94405,   // druid record
         SPELL_WINDFURY_WEAPON_PASSIVE = 33757,
         SPELL_ROGUE_EVASION     = 5277,
 
@@ -259,6 +260,9 @@ namespace VioletHoldClassBoons
     constexpr float WILDCALLER_RANGE        = 40.0f;
     constexpr uint32 WILDCALLER_MANA_CUT_PCT = 25;
     constexpr float SPIRIT_LINK_RADIUS      = 20.0f;
+    constexpr uint32 NPC_PRIMAL_ECHO         = 900119;
+    constexpr uint32 PRIMAL_ECHO_DURATION_MS = 12000;
+    constexpr uint32 DATA_PRIMAL_ECHO_FORM   = 1;
 
     // Spell::_cast, a cast the caster chose (not triggered): Aegis spreads
     // Divine Shield's bubble.
@@ -276,7 +280,7 @@ namespace VioletHoldClassBoons
     TC_GAME_API void UpdateRun(BattlegroundVHR* run, uint32 tick);
     // Wildcaller: the druid just came back to caster form
     // (AuraEffect::HandleAuraModShapeshift, the last form gone).
-    TC_GAME_API void OnCasterForm(Unit* target);
+    TC_GAME_API void OnCasterForm(Unit* target, uint8 previousForm);
     // SpellInfo::CalcPowerCost, mana spells: Wildcaller's caster-form rally.
     TC_GAME_API int32 ModManaCost(Unit const* caster, int32 cost);
     // Windlord: Windfury Weapon's proc (Aura::CalcProcChance; its 3 sec

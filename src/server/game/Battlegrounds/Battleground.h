@@ -1055,6 +1055,10 @@ class TC_GAME_API Battleground
         // WorldObject::CanSeeOrDetect: true when this battleground hides `target`
         // from `seer` (Summoner's Rift brush). Cheap and side-effect free.
         virtual bool HidesFrom(Player const* /*target*/, WorldObject const* /*seer*/) const { return false; }
+        // Private battleground furniture may reserve an additional visibility
+        // phase for a player. Player::SetPhaseMask keeps it through phase aura
+        // refreshes and GM-mode transitions while the player remains inside.
+        virtual uint32 GetExtraPlayerPhaseMask(Player const* /*player*/) const { return 0; }
 
         // since arenas can be AvA or Hvh, we have to get the "temporary" team of a player
         uint32 GetPlayerTeam(ObjectGuid guid) const;

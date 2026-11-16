@@ -191,6 +191,9 @@ BattlegroundVHR::BattlegroundVHR()
     _hasPendingRequest = false;
     _brokerBonusOffers = 0;
     _bonusBrokersPerWave = 0;
+    _secondOpinionCharges = 0;
+    _hasCrucible = false;
+    _humanDiedThisWave = false;
     _nextAllyRequestId = 0;
     _allyRetryMs = 0;
 }
@@ -210,6 +213,12 @@ void BattlegroundVHR::AddPlayer(Player* player)
     }
 
     Battleground::AddPlayer(player);
+
+    // Relogging into a personal-broker run restores the private visibility bit
+    // that was deliberately kept in the run's map while the character was
+    // offline.
+    if (_personalBrokerMode && player->GetBGTeam() == _humanTeam)
+        EnsurePersonalBrokerPhase(player);
 
     if (!isInBattleground)
     {
@@ -271,6 +280,12 @@ void BattlegroundVHR::RemovePlayer(Player* player, ObjectGuid guid, uint32 team)
         WorldSession const* session = player->GetSession();
         if (!session || !session->PlayerLogout())
         {
+            if (auto itr = _personalBrokerPhases.find(guid); itr != _personalBrokerPhases.end())
+            {
+                uint32 const phase = itr->second;
+                _personalBrokerPhases.erase(itr);
+                player->SetPhaseMask(player->GetPhaseMask() & ~phase, true);
+            }
             VioletHoldBars::Restore(player);
             if (team == _humanTeam)
                 VioletHoldBoons::StripAll(player);
@@ -303,6 +318,14 @@ void BattlegroundVHR::Reset()
     _brokerBonusOffers = 0;
     _bonusBrokersPerWave = 0;
     _bonusRunesPerWave = 0;
+    _secondOpinionCharges = 0;
+    _hasCrucible = false;
+    _humanDiedThisWave = false;
+    _commonOnlyBrokers.clear();
+    _personalBrokerMode = false;
+    _brokerOwners.clear();
+    _personalBrokerPhases.clear();
+    _personalSecondOpinionCharges.clear();
     _bigPartyBrokerCarry = 0.0f;
     _allyRequests.clear();
     _nextAllyRequestId = 0;
@@ -310,7 +333,7 @@ void BattlegroundVHR::Reset()
     _allies.clear();
     _fleetingAllies.clear();
     _alliesToDismiss.clear();
-    _claimedRunUniqueBoons = 0;
+    _claimedRunUniqueBoons.reset();
     _multitudesThisWave = 0;
     _oncePerWave.clear();
     _perWaveCounts.clear();
@@ -378,6 +401,12 @@ void BattlegroundVHR::StartingEventOpenDoors()
     _partySize = CountAliveHumans();
     if (!_partySize)
         _partySize = 1;
+
+    _personalBrokerMode = sWorld->getBoolConfig(CONFIG_CENTURION_VHR_PERSONAL_BROKERS);
+    if (_personalBrokerMode)
+        for (ObjectGuid guid : GetHumanRoster(false))
+            if (Player* player = ObjectAccessor::FindPlayer(guid))
+                EnsurePersonalBrokerPhase(player);
 
     BeginWave();
 }
@@ -448,8 +477,10 @@ uint32 BattlegroundVHR::GetFullPowerCountForWave(uint32 wave) const
 {
     uint32 const enemies = GetEnemyCountForWave(wave);
 
-    // The final wave is everything the run has been building to: no horde.
-    if (wave >= BG_VHR_FINAL_WAVE)
+    // The legacy curve ends with no horde at all. Personal-broker mode keeps
+    // part of the final horde Diminished for small parties: thirty full-power
+    // enemies solo, rising smoothly to all forty for a full ten-player party.
+    if (wave >= BG_VHR_FINAL_WAVE && !_personalBrokerMode)
         return enemies;
 
     // The champion, then half its escort (rounded up) at full power; the
@@ -474,7 +505,14 @@ uint32 BattlegroundVHR::GetFullPowerCountForWave(uint32 wave) const
         return budget;
     uint32 const climbWaves = BG_VHR_FINAL_WAVE - BG_VHR_QUARTER_RAMP_LAST_WAVE;
     uint32 const climbed = wave - BG_VHR_QUARTER_RAMP_LAST_WAVE;
-    return budget + ((enemies - budget) * climbed + climbWaves - 1) / climbWaves;
+    uint32 target = enemies;
+    if (_personalBrokerMode)
+    {
+        uint32 const players = std::clamp<uint32>(_partySize, 1, 10);
+        uint32 const finalFullPower = 30 + ((players - 1) * 10 + 8) / 9;
+        target = std::min(enemies, std::max(budget, finalFullPower));
+    }
+    return std::min(enemies, budget + ((target - budget) * climbed + climbWaves - 1) / climbWaves);
 }
 
 uint8 BattlegroundVHR::GetHordeCloneStacks()
@@ -508,6 +546,7 @@ void BattlegroundVHR::BeginWave()
     }
 
     _waveNumber = nextWave;
+    _humanDiedThisWave = false;
     _waveEnemies.clear();
     _waveCloneSources.clear();
     _championGuid.Clear();
@@ -902,6 +941,61 @@ void BattlegroundVHR::EmpowerChampion(Player* champion)
     atLeast(VioletHoldBoons::SPELL_BOON_CC_DURATION, BG_VHR_CHAMPION_RESOLVE);
 }
 
+void BattlegroundVHR::ApplyPersonalBrokerDifficulty(Player* enemy)
+{
+    if (!enemy || !_personalBrokerMode || !_waveNumber || _partySize <= 1)
+        return;
+
+    // Two picks per player per clear make power accumulate with depth. Add no
+    // surcharge on wave one, then reach approximately +6% health and +3%
+    // damage per extra player on wave 25. Reinforced supplies health in 5%
+    // Stamina steps, rounded up.
+    uint32 const extraPlayers = _partySize - 1;
+    uint32 const depth = std::min<uint32>(_waveNumber - 1, BG_VHR_FINAL_WAVE - 1);
+    uint32 const span = BG_VHR_FINAL_WAVE - 1;
+    uint32 const healthBonus = (extraPlayers * depth * 6 + span - 1) / span;
+    uint32 const reinforcedStacks = (healthBonus + 4) / 5;
+    uint32 const damageBonus = (extraPlayers * depth * 3 + span - 1) / span;
+
+    uint32 baseDamage = 0;
+    if (sWorld->getBoolConfig(CONFIG_CENTURION_VHR_COPIES_INHERIT_BOONS))
+        for (auto const& [cloneGuid, sourceGuid] : _waveCloneSources)
+            if (cloneGuid == enemy->GetGUID())
+            {
+                if (Player const* source = ObjectAccessor::FindPlayer(sourceGuid))
+                {
+                    baseDamage = VioletHoldBoons::GetStacks(source, VioletHoldBoons::Boon::Damage);
+                }
+                break;
+            }
+
+    auto setStacks = [enemy](uint32 spellId, uint32 stacks)
+    {
+        if (!stacks)
+            return;
+        Aura* aura = enemy->GetAura(spellId);
+        if (!aura)
+            aura = enemy->AddAura(spellId, enemy);
+        if (aura)
+            aura->SetStackAmount(uint8(std::min<uint32>(stacks, 255)));
+    };
+
+    if (reinforcedStacks)
+    {
+        Aura* reinforced = enemy->GetAura(BG_VHR_SPELL_REINFORCED);
+        bool const newlyApplied = !reinforced;
+        if (!reinforced)
+            reinforced = enemy->AddAura(BG_VHR_SPELL_REINFORCED, enemy);
+        if (reinforced && reinforced->GetStackAmount() < reinforcedStacks)
+            reinforced->SetStackAmount(uint8(std::min<uint32>(reinforcedStacks, 255)));
+        // Adding percentage Stamina raises maximum health but not current
+        // health. This first application happens behind the closed gates.
+        if (reinforced && newlyApplied)
+            enemy->SetFullHealth();
+    }
+    setStacks(VioletHoldBoons::SPELL_BOON_DAMAGE, baseDamage + damageBonus);
+}
+
 void BattlegroundVHR::NotifyCloneSeated(uint32 waveNumber, uint32 slot, ObjectGuid cloneGuid)
 {
     // Only the wave still being seated; a load answering for a wave that has
@@ -1092,23 +1186,29 @@ void BattlegroundVHR::NotifyCloneSource(ObjectGuid cloneGuid, ObjectGuid sourceG
 
 void BattlegroundVHR::RefreshWaveBoonCopies(ObjectGuid onlyClone)
 {
-    if (!sWorld->getBoolConfig(CONFIG_CENTURION_VHR_COPIES_INHERIT_BOONS))
-        return;
+    if (sWorld->getBoolConfig(CONFIG_CENTURION_VHR_COPIES_INHERIT_BOONS))
+        for (auto const& [cloneGuid, sourceGuid] : _waveCloneSources)
+        {
+            if (onlyClone && cloneGuid != onlyClone)
+                continue;
 
-    for (auto const& [cloneGuid, sourceGuid] : _waveCloneSources)
-    {
-        if (onlyClone && cloneGuid != onlyClone)
-            continue;
+            Player* clone = ObjectAccessor::FindPlayer(cloneGuid);
+            Player const* source = ObjectAccessor::FindPlayer(sourceGuid);
+            if (!clone || !source || !clone->IsInWorld() || !clone->IsAlive())
+                continue;
 
-        Player* clone = ObjectAccessor::FindPlayer(cloneGuid);
-        Player const* source = ObjectAccessor::FindPlayer(sourceGuid);
-        if (!clone || !source || !clone->IsInWorld() || !clone->IsAlive())
-            continue;
+            VioletHoldBoons::CopyBoonsTo(source, clone);
+            if (cloneGuid == _championGuid)
+                EmpowerChampion(clone);
+        }
 
-        VioletHoldBoons::CopyBoonsTo(source, clone);
-        if (cloneGuid == _championGuid)
-            EmpowerChampion(clone);
-    }
+    // CopyBoonsTo can replace the Might stack count, so the
+    // experiment's party-size surcharge is always the last layer applied.
+    if (_personalBrokerMode)
+        for (ObjectGuid cloneGuid : _waveEnemies)
+            if ((!onlyClone || cloneGuid == onlyClone) && cloneGuid != _championGuid)
+                if (Player* clone = ObjectAccessor::FindPlayer(cloneGuid))
+                    ApplyPersonalBrokerDifficulty(clone);
 }
 
 bool BattlegroundVHR::OwnsPreparationState(Player const* player) const
@@ -1417,6 +1517,11 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
     // the slots are free and the party never banks two waves' worth. Standing
     // boon brokers are NOT touched - they wait for a taker.
     DespawnWaveRewardBuffs();
+    // Personal offers last for one reward interval. This bounds the physical
+    // broker count at four per player (base two, Hoarder and Crucible) and
+    // gives every clear a fresh pair even when somebody ignored the last one.
+    if (_personalBrokerMode)
+        DespawnAllBoonBrokers();
 
     if (!wanted)
         return 0;
@@ -1538,27 +1643,75 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
         brokersWanted = std::max<uint32>(brokersWanted, BG_VHR_FINALE_BROKERS);
 
     uint32 brokersSpawned = 0;
-    for (uint32 i = 0; i < brokersWanted && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
+    if (_personalBrokerMode)
+    {
+        std::vector<Player const*> roster;
+        CollectHumanPlayers(roster);
+        for (Player const* ownerConst : roster)
+        {
+            Player* owner = const_cast<Player*>(ownerConst);
+            if (!owner || !EnsurePersonalBrokerPhase(owner))
+                continue;
+
+            // Other players' brokers are in disjoint phases and may stand in
+            // the same spots. Runes remain in the placement exclusion set.
+            std::vector<Position> ownerPlaced = placed;
+            uint32 const ordinary = 2u + GetBonusBrokersPerWave(owner);
+            uint32 const common = HasCrucible(owner) && !_humanDiedThisWave ? 1u : 0u;
+            for (uint32 i = 0; i < ordinary + common && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
+            {
+                Position spot;
+                if (!PickBuffPosition(ownerPlaced, spot))
+                    break;
+                if (!SpawnBoonBroker(brokerSlot, spot, i >= ordinary, owner->GetGUID()))
+                    break;
+
+                ownerPlaced.push_back(spot);
+                ++brokersSpawned;
+                std::vector<Position> ignored;
+                brokerSlot = FindFreeBoonBrokerSlot(ignored);
+            }
+        }
+    }
+    else
+        for (uint32 i = 0; i < brokersWanted && brokerSlot < BG_VHR_SHARED_BOON_BROKER_MAX; ++i)
+        {
+            Position spot;
+            if (!PickBuffPosition(placed, spot))
+                break;
+
+            if (!SpawnBoonBroker(brokerSlot, spot))
+                break;
+
+            placed.push_back(spot);
+            ++brokersSpawned;
+
+            std::vector<Position> ignored;
+            brokerSlot = FindFreeBoonBrokerSlot(ignored);
+        }
+
+    // Crucible pays for the wave just cleared, and only if the whole party
+    // made it through without a death. This broker is otherwise ordinary: it
+    // waits indefinitely and is consumed by one pick. Its AI asks the run for
+    // this tag and rolls only weight-8-or-higher boons.
+    if (!_personalBrokerMode && _hasCrucible && !_humanDiedThisWave && brokerSlot < BG_VHR_SHARED_BOON_BROKER_MAX)
     {
         Position spot;
-        if (!PickBuffPosition(placed, spot))
-            break;
-
-        if (!SpawnBoonBroker(brokerSlot, spot))
-            break;
-
-        placed.push_back(spot);
-        ++brokersSpawned;
-
-        std::vector<Position> ignored;
-        brokerSlot = FindFreeBoonBrokerSlot(ignored);
+        if (PickBuffPosition(placed, spot) && SpawnBoonBroker(brokerSlot, spot, true))
+        {
+            placed.push_back(spot);
+            ++brokersSpawned;
+        }
     }
 
     if (droppedRune)
         _runesOut = true;
 
     SendRuneFeedIfChanged();
-    return brokersSpawned;
+    // The existing warning text is phrased as a number of brokers answering
+    // the party. In personal mode every player sees the same base pair, not
+    // the full instance's invisible population.
+    return _personalBrokerMode ? 2u : brokersSpawned;
 }
 
 void BattlegroundVHR::DespawnWaveRewardBuffs()
@@ -1690,10 +1843,11 @@ void BattlegroundVHR::SendRuneFeedIfChanged()
 
 uint32 BattlegroundVHR::FindFreeBoonBrokerSlot(std::vector<Position>& occupied) const
 {
-    uint32 freeSlot = BG_VHR_CREATURE_BOON_BROKER_MAX;
+    uint32 const limit = _personalBrokerMode ? BG_VHR_CREATURE_BOON_BROKER_MAX : BG_VHR_SHARED_BOON_BROKER_MAX;
+    uint32 freeSlot = limit;
 
     Map* map = FindBgMap();
-    for (uint32 slot = BG_VHR_CREATURE_BOON_BROKER_1; slot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++slot)
+    for (uint32 slot = BG_VHR_CREATURE_BOON_BROKER_1; slot < limit; ++slot)
     {
         Creature const* broker = (map && BgCreatures[slot]) ? map->GetCreature(BgCreatures[slot]) : nullptr;
         if (broker && broker->IsInWorld())
@@ -1702,19 +1856,23 @@ uint32 BattlegroundVHR::FindFreeBoonBrokerSlot(std::vector<Position>& occupied) 
             continue;
         }
 
-        if (freeSlot == BG_VHR_CREATURE_BOON_BROKER_MAX)
+        if (freeSlot == limit)
             freeSlot = slot;
     }
 
     return freeSlot;
 }
 
-bool BattlegroundVHR::SpawnBoonBroker(uint32 slot, Position const& spot)
+bool BattlegroundVHR::SpawnBoonBroker(uint32 slot, Position const& spot, bool commonOnly, ObjectGuid ownerGuid)
 {
     // A stale guid in the slot (creature gone without ConsumeBoonBroker) is
     // just cleared; DelCreature logs if it cannot find it, which is fine.
     if (BgCreatures[slot])
+    {
+        _brokerOwners.erase(BgCreatures[slot]);
+        _commonOnlyBrokers.erase(BgCreatures[slot]);
         DelCreature(slot);
+    }
 
     // Face the middle of the room rather than a random wall.
     Position facing = spot;
@@ -1728,7 +1886,76 @@ bool BattlegroundVHR::SpawnBoonBroker(uint32 slot, Position const& spot)
         return false;
     }
 
+    if (commonOnly)
+        _commonOnlyBrokers.insert(broker->GetGUID());
+    if (ownerGuid)
+    {
+        auto phase = _personalBrokerPhases.find(ownerGuid);
+        if (phase == _personalBrokerPhases.end())
+        {
+            _commonOnlyBrokers.erase(broker->GetGUID());
+            DelCreature(slot);
+            return false;
+        }
+        _brokerOwners[broker->GetGUID()] = ownerGuid;
+        // The broker has only the private bit. Its owner carries normal plus
+        // that bit, so the rest of the battleground remains mutually visible.
+        broker->SetPhaseMask(phase->second, true);
+    }
+
     return true;
+}
+
+void BattlegroundVHR::DespawnAllBoonBrokers()
+{
+    for (uint32 slot = BG_VHR_CREATURE_BOON_BROKER_1; slot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++slot)
+        if (BgCreatures[slot])
+        {
+            ObjectGuid const brokerGuid = BgCreatures[slot];
+            if (ObjectGuid const ownerGuid = GetBoonBrokerOwner(brokerGuid))
+                if (Player* owner = ObjectAccessor::FindPlayer(ownerGuid))
+                    Battleground::SendSquadFeedLine(owner,
+                        Trinity::StringFormat("VHBOON:GONE:0x{:016X}", brokerGuid.GetRawValue()));
+            DelCreature(slot);
+        }
+    _brokerOwners.clear();
+    _commonOnlyBrokers.clear();
+}
+
+uint32 BattlegroundVHR::EnsurePersonalBrokerPhase(Player* player)
+{
+    if (!player || !_personalBrokerMode || player->GetBGTeam() != _humanTeam)
+        return 0;
+
+    auto existing = _personalBrokerPhases.find(player->GetGUID());
+    if (existing != _personalBrokerPhases.end())
+    {
+        if (!(player->GetPhaseMask() & existing->second))
+            player->SetPhaseMask(player->GetPhaseMask() | existing->second, true);
+        return existing->second;
+    }
+
+    uint32 used = PHASEMASK_NORMAL;
+    for (auto const& entry : _personalBrokerPhases)
+        used |= entry.second;
+    for (ObjectGuid guid : GetHumanRoster(false))
+        if (Player const* member = ObjectAccessor::FindPlayer(guid))
+            if (member->GetPhaseMask() != uint32(PHASEMASK_ANYWHERE))
+                used |= member->GetPhaseMask();
+
+    for (int32 bit = 31; bit >= 1; --bit)
+    {
+        uint32 const phase = uint32(1) << bit;
+        if (used & phase)
+            continue;
+        _personalBrokerPhases[player->GetGUID()] = phase;
+        player->SetPhaseMask(player->GetPhaseMask() | phase, true);
+        return phase;
+    }
+
+    TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: no free phase bit for personal brokers owned by {} in instance {}.",
+        player->GetGUID().ToString(), GetInstanceID());
+    return 0;
 }
 
 void BattlegroundVHR::CollectHumanPlayers(std::vector<Player const*>& out) const
@@ -1760,24 +1987,110 @@ void BattlegroundVHR::ConsumeBoonBroker(ObjectGuid brokerGuid)
         if (BgCreatures[slot] != brokerGuid)
             continue;
 
+        _commonOnlyBrokers.erase(brokerGuid);
+        _brokerOwners.erase(brokerGuid);
         DelCreature(slot);
         return;
     }
 }
 
-void BattlegroundVHR::AddBrokerBonusOffers(uint8 count)
+ObjectGuid BattlegroundVHR::GetBoonBrokerOwner(ObjectGuid brokerGuid) const
 {
+    auto itr = _brokerOwners.find(brokerGuid);
+    return itr != _brokerOwners.end() ? itr->second : ObjectGuid::Empty;
+}
+
+uint32 BattlegroundVHR::GetExtraPlayerPhaseMask(Player const* player) const
+{
+    if (!player)
+        return 0;
+    auto itr = _personalBrokerPhases.find(player->GetGUID());
+    return itr != _personalBrokerPhases.end() ? itr->second : 0;
+}
+
+bool BattlegroundVHR::MayUseBoonBroker(Player const* player, ObjectGuid brokerGuid) const
+{
+    if (!player)
+        return false;
+    ObjectGuid const owner = GetBoonBrokerOwner(brokerGuid);
+    return !_personalBrokerMode ? !owner : owner == player->GetGUID();
+}
+
+uint8 BattlegroundVHR::GetBrokerBonusOffers(Player const* player) const
+{
+    return _personalBrokerMode && player ? VioletHoldBoons::GetStacks(player, VioletHoldBoons::Boon::Greed) : _brokerBonusOffers;
+}
+
+void BattlegroundVHR::AddBrokerBonusOffers(Player* /*player*/, uint8 count)
+{
+    if (_personalBrokerMode)
+        return; // the holder's aura is the personal counter
     _brokerBonusOffers = uint8(std::min<uint32>(uint32(_brokerBonusOffers) + count, 250));
 }
 
-void BattlegroundVHR::AddBonusBrokersPerWave(uint8 count)
+uint8 BattlegroundVHR::GetBonusBrokersPerWave(Player const* player) const
 {
-    _bonusBrokersPerWave = uint8(std::min<uint32>(uint32(_bonusBrokersPerWave) + count, BG_VHR_CREATURE_BOON_BROKER_MAX));
+    return _personalBrokerMode && player ? VioletHoldBoons::GetStacks(player, VioletHoldBoons::Boon::Hoarder) : _bonusBrokersPerWave;
+}
+
+void BattlegroundVHR::AddBonusBrokersPerWave(Player* /*player*/, uint8 count)
+{
+    if (_personalBrokerMode)
+        return; // the holder's aura is the personal counter
+    _bonusBrokersPerWave = uint8(std::min<uint32>(uint32(_bonusBrokersPerWave) + count, BG_VHR_SHARED_BOON_BROKER_MAX));
 }
 
 void BattlegroundVHR::AddBonusRunesPerWave(uint8 count)
 {
     _bonusRunesPerWave = uint8(std::min<uint32>(uint32(_bonusRunesPerWave) + count, BG_VHR_MAX_BONUS_RUNES));
+}
+
+uint8 BattlegroundVHR::GetSecondOpinionCharges(Player const* player) const
+{
+    if (_personalBrokerMode && player)
+    {
+        auto itr = _personalSecondOpinionCharges.find(player->GetGUID());
+        return itr != _personalSecondOpinionCharges.end() ? itr->second : 0;
+    }
+    return _secondOpinionCharges;
+}
+
+void BattlegroundVHR::AddSecondOpinionCharges(Player* player, uint8 count)
+{
+    if (_personalBrokerMode && player)
+    {
+        uint8& charges = _personalSecondOpinionCharges[player->GetGUID()];
+        charges = uint8(std::min<uint32>(uint32(charges) + count, 3));
+        return;
+    }
+    _secondOpinionCharges = uint8(std::min<uint32>(uint32(_secondOpinionCharges) + count, 3));
+}
+
+bool BattlegroundVHR::SpendSecondOpinion(Player const* player)
+{
+    if (_personalBrokerMode && player)
+    {
+        auto itr = _personalSecondOpinionCharges.find(player->GetGUID());
+        if (itr == _personalSecondOpinionCharges.end() || !itr->second)
+            return false;
+        --itr->second;
+        return true;
+    }
+    if (!_secondOpinionCharges)
+        return false;
+    --_secondOpinionCharges;
+    return true;
+}
+
+bool BattlegroundVHR::HasCrucible(Player const* player) const
+{
+    return _personalBrokerMode && player ? player->HasAura(VioletHoldBoons::SPELL_BOON_CRUCIBLE) : _hasCrucible;
+}
+
+void BattlegroundVHR::EnableCrucible(Player* /*player*/)
+{
+    if (!_personalBrokerMode)
+        _hasCrucible = true;
 }
 
 void BattlegroundVHR::RequestAlly(Player const* requester)
@@ -2246,6 +2559,7 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
     // living party until the wave is over (CompleteWave takes them back).
     if (victim->GetBGTeam() == _humanTeam)
     {
+        _humanDiedThisWave = true;
         VioletHoldBoons::PassInheritance(this, victim, _inherited);
         // Boon of Vengeance: the fall sends nearby warriors berserk.
         VioletHoldClassBoons::OnAllyDied(victim);

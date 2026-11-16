@@ -1600,6 +1600,10 @@ void World::LoadConfigSettings(bool reload)
     // Diagnostic: log every change in a Menagerie guardian's combat state, and
     // why it would or would not take on its owner's target. Dev realms only.
     m_bool_configs[CONFIG_CENTURION_VHR_MENAGERIE_TRACE] = sConfigMgr->GetBoolDefault("Centurion.VioletHold.MenagerieTrace", false);
+    // Experimental reward/difficulty model. Captured by each Violet Hold run
+    // when its first gates open, so a config reload never changes ownership of
+    // brokers that are already standing in an active match.
+    m_bool_configs[CONFIG_CENTURION_VHR_PERSONAL_BROKERS] = sConfigMgr->GetBoolDefault("Centurion.VioletHold.PersonalBrokers", false);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER] = sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaRewardMultiplier", .2f);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_EXPERIENCE_MULTIPLIER] = std::max(0.0f,
         sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaExperienceMultiplier", .4f));
