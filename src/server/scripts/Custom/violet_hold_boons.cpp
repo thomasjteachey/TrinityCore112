@@ -269,7 +269,7 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
                 switch (info.boon)
                 {
                     case Boon::Greed:        text = "extra option at each of your brokers from now on"; break;
-                    case Boon::Hoarder:      text = "an extra private broker after every wave from now on"; break;
+                    case Boon::Hoarder:      text = "one extra private broker after every wave from now on (up to two)"; break;
                     case Boon::SecondOpinion:text = "three whole-hand rerolls for your brokers this run"; break;
                     case Boon::Crucible:     text = "a deathless wave calls you an extra common-boon broker"; break;
                     default: break;

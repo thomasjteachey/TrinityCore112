@@ -116,7 +116,10 @@ enum BG_VHR_TrinityStrings
     // "Wave %u is the Warchief, %s. %u boon brokers answer the call." - the
     // champion wave when the champion is the weekly honor Warchief's clone
     // (PickWarchief).
-    BG_VHR_STRING_WARCHIEF_NEXT = 20106
+    BG_VHR_STRING_WARCHIEF_NEXT = 20106,
+    // "The Hold grows generous: beginning with wave %u's clear, every player
+    // receives two private boon brokers after each wave."
+    BG_VHR_STRING_SECOND_BROKER = 20107
 };
 
 enum BG_VHR_Objects
@@ -164,10 +167,10 @@ enum BG_VHR_Creatures
     BG_VHR_CREATURE_BOON_BROKER_1  = 0,
     BG_VHR_SHARED_BOON_BROKER_MAX  = 32,
     // Personal brokers remain until picked. At the maximum ten players and
-    // four brokers per player (base two, Hoarder and Crucible), all 24 reward
-    // drops before the final wave need 960 slots. Leave some failure room.
-    BG_VHR_CREATURE_BOON_BROKER_MAX = 1024,
-    BG_VHR_CREATURE_MAX            = 1024
+    // five brokers per player (late-run base two, Hoarder x2 and Crucible),
+    // a whole run can retain 1,250. Leave a little failure room.
+    BG_VHR_CREATURE_BOON_BROKER_MAX = 1280,
+    BG_VHR_CREATURE_MAX            = 1280
 };
 
 enum BG_VHR_Constants

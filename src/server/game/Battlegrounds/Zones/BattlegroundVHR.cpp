@@ -477,9 +477,9 @@ uint32 BattlegroundVHR::GetFullPowerCountForWave(uint32 wave) const
 {
     uint32 const enemies = GetEnemyCountForWave(wave);
 
-    // The legacy curve ends with no horde at all. Personal-broker mode keeps
-    // part of the final horde Diminished for small parties: thirty full-power
-    // enemies solo, rising smoothly to all forty for a full ten-player party.
+    // The legacy curve ends with no horde at all. Personal-broker mode's final
+    // full-power share is configurable at solo and ten players, interpolated
+    // between them for other party sizes.
     if (wave >= BG_VHR_FINAL_WAVE && !_personalBrokerMode)
         return enemies;
 
@@ -509,7 +509,11 @@ uint32 BattlegroundVHR::GetFullPowerCountForWave(uint32 wave) const
     if (_personalBrokerMode)
     {
         uint32 const players = std::clamp<uint32>(_partySize, 1, 10);
-        uint32 const finalFullPower = 30 + ((players - 1) * 10 + 8) / 9;
+        float const soloPercent = sWorld->getFloatConfig(CONFIG_CENTURION_VHR_PERSONAL_FINAL_FULL_POWER_SOLO_PERCENT);
+        float const fullPartyPercent = sWorld->getFloatConfig(CONFIG_CENTURION_VHR_PERSONAL_FINAL_FULL_POWER_FULL_PARTY_PERCENT);
+        float const partyProgress = float(players - 1) / 9.0f;
+        float const finalPercent = soloPercent + (fullPartyPercent - soloPercent) * partyProgress;
+        uint32 const finalFullPower = uint32(std::ceil(float(enemies) * finalPercent / 100.0f));
         target = std::min(enemies, std::max(budget, finalFullPower));
     }
     return std::min(enemies, budget + ((target - budget) * climbed + climbWaves - 1) / climbWaves);
@@ -854,14 +858,22 @@ void BattlegroundVHR::MakeChampion(Player* champion)
 {
     _championGuid = champion->GetGUID();
 
-    // Health: Reinforced is +5% Stamina a stack, so 20 a player puts the
-    // champion at about (party size + 1) times a clone's health.
-    uint32 const reinforced = std::min<uint32>(BG_VHR_CHAMPION_REINFORCED_PER_PLAYER * _partySize, 255);
-    if (Aura* aura = champion->AddAura(BG_VHR_SPELL_REINFORCED, champion))
-        aura->SetStackAmount(uint8(reinforced));
-    else
-        TC_LOG_WARN("bg.battleground", "BattlegroundVHR: could not reinforce champion {} in instance {}.",
-            champion->GetName(), GetInstanceID());
+    // Health: Reinforced is +5% Stamina a stack. Legacy mode keeps the old
+    // 100% per-player champion; personal mode has a separately tunable value
+    // because its one-boon opening reaches this fight with less power.
+    uint32 reinforcedPerPlayer = BG_VHR_CHAMPION_REINFORCED_PER_PLAYER;
+    if (_personalBrokerMode)
+        reinforcedPerPlayer = uint32(std::lround(float(sWorld->getIntConfig(
+            CONFIG_CENTURION_VHR_PERSONAL_CHAMPION_STAMINA_PER_PLAYER)) / 5.0f));
+    uint32 const reinforced = std::min<uint32>(reinforcedPerPlayer * _partySize, 255);
+    if (reinforced)
+    {
+        if (Aura* aura = champion->AddAura(BG_VHR_SPELL_REINFORCED, champion))
+            aura->SetStackAmount(uint8(reinforced));
+        else
+            TC_LOG_WARN("bg.battleground", "BattlegroundVHR: could not reinforce champion {} in instance {}.",
+                champion->GetName(), GetInstanceID());
+    }
 
     EmpowerChampion(champion);
 
@@ -924,6 +936,8 @@ void BattlegroundVHR::EmpowerChampion(Player* champion)
     // player's own few percent.
     auto atLeast = [this, champion](uint32 spellId, uint32 stacks)
     {
+        if (!stacks)
+            return;
         Aura* aura = champion->GetAura(spellId);
         if (!aura)
             aura = champion->AddAura(spellId, champion);
@@ -937,8 +951,18 @@ void BattlegroundVHR::EmpowerChampion(Player* champion)
             aura->SetStackAmount(uint8(std::min<uint32>(stacks, 255)));
     };
 
-    atLeast(VioletHoldBoons::SPELL_BOON_DAMAGE, BG_VHR_CHAMPION_DAMAGE_BASE + BG_VHR_CHAMPION_DAMAGE_PER_PLAYER * _partySize);
-    atLeast(VioletHoldBoons::SPELL_BOON_CC_DURATION, BG_VHR_CHAMPION_RESOLVE);
+    uint32 damageBase = BG_VHR_CHAMPION_DAMAGE_BASE;
+    uint32 damagePerPlayer = BG_VHR_CHAMPION_DAMAGE_PER_PLAYER;
+    uint32 resolve = BG_VHR_CHAMPION_RESOLVE;
+    if (_personalBrokerMode)
+    {
+        damageBase = sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_CHAMPION_DAMAGE_BASE);
+        damagePerPlayer = sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_CHAMPION_DAMAGE_PER_PLAYER);
+        resolve = sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_CHAMPION_RESOLVE);
+    }
+
+    atLeast(VioletHoldBoons::SPELL_BOON_DAMAGE, damageBase + damagePerPlayer * _partySize);
+    atLeast(VioletHoldBoons::SPELL_BOON_CC_DURATION, resolve);
 }
 
 void BattlegroundVHR::ApplyPersonalBrokerDifficulty(Player* enemy)
@@ -946,16 +970,23 @@ void BattlegroundVHR::ApplyPersonalBrokerDifficulty(Player* enemy)
     if (!enemy || !_personalBrokerMode || !_waveNumber || _partySize <= 1)
         return;
 
-    // Two picks per player per clear make power accumulate with depth. Add no
-    // surcharge on wave one, then reach approximately +6% health and +3%
-    // damage per extra player on wave 25. Reinforced supplies health in 5%
-    // Stamina steps, rounded up.
+    // Scale from zero at the configured start wave to the configured final
+    // health/damage surcharge at the end wave. Reinforced supplies health in
+    // 5% Stamina steps, so health is rounded to the nearest available step.
     uint32 const extraPlayers = _partySize - 1;
-    uint32 const depth = std::min<uint32>(_waveNumber - 1, BG_VHR_FINAL_WAVE - 1);
-    uint32 const span = BG_VHR_FINAL_WAVE - 1;
-    uint32 const healthBonus = (extraPlayers * depth * 6 + span - 1) / span;
-    uint32 const reinforcedStacks = (healthBonus + 4) / 5;
-    uint32 const damageBonus = (extraPlayers * depth * 3 + span - 1) / span;
+    uint32 const rampStart = sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_DIFFICULTY_RAMP_START_WAVE);
+    uint32 const rampEnd = sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_DIFFICULTY_RAMP_END_WAVE);
+    float progress = 1.0f;
+    if (_waveNumber <= rampStart)
+        progress = 0.0f;
+    else if (_waveNumber < rampEnd)
+        progress = float(_waveNumber - rampStart) / float(rampEnd - rampStart);
+
+    float const healthPercent = float(extraPlayers)
+        * sWorld->getFloatConfig(CONFIG_CENTURION_VHR_PERSONAL_HEALTH_PER_EXTRA_PLAYER) * progress;
+    uint32 const reinforcedStacks = uint32(std::lround(healthPercent / 5.0f));
+    uint32 const damageBonus = uint32(std::lround(float(extraPlayers)
+        * sWorld->getFloatConfig(CONFIG_CENTURION_VHR_PERSONAL_DAMAGE_PER_EXTRA_PLAYER) * progress));
 
     uint32 baseDamage = 0;
     if (sWorld->getBoolConfig(CONFIG_CENTURION_VHR_COPIES_INHERIT_BOONS))
@@ -1321,6 +1352,12 @@ void BattlegroundVHR::CompleteWave()
     // The waves before the champion and before the last one are worth a
     // warning: centre screen so it is seen, and in chat so it stays.
     uint32 const nextWave = _waveNumber + 1;
+    if (_personalBrokerMode && nextWave == uint32(sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_SECOND_BROKER_WAVE)))
+    {
+        PSendMessageToAll(BG_VHR_STRING_SECOND_BROKER, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, nextWave);
+        PSendMessageToAll(BG_VHR_STRING_SECOND_BROKER, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, nextWave);
+    }
+
     if (nextWave == BG_VHR_MIDBOSS_WAVE)
     {
         PickWarchief();
@@ -1651,7 +1688,9 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
             // Other players' brokers are in disjoint phases and may stand in
             // the same spots. Runes remain in the placement exclusion set.
             std::vector<Position> ownerPlaced = placed;
-            uint32 const ordinary = 2u + GetBonusBrokersPerWave(owner);
+            uint32 const secondBrokerWave = sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_SECOND_BROKER_WAVE);
+            uint32 const base = _waveNumber >= secondBrokerWave ? 2u : 1u;
+            uint32 const ordinary = base + GetBonusBrokersPerWave(owner);
             uint32 const common = HasCrucible(owner) && !_humanDiedThisWave ? 1u : 0u;
             for (uint32 i = 0; i < ordinary + common && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
             {
@@ -1704,9 +1743,11 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
 
     SendRuneFeedIfChanged();
     // The existing warning text is phrased as a number of brokers answering
-    // the party. In personal mode every player sees the same base pair, not
-    // the full instance's invisible population.
-    return _personalBrokerMode ? 2u : brokersSpawned;
+    // the party. In personal mode report the base personal award, not the full
+    // instance's invisible population or holder-specific Hoarder/Crucible.
+    if (_personalBrokerMode)
+        return _waveNumber >= uint32(sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_SECOND_BROKER_WAVE)) ? 2u : 1u;
+    return brokersSpawned;
 }
 
 void BattlegroundVHR::DespawnWaveRewardBuffs()

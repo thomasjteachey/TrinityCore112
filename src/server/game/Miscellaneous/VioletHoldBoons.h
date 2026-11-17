@@ -106,7 +106,7 @@ namespace VioletHoldBoons
         Vampire,        // % of damage dealt returned as health
         Phoenix,        // survive one killing blow at full hp/mana (unique per pick)
         Greed,          // RUN-WIDE: brokers show an extra option
-        Hoarder,        // RUN-WIDE, unique: an extra broker every wave
+        Hoarder,        // RUN-WIDE: up to two extra brokers every wave
         Beastmaster,    // pets & guardians +% damage and health
         Menagerie,      // random guardians summoned as each wave opens
         Fellowship,     // RUN-WIDE: a random playerbot joins the party for the run

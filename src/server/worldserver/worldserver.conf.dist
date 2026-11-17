@@ -6762,13 +6762,51 @@ Centurion.Marks.HonorCostMultiplier = 0
 #
 #    Centurion.VioletHold.PersonalBrokers
 #        Description: Experimental Violet Hold economy and party scaling. Each player gets
-#                     two owner-only brokers after every cleared wave; Greed, Hoarder,
+#                     one owner-only broker after each of waves 1-9, then two after wave 10
+#                     and every later clear; Greed, Hoarder,
 #                     Second Opinion and Crucible apply only to their holder. Multiplayer
 #                     waves gain progressive damage and durability, while small parties keep
 #                     some Diminished enemies through the final wave. The value is captured
 #                     when a run starts; `.reload config` applies to the next run.
 #        Default:     0 - (Shared brokers and the original difficulty curve)
-#                     1 - (Two private brokers per player and scaled multiplayer waves)
+#                     1 - (Private brokers per player and scaled multiplayer waves)
+#
+#    Centurion.VioletHold.PersonalSecondBrokerWave
+#        Description: First cleared wave that awards every player a second base private
+#                     broker. At 10, the upgrade is announced after wave 9 and begins when
+#                     wave 10 is cleared. Clamped 1-25; live on `.reload config`.
+#        Default:     10
+#
+#    Centurion.VioletHold.PersonalDifficulty.RampStartWave
+#    Centurion.VioletHold.PersonalDifficulty.RampEndWave
+#        Description: Personal-mode party-size health/damage scaling is zero at StartWave
+#                     and reaches its configured maximum at EndWave, linearly between them.
+#                     Both are clamped 1-25 and EndWave cannot precede StartWave.
+#        Defaults:    5 / 25
+#
+#    Centurion.VioletHold.PersonalDifficulty.HealthPercentPerExtraPlayer
+#    Centurion.VioletHold.PersonalDifficulty.DamagePercentPerExtraPlayer
+#        Description: At RampEndWave, percent enemy health and damage added for every player
+#                     beyond the first. Health uses Reinforced's available 5% Stamina steps
+#                     and rounds to the nearest step. Both are clamped 0-25.
+#        Defaults:    2.0 / 1.0
+#
+#    Centurion.VioletHold.PersonalDifficulty.FinalFullPowerPercentSolo
+#    Centurion.VioletHold.PersonalDifficulty.FinalFullPowerPercentTenPlayers
+#        Description: Percent of the final wave that fights at full power in personal mode,
+#                     interpolated by party size. Remaining enemies retain Diminished.
+#                     Both are clamped 0-100.
+#        Defaults:    60 / 100
+#
+#    Centurion.VioletHold.PersonalDifficulty.ChampionStaminaPercentPerPlayer
+#    Centurion.VioletHold.PersonalDifficulty.ChampionDamageBasePercent
+#    Centurion.VioletHold.PersonalDifficulty.ChampionDamagePercentPerPlayer
+#    Centurion.VioletHold.PersonalDifficulty.ChampionResolvePercent
+#        Description: Personal-mode wave-15 champion tuning. Stamina is added per party
+#                     member (rounded to Reinforced's 5% steps); damage is Base plus PerPlayer
+#                     for each member; Resolve shortens crowd control. Legacy mode retains
+#                     its original 100% Stamina/player, 50%+10% damage/player and 50% Resolve.
+#        Defaults:    75 / 30 / 8 / 40
 
 Centurion.VioletHold.PrepSeconds = 30
 Centurion.VioletHold.CountdownFromSeconds = 15
@@ -6780,6 +6818,17 @@ Centurion.VioletHold.MenagerieTrace = 0
 Centurion.VioletHold.ExperienceMultiplier = 1.5
 Centurion.VioletHold.BrokersPerExtraPlayer = 0.05
 Centurion.VioletHold.PersonalBrokers = 0
+Centurion.VioletHold.PersonalSecondBrokerWave = 10
+Centurion.VioletHold.PersonalDifficulty.RampStartWave = 5
+Centurion.VioletHold.PersonalDifficulty.RampEndWave = 25
+Centurion.VioletHold.PersonalDifficulty.HealthPercentPerExtraPlayer = 2.0
+Centurion.VioletHold.PersonalDifficulty.DamagePercentPerExtraPlayer = 1.0
+Centurion.VioletHold.PersonalDifficulty.FinalFullPowerPercentSolo = 60
+Centurion.VioletHold.PersonalDifficulty.FinalFullPowerPercentTenPlayers = 100
+Centurion.VioletHold.PersonalDifficulty.ChampionStaminaPercentPerPlayer = 75
+Centurion.VioletHold.PersonalDifficulty.ChampionDamageBasePercent = 30
+Centurion.VioletHold.PersonalDifficulty.ChampionDamagePercentPerPlayer = 8
+Centurion.VioletHold.PersonalDifficulty.ChampionResolvePercent = 40
 
 ###############################################################################
 

@@ -1604,6 +1604,32 @@ void World::LoadConfigSettings(bool reload)
     // when its first gates open, so a config reload never changes ownership of
     // brokers that are already standing in an active match.
     m_bool_configs[CONFIG_CENTURION_VHR_PERSONAL_BROKERS] = sConfigMgr->GetBoolDefault("Centurion.VioletHold.PersonalBrokers", false);
+    // Personal-mode economy and difficulty knobs. The mode itself is fixed for
+    // a run, but these are read as each reward/wave is prepared so hand-tuning
+    // them only needs `.reload config`.
+    m_int_configs[CONFIG_CENTURION_VHR_PERSONAL_DIFFICULTY_RAMP_START_WAVE] = std::clamp<int32>(
+        sConfigMgr->GetIntDefault("Centurion.VioletHold.PersonalDifficulty.RampStartWave", 5), 1, 25);
+    m_int_configs[CONFIG_CENTURION_VHR_PERSONAL_DIFFICULTY_RAMP_END_WAVE] = std::clamp<int32>(
+        sConfigMgr->GetIntDefault("Centurion.VioletHold.PersonalDifficulty.RampEndWave", 25),
+        m_int_configs[CONFIG_CENTURION_VHR_PERSONAL_DIFFICULTY_RAMP_START_WAVE], 25);
+    m_int_configs[CONFIG_CENTURION_VHR_PERSONAL_SECOND_BROKER_WAVE] = std::clamp<int32>(
+        sConfigMgr->GetIntDefault("Centurion.VioletHold.PersonalSecondBrokerWave", 10), 1, 25);
+    m_int_configs[CONFIG_CENTURION_VHR_PERSONAL_CHAMPION_STAMINA_PER_PLAYER] = std::clamp<int32>(
+        sConfigMgr->GetIntDefault("Centurion.VioletHold.PersonalDifficulty.ChampionStaminaPercentPerPlayer", 75), 0, 125);
+    m_int_configs[CONFIG_CENTURION_VHR_PERSONAL_CHAMPION_DAMAGE_BASE] = std::clamp<int32>(
+        sConfigMgr->GetIntDefault("Centurion.VioletHold.PersonalDifficulty.ChampionDamageBasePercent", 30), 0, 255);
+    m_int_configs[CONFIG_CENTURION_VHR_PERSONAL_CHAMPION_DAMAGE_PER_PLAYER] = std::clamp<int32>(
+        sConfigMgr->GetIntDefault("Centurion.VioletHold.PersonalDifficulty.ChampionDamagePercentPerPlayer", 8), 0, 25);
+    m_int_configs[CONFIG_CENTURION_VHR_PERSONAL_CHAMPION_RESOLVE] = std::clamp<int32>(
+        sConfigMgr->GetIntDefault("Centurion.VioletHold.PersonalDifficulty.ChampionResolvePercent", 40), 0, 100);
+    m_float_configs[CONFIG_CENTURION_VHR_PERSONAL_HEALTH_PER_EXTRA_PLAYER] = std::clamp(
+        sConfigMgr->GetFloatDefault("Centurion.VioletHold.PersonalDifficulty.HealthPercentPerExtraPlayer", 2.0f), 0.0f, 25.0f);
+    m_float_configs[CONFIG_CENTURION_VHR_PERSONAL_DAMAGE_PER_EXTRA_PLAYER] = std::clamp(
+        sConfigMgr->GetFloatDefault("Centurion.VioletHold.PersonalDifficulty.DamagePercentPerExtraPlayer", 1.0f), 0.0f, 25.0f);
+    m_float_configs[CONFIG_CENTURION_VHR_PERSONAL_FINAL_FULL_POWER_SOLO_PERCENT] = std::clamp(
+        sConfigMgr->GetFloatDefault("Centurion.VioletHold.PersonalDifficulty.FinalFullPowerPercentSolo", 60.0f), 0.0f, 100.0f);
+    m_float_configs[CONFIG_CENTURION_VHR_PERSONAL_FINAL_FULL_POWER_FULL_PARTY_PERCENT] = std::clamp(
+        sConfigMgr->GetFloatDefault("Centurion.VioletHold.PersonalDifficulty.FinalFullPowerPercentTenPlayers", 100.0f), 0.0f, 100.0f);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER] = sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaRewardMultiplier", .2f);
     m_float_configs[CONFIG_CENTURION_BG_ARENA_EXPERIENCE_MULTIPLIER] = std::max(0.0f,
         sConfigMgr->GetFloatDefault("Centurion.Battleground.ArenaExperienceMultiplier", .4f));

@@ -71,9 +71,9 @@ constexpr uint32 MASK_GALE   = MASK_CASTER & ~ClassBit(CLASS_PALADIN);
 constexpr uint32 MASK_RAGE   = ClassBit(CLASS_WARRIOR) | ClassBit(CLASS_DRUID);
 constexpr uint32 MASK_ENERGY = ClassBit(CLASS_ROGUE) | ClassBit(CLASS_DRUID);
 
-// Classes that ever field a pet or guardian on this realm (no death knights).
-constexpr uint32 MASK_PETS   = ClassBit(CLASS_HUNTER) | ClassBit(CLASS_WARLOCK) | ClassBit(CLASS_MAGE)
-                             | ClassBit(CLASS_PRIEST) | ClassBit(CLASS_SHAMAN) | ClassBit(CLASS_DRUID);
+// Beastmaster is reserved for the two dedicated pet classes. Short-lived
+// guardians such as Shadowfiend, treants and elementals do not qualify.
+constexpr uint32 MASK_PETS   = ClassBit(CLASS_HUNTER) | ClassBit(CLASS_WARLOCK);
 
 // Order matches enum Boon. maxStacks MUST match the spell's StackAmount in
 // Spell.dbc - the DBC is what Aura::ModStackAmount clamps against; the value
@@ -120,7 +120,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Vampire,      SPELL_BOON_VAMPIRE,      3,  30, MASK_ALL,      4, "Boon of the Vampire",  "of damage dealt returned as health",      "%" },
     { Boon::Phoenix,      SPELL_BOON_PHOENIX,      1,   1, MASK_ALL,      2, "Boon of the Phoenix",  "survive one killing blow at full health and mana (unique)", "" },
     { Boon::Greed,        SPELL_BOON_GREED,        1,   3, MASK_ALL,      3, "Boon of Greed",        "extra option at every broker from now on (run-wide)",    "" },
-    { Boon::Hoarder,      SPELL_BOON_HOARDER,      1,   1, MASK_ALL,      2, "Boon of the Hoarder",  "extra broker after every wave from now on (run-wide, unique)", "" },
+    { Boon::Hoarder,      SPELL_BOON_HOARDER,      1,   2, MASK_ALL,      2, "Boon of the Hoarder",  "extra broker after every wave from now on (run-wide, up to two)", "" },
     { Boon::Beastmaster,  SPELL_BOON_BEASTMASTER, 20, 100, MASK_PETS,     5, "Boon of the Beastmaster", "pet and guardian damage and health",  "%" },
     { Boon::Menagerie,    SPELL_BOON_MENAGERIE,    1,   20, MASK_ALL,     4, "Boon of the Menagerie", "random guardian fights beside you each wave", "" },
     { Boon::Fellowship,   SPELL_BOON_FELLOWSHIP,   1,   3, MASK_ALL,      3, "Boon of Fellowship",   "a random champion joins your side for the rest of the run (run-wide)", "" },
@@ -1082,6 +1082,72 @@ uint8 GetSpecRole(Player const* player)
     return points[top] ? kRoles[classId][top] : SPEC_NONE;
 }
 
+// Primary-stat offers should help the character who owns the broker. Pure
+// physical classes keep both physical stats (Strength still gives rogues AP;
+// Agility still gives warriors crit/dodge), hunters use Agility and Intellect,
+// and pure casters use Intellect and Spirit. Hybrid talent trees decide which
+// half they see. As elsewhere in this file, an untalented hybrid is treated as
+// a caster rather than having all four stats dilute its first few drafts.
+bool SuitsPrimaryStat(Player const* player, Boon boon)
+{
+    uint8 const classId = player->GetClass();
+    uint8 const role = GetSpecRole(player);
+    bool const physicalHybrid = role & (SPEC_MELEE | SPEC_TANK);
+
+    switch (boon)
+    {
+        case Boon::Strength:
+        case Boon::Agility:
+            switch (classId)
+            {
+                case CLASS_WARRIOR:
+                case CLASS_ROGUE:
+                    return true;
+                case CLASS_DEATH_KNIGHT:
+                    return boon == Boon::Strength;
+                case CLASS_HUNTER:
+                    return boon == Boon::Agility;
+                case CLASS_PALADIN:
+                case CLASS_SHAMAN:
+                case CLASS_DRUID:
+                    return physicalHybrid;
+                default:
+                    return false;
+            }
+        case Boon::Intellect:
+            switch (classId)
+            {
+                case CLASS_HUNTER:
+                case CLASS_PRIEST:
+                case CLASS_MAGE:
+                case CLASS_WARLOCK:
+                    return true;
+                case CLASS_PALADIN:
+                case CLASS_SHAMAN:
+                case CLASS_DRUID:
+                    return !physicalHybrid;
+                default:
+                    return false;
+            }
+        case Boon::Spirit:
+            switch (classId)
+            {
+                case CLASS_PRIEST:
+                case CLASS_MAGE:
+                case CLASS_WARLOCK:
+                    return true;
+                case CLASS_PALADIN:
+                case CLASS_SHAMAN:
+                case CLASS_DRUID:
+                    return !physicalHybrid;
+                default:
+                    return false;
+            }
+        default:
+            return true;
+    }
+}
+
 // Roll-time only: CanTake still lets a member take an off-spec offer somebody
 // else's spec put on the table.
 bool SuitsSpec(Player const* player, Offer const& offer)
@@ -1097,11 +1163,15 @@ bool SuitsSpec(Player const* player, Offer const& offer)
     if (offer.kind != Offer::Kind::Boon || offer.index >= uint8(Boon::Max))
         return true;
 
+    Boon const boon = Boon(offer.index);
+    if (boon == Boon::Strength || boon == Boon::Agility || boon == Boon::Intellect || boon == Boon::Spirit)
+        return SuitsPrimaryStat(player, boon);
+
     // Atonement rolls only for somebody actually specced to heal - not for a
     // class that merely could, and not for anyone with no talents spent.
-    if (Boon(offer.index) == Boon::Atonement)
+    if (boon == Boon::Atonement)
         return GetSpecRole(player) == SPEC_HEALER;
-    if (Boon(offer.index) == Boon::Overflow)
+    if (boon == Boon::Overflow)
         return GetSpecRole(player) == SPEC_HEALER;
 
     // The swing and spell halves: a Balance druid stops pulling Flurry, Haste,
@@ -1826,7 +1896,8 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
                 return Trinity::StringFormat("{}: extra option at each of your brokers [{}/{}]{}", info.name,
                     uint32(held), uint32(info.maxStacks), blocked);
             case Boon::Hoarder:
-                return Trinity::StringFormat("{}: an extra private broker after every wave{}", info.name, blocked);
+                return Trinity::StringFormat("{}: an extra private broker after every wave [{}/{}]{}", info.name,
+                    uint32(held), uint32(info.maxStacks), blocked);
             case Boon::SecondOpinion:
                 return Trinity::StringFormat("{}: three whole-hand rerolls for your brokers{}", info.name, blocked);
             case Boon::Crucible:
@@ -1839,7 +1910,6 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
     {
         case Boon::MountSpeed:
         case Boon::Phoenix:
-        case Boon::Hoarder:
         case Boon::Overkill:
         case Boon::Communion:
         case Boon::Multitudes:
