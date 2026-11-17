@@ -1517,11 +1517,6 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
     // the slots are free and the party never banks two waves' worth. Standing
     // boon brokers are NOT touched - they wait for a taker.
     DespawnWaveRewardBuffs();
-    // Personal offers last for one reward interval. This bounds the physical
-    // broker count at four per player (base two, Hoarder and Crucible) and
-    // gives every clear a fresh pair even when somebody ignored the last one.
-    if (_personalBrokerMode)
-        DespawnAllBoonBrokers();
 
     if (!wanted)
         return 0;
@@ -1904,22 +1899,6 @@ bool BattlegroundVHR::SpawnBoonBroker(uint32 slot, Position const& spot, bool co
     }
 
     return true;
-}
-
-void BattlegroundVHR::DespawnAllBoonBrokers()
-{
-    for (uint32 slot = BG_VHR_CREATURE_BOON_BROKER_1; slot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++slot)
-        if (BgCreatures[slot])
-        {
-            ObjectGuid const brokerGuid = BgCreatures[slot];
-            if (ObjectGuid const ownerGuid = GetBoonBrokerOwner(brokerGuid))
-                if (Player* owner = ObjectAccessor::FindPlayer(ownerGuid))
-                    Battleground::SendSquadFeedLine(owner,
-                        Trinity::StringFormat("VHBOON:GONE:0x{:016X}", brokerGuid.GetRawValue()));
-            DelCreature(slot);
-        }
-    _brokerOwners.clear();
-    _commonOnlyBrokers.clear();
 }
 
 uint32 BattlegroundVHR::EnsurePersonalBrokerPhase(Player* player)

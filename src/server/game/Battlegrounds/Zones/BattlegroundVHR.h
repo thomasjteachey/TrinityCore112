@@ -163,11 +163,11 @@ enum BG_VHR_Creatures
     // for the BG_VHR_FINALE_BROKERS drop before the last wave on top of that.
     BG_VHR_CREATURE_BOON_BROKER_1  = 0,
     BG_VHR_SHARED_BOON_BROKER_MAX  = 32,
-    // Personal-broker mode can have ten players' two ordinary brokers, plus
-    // one Hoarder and one Crucible broker apiece. Keep a little failure room
-    // above that; the previous wave's personal brokers are expired first.
-    BG_VHR_CREATURE_BOON_BROKER_MAX = 64,
-    BG_VHR_CREATURE_MAX            = 64
+    // Personal brokers remain until picked. At the maximum ten players and
+    // four brokers per player (base two, Hoarder and Crucible), all 24 reward
+    // drops before the final wave need 960 slots. Leave some failure room.
+    BG_VHR_CREATURE_BOON_BROKER_MAX = 1024,
+    BG_VHR_CREATURE_MAX            = 1024
 };
 
 enum BG_VHR_Constants
@@ -827,7 +827,6 @@ private:
     uint32 FindFreeBoonBrokerSlot(std::vector<Position>& occupied) const;
     bool SpawnBoonBroker(uint32 slot, Position const& spot, bool commonOnly = false,
         ObjectGuid ownerGuid = ObjectGuid::Empty);
-    void DespawnAllBoonBrokers();
     uint32 EnsurePersonalBrokerPhase(Player* player);
     void ApplyPersonalBrokerDifficulty(Player* enemy);
 
