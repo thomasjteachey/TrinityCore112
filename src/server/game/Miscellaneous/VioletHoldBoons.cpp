@@ -189,7 +189,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Contagion,     94358, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of Contagion",         "when a target dies, your damage over time effects on it jump to the nearest enemy", "" },
     { Boon::Indelible,     94359, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Indelible",     "your harmful effects cannot be dispelled", "" },
     { Boon::EternalPact,   94360, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Eternal Pact",  "your demon comes back at once when it dies - no cast, no Soul Shard (once every 20 sec)", "" },
-    { Boon::Untamed,       94361, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Untamed",       "you can shapeshift while stunned, feared or polymorphed, and the shift breaks it", "" },
+    { Boon::Untamed,       94361, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Untamed",       "you can shapeshift while stunned or feared, and the shift breaks it", "" },
     { Boon::Wellspring,    94362, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Wellspring",    "falling below 50% mana gives you and your party a 5 sec Innervate (once per wave)", "" },
     { Boon::Serenity,      94363, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Serenity",          "once per wave, Tranquility costs no mana and heals its full amount at once, with no channel", "" },
     { Boon::Stormcaller,   94364, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Stormcaller",   "Purge steals every magic buff on the target", "" },

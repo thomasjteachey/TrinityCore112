@@ -165,7 +165,7 @@ namespace VioletHoldBoons
         Contagion,      // warlock: DoTs jump when their target dies
         Indelible,      // warlock: undispellable debuffs
         EternalPact,    // warlock: the demon returns at once when it dies (20 sec)
-        Untamed,        // druid: shapeshift out of stun / fear / polymorph
+        Untamed,        // druid: shapeshift out of stun / fear
         Wellspring,     // druid: below 50% mana -> 5 sec party Innervate (once per wave)
         Serenity,       // druid: once per wave Tranquility is free and lands all at once
         Stormcaller,    // shaman: Purge removes every magic buff
