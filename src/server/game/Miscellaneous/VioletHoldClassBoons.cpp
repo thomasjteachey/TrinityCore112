@@ -727,7 +727,19 @@ void LeavePrimalEcho(Unit* druid, uint8 previousForm)
 
     echo->SetFaction(druid->GetFaction());
     echo->SetLevel(druid->GetLevel());
-    echo->SetDisplayId(display);
+    // A humanoid display id only identifies the race/sex model. The skin,
+    // face, hair and equipped textures live in the player's mirror-image
+    // payload, so copy that payload for a caster-form memory. Animal forms
+    // already have their complete appearance in the shapeshift display id.
+    if (previousForm == FORM_NONE)
+    {
+        Player* player = druid->ToPlayer();
+        if (!player || !echo->CopyAppearanceFromPlayer(player, false, true, false))
+            echo->SetDisplayId(display);
+    }
+    else
+        echo->SetDisplayId(display);
+    echo->SetUnitFlag2(UNIT_FLAG2_DO_NOT_FADE_IN);
     echo->SetObjectScale(0.85f);
     uint32 const healthPct = previousForm == FORM_BEAR || previousForm == FORM_DIREBEAR ? 40u : 25u;
     echo->SetMaxHealth(std::max<uint32>(1, druid->CountPctFromMaxHealth(healthPct)));

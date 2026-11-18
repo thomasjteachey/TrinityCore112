@@ -386,14 +386,18 @@ public:
         void Reset() override
         {
             _form = FORM_NONE;
-            _pulseMs = 500;
-            me->SetReactState(REACT_DEFENSIVE);
+            _pulseMs = 0;
+            me->SetReactState(REACT_AGGRESSIVE);
         }
 
         void SetData(uint32 type, uint32 value) override
         {
             if (type == DATA_PRIMAL_ECHO_FORM)
+            {
                 _form = uint8(value);
+                _pulseMs = 0;
+                Act();
+            }
         }
 
         Player* Owner() const
@@ -417,14 +421,17 @@ public:
             Battleground* bg = owner->GetBattleground();
             if (!bg || bg->GetTypeID() != BATTLEGROUND_VHR)
                 return;
-            BattlegroundVHR* run = static_cast<BattlegroundVHR*>(bg);
 
-            std::vector<Player const*> roster;
-            run->CollectHumanPlayers(roster);
+            // Echoes fight beside the whole team, including Fellowship and
+            // playerbot companions. CollectHumanPlayers is intentionally for
+            // broker ownership and excluded exactly the allies most likely to
+            // need this heal in a solo run.
             Player* lowest = nullptr;
-            for (Player const* candidateConst : roster)
+            for (auto const& [guid, bgPlayer] : bg->GetPlayers())
             {
-                Player* candidate = const_cast<Player*>(candidateConst);
+                if (bgPlayer.Team != owner->GetBGTeam())
+                    continue;
+                Player* candidate = ObjectAccessor::GetPlayer(*owner, guid);
                 if (!candidate || !candidate->IsAlive() || !candidate->IsInWorld() || candidate->GetMap() != me->GetMap()
                     || !candidate->IsWithinDistInMap(me, 40.0f) || candidate->GetHealth() >= candidate->GetMaxHealth())
                     continue;
@@ -438,8 +445,43 @@ public:
             SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(SPELL_PRIMAL_ECHO);
             if (!spellInfo)
                 return;
-            HealInfo heal(owner, lowest, std::max<uint32>(1, lowest->CountPctFromMaxHealth(5)), spellInfo, SPELL_SCHOOL_MASK_NATURE);
-            owner->HealBySpell(heal);
+            HealInfo heal(me, lowest, std::max<uint32>(1, lowest->CountPctFromMaxHealth(5)), spellInfo, SPELL_SCHOOL_MASK_NATURE);
+            me->HealBySpell(heal);
+        }
+
+        void Act()
+        {
+            Player* owner = Owner();
+            if (!owner || !owner->IsAlive() || !owner->IsInWorld())
+                return;
+
+            if (_form == FORM_NONE || _form == FORM_TREE)
+            {
+                Mend(owner);
+                _pulseMs = 2000;
+                return;
+            }
+
+            Unit* target = Enemy(owner);
+            if (!target)
+            {
+                _pulseMs = 250;
+                return;
+            }
+
+            // Acquire the druid's target as part of summon setup instead of
+            // waiting for the creature's next aggro scan/fade-in cycle.
+            me->EngageWithTarget(target);
+            if (_form == FORM_MOONKIN)
+            {
+                me->CastSpell(target, VioletHoldBoons::ResolveRank(5176, owner->GetLevel()), TRIGGERED_FULL_MASK);
+                _pulseMs = 2500;
+                return;
+            }
+
+            AttackStart(target);
+            DoMeleeAttackIfReady();
+            _pulseMs = 250;
         }
 
         void UpdateAI(uint32 diff) override
@@ -459,31 +501,7 @@ public:
                 return;
             }
 
-            if (_form == FORM_NONE || _form == FORM_TREE)
-            {
-                Mend(owner);
-                _pulseMs = 2000;
-                return;
-            }
-
-            Unit* target = Enemy(owner);
-            if (!target)
-            {
-                _pulseMs = 500;
-                return;
-            }
-
-            if (_form == FORM_MOONKIN)
-            {
-                me->CastSpell(target, VioletHoldBoons::ResolveRank(5176, owner->GetLevel()), TRIGGERED_FULL_MASK);
-                _pulseMs = 2500;
-                return;
-            }
-
-            if (me->GetVictim() != target)
-                AttackStart(target);
-            DoMeleeAttackIfReady();
-            _pulseMs = 500;
+            Act();
         }
 
     private:
