@@ -212,7 +212,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Plaguebearer,  SPELL_BOON_PLAGUEBEARER, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Plaguebearer", "every 3 sec one harmful effect on an ally within 20 yd jumps onto you; +10% damage for every harmful effect you carry", "" },
     { Boon::Wildcaller,    SPELL_BOON_WILDCALLER,   1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Wildcaller",   "shifting forms rallies your party for 8 sec: Cat +15% damage, Bear 15% less damage taken, caster form 25% cheaper mana costs, Moonkin turns them into moonkins whose spells have a 50% chance to cast twice", "" },
     { Boon::SpiritLink,    SPELL_BOON_SPIRIT_LINK,  1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Spirit Link",  "every 2 sec the health of you and your allies within 20 yd is evened out", "" },
-    { Boon::Windlord,      SPELL_BOON_WINDLORD,     1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Windlord",     "Windfury Weapon and Windfury Totem have a 100% chance to proc", "" },
+    { Boon::Windlord,      SPELL_BOON_WINDLORD,     1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Windlord",     "Windfury Weapon and Windfury Totem have a 50% chance to proc", "" },
 
     { Boon::Overflow,      SPELL_BOON_OVERFLOW,       1, 1, MASK_HEALS,             3, "Boon of Overflow",       "25% of your overhealing jumps to the lowest-health ally within 40 yd (unique)", "" },
     { Boon::SecondOpinion, SPELL_BOON_SECOND_OPINION, 1, 1, MASK_ALL,               3, "Boon of Second Opinion", "three times this run, the party may reroll a broker's whole hand (run-wide, unique)", "" },

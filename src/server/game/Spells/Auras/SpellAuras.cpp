@@ -2676,7 +2676,7 @@ float Aura::CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& event
     if ((procEntry.AttributesMask & PROC_ATTR_REDUCE_PROC_60) && eventInfo.GetActor()->GetLevel() > 60)
         chance = std::max(0.f, (1.f - ((eventInfo.GetActor()->GetLevel() - 60) * 1.f / 30.f)) * chance);
 
-    // Violet Hold Windlord: Windfury Weapon always procs (cooldown still applies).
+    // Violet Hold Windlord: use the boon's fixed proc chance (cooldown still applies).
     return VioletHoldClassBoons::ModProcChance(this, chance);
 }
 

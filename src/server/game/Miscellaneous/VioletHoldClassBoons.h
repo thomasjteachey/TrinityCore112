@@ -289,11 +289,11 @@ namespace VioletHoldClassBoons
     // SpellInfo::CalcPowerCost, mana spells: Wildcaller's caster-form rally.
     TC_GAME_API int32 ModManaCost(Unit const* caster, int32 cost);
     // Windlord: Windfury Weapon's proc (Aura::CalcProcChance; its 3 sec
-    // internal cooldown still applies) ...
+    // internal cooldown still applies) uses the boon's fixed 50% chance ...
     TC_GAME_API float ModProcChance(Aura const* aura, float chance);
     // ... and Windfury Totem's weapon enchant on anyone in a holder's party
-    // (Player::CastItemCombatSpell) always proc.
-    TC_GAME_API bool WindfuryTotemAlwaysProcs(Player const* wielder, uint32 enchantId);
+    // (Player::CastItemCombatSpell) uses that same chance.
+    TC_GAME_API float ModWindfuryTotemProcChance(Player const* wielder, uint32 enchantId, float chance);
 
     // Inside the Violet Hold, seals and Windfury Totem coexist as in the base
     // game: the realm's "a seal strips the totem's weapon buff" rule (Unit::

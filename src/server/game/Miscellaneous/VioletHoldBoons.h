@@ -187,7 +187,7 @@ namespace VioletHoldBoons
         Plaguebearer,   // warlock: pull your allies' harmful effects onto yourself, +10% damage each
         Wildcaller,     // druid: each form you shift into gives the party its own buff
         SpiritLink,     // priest: every 2 sec the health of allies near you is evened out
-        Windlord,       // shaman: Windfury Weapon and Windfury Totem always proc
+        Windlord,       // shaman: Windfury Weapon and Windfury Totem proc 50% of the time
 
         // 2026-11-16.
         Overflow,       // healers: 25% of overhealing jumps to the lowest-health nearby ally

@@ -39,6 +39,8 @@ namespace VioletHoldClassBoons
 {
 namespace
 {
+constexpr float WINDLORD_PROC_CHANCE = 50.0f;
+
 bool Holds(Unit const* unit, uint32 boonSpellId)
 {
     return unit && unit->HasAura(boonSpellId);
@@ -799,20 +801,20 @@ void OnCasterForm(Unit* target, uint8 previousForm)
 float ModProcChance(Aura const* aura, float chance)
 {
     if (aura && aura->GetId() == SPELL_WINDFURY_WEAPON_PASSIVE && Holds(aura->GetUnitOwner(), SPELL_WINDLORD))
-        return 100.0f;
+        return WINDLORD_PROC_CHANCE;
     return chance;
 }
 
-bool WindfuryTotemAlwaysProcs(Player const* wielder, uint32 enchantId)
+float ModWindfuryTotemProcChance(Player const* wielder, uint32 enchantId, float chance)
 {
     // Windfury Totem Effect's temporary enchants (ranks 1-3), the same ids
     // Unit.cpp's IsWindfuryTotemEnchant knows.
     if (!wielder || (enchantId != 1783 && enchantId != 563 && enchantId != 564))
-        return false;
+        return chance;
     for (Player* ally : AlliesOf(const_cast<Player*>(wielder)))
         if (ally->GetClass() == CLASS_SHAMAN && ally->IsAlive() && Holds(ally, SPELL_WINDLORD))
-            return true;
-    return false;
+            return WINDLORD_PROC_CHANCE;
+    return chance;
 }
 
 bool KeepsWindfuryWithSeals(Unit const* unit, SpellInfo const* spellInfo)
