@@ -742,6 +742,7 @@ static bool UsesStackingGrantMultiplier(BoonInfo const& info)
         case Boon::EnergyRegen:
         case Boon::RageGeneration:
         case Boon::Beastmaster:
+        case Boon::CcDuration:
             return false;
         default:
             break;
@@ -767,10 +768,10 @@ uint8 GetMaxStacks(BoonInfo const& info)
     if (!UsesStackingGrantMultiplier(info))
         return info.maxStacks;
 
-    // These ceilings are intentional. With a stacking grant multiplier the
-    // final pick clamps to the remaining amount instead of lowering the cap
-    // to the nearest multiple of the effective grant.
-    if (info.boon == Boon::CcDuration || info.boon == Boon::Resilience)
+    // Resilience's 30% ceiling is intentional. With a stacking grant
+    // multiplier its final pick clamps to the remaining amount instead of
+    // lowering the cap to the nearest multiple of the effective grant.
+    if (info.boon == Boon::Resilience)
         return info.maxStacks;
 
     uint8 const grantStacks = GetGrantStacks(info);
