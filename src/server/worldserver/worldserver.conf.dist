@@ -6762,9 +6762,9 @@ Centurion.Marks.HonorCostMultiplier = 0
 #
 #    Centurion.VioletHold.StackingBoonGrantMultiplier
 #        Description: Multiplies the stacks awarded by numeric stacking boons, rounded to
-#                     the nearest whole stack. Tempo is included; Beastmaster, one-stack
-#                     mechanics, Ascension, and the rage/energy cost and generation
-#                     talents are not. Each affected cap rounds down to a whole number of
+#                     the nearest whole stack. Tempo, Beastmaster, one-stack mechanics,
+#                     Ascension, and the rage/energy cost and generation talents are not.
+#                     Each affected cap rounds down to a whole number of
 #                     grants. Clamped 0.1-5.0. Live: `.reload config` applies to the next
 #                     boon picked.
 #        Default:     1.5

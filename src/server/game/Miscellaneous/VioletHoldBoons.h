@@ -533,8 +533,8 @@ namespace VioletHoldBoons
 
     TC_GAME_API BoonInfo const& GetBoon(Boon boon);
     // Effective stacks awarded by one pick. Numeric stacking boons use the
-    // live config multiplier; one-stack mechanics other than Tempo,
-    // Beastmaster, Ascension, and rage/energy talents retain their base grant.
+    // live config multiplier; Tempo, Beastmaster, Ascension, one-stack
+    // mechanics, and rage/energy talents retain their base grant.
     TC_GAME_API uint8 GetGrantStacks(BoonInfo const& info);
     // The advertised/reachable cap. It never exceeds the aura's DBC cap and
     // rounds down to a whole number of configured grants.

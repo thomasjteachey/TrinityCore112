@@ -743,6 +743,7 @@ static bool UsesStackingGrantMultiplier(BoonInfo const& info)
         case Boon::RageGeneration:
         case Boon::Beastmaster:
         case Boon::CcDuration:
+        case Boon::Tempo:
             return false;
         default:
             break;
@@ -750,8 +751,7 @@ static bool UsesStackingGrantMultiplier(BoonInfo const& info)
 
     // A one-stack grant normally represents a discrete mechanic rather than
     // a numeric power value (one broker, one guardian, one unlock, and so on).
-    // Tempo is numeric despite using one 125 ms stack as its base grant.
-    return info.grantStacks > 1 || info.boon == Boon::Tempo;
+    return info.grantStacks > 1;
 }
 
 uint8 GetGrantStacks(BoonInfo const& info)
