@@ -29,8 +29,9 @@
  *  - Spellbreaker: every cleared lockout is an SMSG_CLEAR_COOLDOWN; the enemy
  *    side receives the interrupted school's normal Counterspell lockout.
  *  - NOT reachable without the client DLL (see the report): Point Blank's
- *    minimum range, the Untamed shapeshift while stunned/feared/polymorphed,
- *    and the totem bar for more than one totem per element.
+ *    minimum range and starting Aimed/Multi-Shot while moving, the Untamed
+ *    shapeshift while stunned/feared/polymorphed, and the totem bar for more
+ *    than one totem per element.
  */
 
 #ifndef TRINITYCORE_VIOLET_HOLD_CLASS_BOONS_H
@@ -187,8 +188,9 @@ namespace VioletHoldClassBoons
 
     // ---- hunter ------------------------------------------------------------
     // Point Blank: no minimum range for the hunter's shots (Spell::GetMinMaxRange),
-    // and Auto Shot keeps firing on the move (Unit::_UpdateAutoRepeatSpell,
-    // Spell::CheckCast) - Skirmisher was folded into it 2026-11-14.
+    // Auto Shot keeps firing on the move, and Aimed Shot / Multi-Shot cast on
+    // the move (Spell::prepare/update, Unit::_UpdateAutoRepeatSpell) -
+    // Skirmisher was folded into it 2026-11-14.
     TC_GAME_API bool IgnoresMinRange(Unit const* caster, SpellInfo const* spellInfo);
     TC_GAME_API bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo);
     // Trapper (as well as the trap rules above): a holder's Freezing Trap does not break on damage

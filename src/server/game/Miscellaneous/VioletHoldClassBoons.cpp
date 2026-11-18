@@ -452,8 +452,12 @@ bool IgnoresMinRange(Unit const* caster, SpellInfo const* spellInfo)
 
 bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo)
 {
-    // Auto Shot only: wands and the hunter's other casts keep their rules.
-    return spellInfo && spellInfo->Id == 75 && Holds(caster, SPELL_POINT_BLANK);
+    if (!spellInfo || !Holds(caster, SPELL_POINT_BLANK))
+        return false;
+
+    // Auto Shot plus every rank of the two aimed casts named by the boon.
+    return spellInfo->Id == 75 || Is(spellInfo, SPELLFAMILY_HUNTER, "Aimed Shot")
+        || Is(spellInfo, SPELLFAMILY_HUNTER, "Multi-Shot");
 }
 
 bool ShootsAllies(WorldObject const* caster, SpellInfo const* spellInfo)

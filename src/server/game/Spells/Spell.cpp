@@ -3621,7 +3621,9 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     // everyone, same shape as movable Starfire; a boon holder's mount cast
     // time is 0 server-side and passes regardless.
     bool const needsMountMovementInterrupt = m_spellInfo->HasAura(SPELL_AURA_MOUNTED);
-    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt || needsMountMovementInterrupt;
+    bool const boonAllowsMovement = VioletHoldClassBoons::ShootsWhileMoving(m_caster->ToUnit(), m_spellInfo);
+    bool const requiresMovementInterrupt = ((m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) && !boonAllowsMovement)
+        || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt || needsMountMovementInterrupt;
 
     //i'm modifying code blah blah blah
     // don't allow channeled spells / spells with cast time to be cast while moving
@@ -4423,7 +4425,8 @@ void Spell::update(uint32 difftime)
         bool const needsArcaneMissilesMovementInterrupt = isArcaneMissiles && !snareMovementAllowed;
         // Mount summons: movement bit cleared in the DBC for the client's sake,
         // enforced here (see Spell::prepare).
-        bool const hasMovementInterruptFlag = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || m_spellInfo->HasAura(SPELL_AURA_MOUNTED);
+        bool const hasMovementInterruptFlag = ((m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT)
+            && !VioletHoldClassBoons::ShootsWhileMoving(playerCaster, m_spellInfo)) || m_spellInfo->HasAura(SPELL_AURA_MOUNTED);
         bool const moveAllowedChannel = IsChannelActive() && m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt && !needsArcaneMissilesMovementInterrupt;
 
         // Movable Starfire lets virtual players keep their active movement

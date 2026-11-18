@@ -46,6 +46,7 @@
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
+#include "VioletHoldClassBoons.h"
 #include "World.h"
 #include "WorldSession.h"
 
@@ -3814,6 +3815,9 @@ bool IsPlayerbotMovableCastTimeSpell(Player const* player, SpellInfo const* spel
     if (spellInfo->IsStarfire() && player->GetStarfireSnareSpeedRate() > 0.0f)
         return true;
 
+    if (VioletHoldClassBoons::ShootsWhileMoving(player, spellInfo))
+        return true;
+
     // Spells the client lets a human cast while running. Without the movement
     // interrupt flag there is nothing to stand still for, so the bot must not
     // plant itself: the stationary path defers the cast while the bot is
@@ -5270,9 +5274,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     player->ModSpellCastTime(spellInfo, effectiveCastTimeMs);
 
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
-    bool const isHunterStationaryCastTimeAction = player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo);
     bool const movableCastTimeSpell = IsPlayerbotMovableCastTimeSpell(player, spellInfo);
-    bool const requiresStationaryCast = (effectiveCastTimeMs > 0 && !movableCastTimeSpell) || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
+    bool const isHunterStationaryCastTimeAction = player->GetClass() == CLASS_HUNTER
+        && IsHunterCastTimeShot(player, spellInfo) && !movableCastTimeSpell;
+    bool const requiresStationaryCast = (effectiveCastTimeMs > 0 && !movableCastTimeSpell)
+        || (spellInfo->IsAutoRepeatRangedSpell() && !movableCastTimeSpell) || isFoodOrDrinkSpell ||
         isHunterStationaryCastTimeAction || IsPlayerbotStationaryChannel(spellInfo);
 
     if (isHunterStationaryCastTimeAction)

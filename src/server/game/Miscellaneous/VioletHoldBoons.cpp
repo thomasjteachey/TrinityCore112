@@ -174,7 +174,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Sealkeeper,    94343, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Sealkeeper",    "every seal can be up at once and Judgement judges all of them; your seals cost no mana, have 0.5 sec less global cooldown and last twice as long", "" },
     { Boon::RadiantHost,   94344, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Radiant Host",  "all of your Auras can be active at once", "" },
     { Boon::JudgementDay,  94345, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Judgement Day",     "Judgement also strikes every enemy within 20 yd of your target", "" },
-    { Boon::PointBlank,    94346, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of Point Blank",       "no dead zone: Auto Shot and your shots work in melee range, and you can move while Auto Shot is firing", "" },
+    { Boon::PointBlank,    94346, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of Point Blank",       "no dead zone; Auto Shot keeps firing while moving, and Aimed Shot and Multi-Shot can be cast while moving", "" },
     { Boon::Trapper,       94347, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Trapper",       "your traps no longer share a cooldown and can be laid in combat, you can have one of each trap down, and Freezing Trap no longer breaks on damage", "" },
     { Boon::Barrage,       94348, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Barrage",       "your Multi-Shot hits any number of targets", "" },
     { Boon::Assassin,      94349, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Assassin",      "Backstab works from the front and is never dodged, parried or blocked; Sinister Strike also hits a second enemy; Hemorrhage gives 1 extra combo point", "" },
