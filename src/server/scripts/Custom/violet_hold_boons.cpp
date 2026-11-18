@@ -266,6 +266,13 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
             after = std::min<uint32>(held + grantStacks, cap);
             unit = info.unit;
             text = info.summary;
+            if (info.boon == Boon::Tempo)
+            {
+                held *= TEMPO_MS_PER_STACK;
+                after *= TEMPO_MS_PER_STACK;
+                cap *= TEMPO_MS_PER_STACK;
+                headline = Trinity::StringFormat("+{} ms", uint32(grantStacks) * TEMPO_MS_PER_STACK);
+            }
             if (BattlegroundVHR* run = RunOfPlayer(viewer); run && run->UsesPersonalBrokers())
                 switch (info.boon)
                 {
@@ -275,7 +282,7 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
                     case Boon::Crucible:     text = "a deathless wave calls you an extra common-boon broker"; break;
                     default: break;
                 }
-            if (cap > 1)
+            if (cap > 1 && info.boon != Boon::Tempo)
                 headline = Trinity::StringFormat("+{}{}", uint32(grantStacks), info.unit);
             if (info.boon == Boon::Healthstone)
                 if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(GetHealthstoneFor(viewer->GetLevel())))
@@ -324,7 +331,9 @@ void SendDeck(Player* viewer, std::string const& tag)
         offer.kind = Offer::Kind::Boon;
         offer.index = i;
         std::string value;
-        if (info.maxStacks > 1)
+        if (info.boon == Boon::Tempo)
+            value = Trinity::StringFormat("{} ms", uint32(stacks) * TEMPO_MS_PER_STACK);
+        else if (info.maxStacks > 1)
             value = *info.unit ? Trinity::StringFormat("{}{}", uint32(stacks), info.unit) : Trinity::StringFormat("x{}", uint32(stacks));
         entries.push_back(Trinity::StringFormat("{}^{}^{}", uint32(RarityTier(offer)), Field(ShortBoonName(info.name)), Field(value)));
     }

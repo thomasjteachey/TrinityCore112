@@ -306,8 +306,8 @@ namespace VioletHoldBoons
         // Boon of Multitudes, the same record-aura shape. BattlegroundVHR::
         // HandleKillPlayer calls the copies.
         SPELL_BOON_MULTITUDES   = 94317,
-        // Boon of Tempo, Respite's shape (a visible dummy, 100 ms per stack,
-        // StackAmount 5). The CLIENT must see it: the client-tweaks DLL
+        // Boon of Tempo, Respite's shape (a visible dummy, 125 ms per stack,
+        // StackAmount 4). The CLIENT must see it: the client-tweaks DLL
         // (clientedits/src/gcdtempo.cpp) reads its stack count off the aura
         // to shorten its own GCD the same way the server does.
         SPELL_BOON_TEMPO        = 94318,
@@ -690,14 +690,15 @@ namespace VioletHoldBoons
 
     // Boon of Tempo: the global cooldown `caster` actually gets for a cast
     // whose GCD came out of the normal rules (spellmods, haste clamp) as
-    // `gcd` ms. 100 ms per stack, never below TEMPO_FLOOR_MS, never touching
+    // `gcd` ms. 125 ms per stack, never below TEMPO_FLOOR_MS, never touching
     // a GCD that is already 0 (off-GCD spells) or at the floor. This runs
     // AFTER the haste clamp, so it reaches under the client's 1.0 sec haste
     // floor. The client-tweaks DLL does the identical sum on its side
-    // (clientedits/src/gcdtempo.cpp, defaults MsPerStack 100 / MaxMs 500 /
+    // (clientedits/src/gcdtempo.cpp, defaults MsPerStack 125 / MaxMs 500 /
     // FloorMs 500) - change both together, or the client refuses casts the
     // server would take.
     TC_GAME_API int32 ApplyGlobalCooldownReduction(Unit const* caster, int32 gcd);
+    constexpr int32 TEMPO_MS_PER_STACK = 125;
     constexpr int32 TEMPO_MAX_MS = 500;
     constexpr int32 TEMPO_FLOOR_MS = 500;
 

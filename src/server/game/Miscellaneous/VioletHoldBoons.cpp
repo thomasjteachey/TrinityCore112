@@ -90,7 +90,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Speed,        SPELL_BOON_SPEED,        8, 255, MASK_ALL,    10, "Boon of Swiftness",    "movement speed",                          "%" },
     { Boon::Damage,       SPELL_BOON_DAMAGE,       3, 255, MASK_ALL,      5, "Boon of Might",        "damage done",                             "%" },
     { Boon::DamageTaken,  SPELL_BOON_DAMAGE_TAKEN, 3,  50, MASK_ALL,     8, "Boon of Fortitude",    "less damage taken",                       "%" },
-    { Boon::CcDuration,   SPELL_BOON_CC_DURATION, 15,  90, MASK_ALL,     7, "Boon of Resolve",      "shorter crowd control (stuns, roots, snares, fears...) and interrupt lockouts on you", "%" },
+    { Boon::CcDuration,   SPELL_BOON_CC_DURATION, 19,  95, MASK_ALL,     7, "Boon of Resolve",      "shorter crowd control (stuns, roots, snares, fears...) and interrupt lockouts on you", "%" },
     { Boon::ManaCost,     SPELL_BOON_MANA_COST,   10, 100, MASK_MANA,    7, "Boon of Clarity",      "cheaper mana costs",                      "%" },
     { Boon::RageCost,     SPELL_BOON_RAGE_COST,   10,  75, MASK_RAGE,    7, "Boon of Fury",         "cheaper rage costs",                      "%" },
     { Boon::EnergyCost,   SPELL_BOON_ENERGY_COST, 10,  75, MASK_ENERGY,  7, "Boon of Finesse",      "cheaper energy costs",                    "%" },
@@ -131,9 +131,9 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // engine already applies (197 crit taken, 101 armor %, 232 disarm
     // duration); the other four are procs in scripts/Custom/violet_hold_boons.cpp.
     // Weaponmaster covers what Resolve leaves out on purpose: disarms.
-    { Boon::Resilience,   SPELL_BOON_RESILIENCE,   3,  30, MASK_ALL,      7, "Boon of Resilience",   "less chance to be critically hit",        "%" },
+    { Boon::Resilience,   SPELL_BOON_RESILIENCE,   6,  30, MASK_ALL,      7, "Boon of Resilience",   "less chance to be critically hit",        "%" },
     { Boon::Divinity,     SPELL_BOON_DIVINITY,     5,  25, MASK_ALL,      5, "Boon of Divinity",     "of your damage and healing builds a shield (up to 25% of your health)", "%" },
-    { Boon::Clearcasting, SPELL_BOON_CLEARCASTING, 5,  20, MASK_ALL,      5, "Boon of Clearcasting", "chance on damage or healing that your next spell or ability costs nothing", "%" },
+    { Boon::Clearcasting, SPELL_BOON_CLEARCASTING, 5,  40, MASK_ALL,      5, "Boon of Clearcasting", "chance on damage or healing that your next spell or ability costs nothing", "%" },
     { Boon::Viper,        SPELL_BOON_VIPER,        5,  25, MASK_MANA,     6, "Boon of the Viper",    "of damage dealt returned to you as mana", "%" },
     { Boon::Protector,    SPELL_BOON_PROTECTOR,   10, 100, MASK_ALL,      8, "Boon of the Protector", "armor",                                  "%" },
     { Boon::Weaponmaster, SPELL_BOON_WEAPONMASTER, 10, 90, MASK_MELEE,    4, "Boon of the Weaponmaster", "shorter disarms on you",              "%" },
@@ -148,11 +148,9 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // Rarer still (weight 0 = VERY_RARE_ROLL_QUARTERS, a quarter of
     // Communion's odds), and only one member of a run may ever take it.
     { Boon::Multitudes,   SPELL_BOON_MULTITUDES,   1,   1, MASK_ALL,      0, "Boon of Multitudes",   "every killing blow you land calls a copy of you at 25% strength for the rest of the wave (one per run)", "" },
-    // One stack is 100 ms. The unit is written "00 ms" so every readout that
-    // prints <stacks><unit> - the card's headline, held/after/max bar and the
-    // deck strip - reads in milliseconds ("+100 ms", "300 ms", "max 500 ms");
-    // DescribeOffer has its own line for the gossip menu.
-    { Boon::Tempo,        SPELL_BOON_TEMPO,        1,   5, MASK_ALL,      4, "Boon of Tempo",        "off your global cooldown (never below 0.5 sec)", "00 ms" },
+    // One stack is 125 ms. CardLine, SendDeck and DescribeOffer convert the
+    // stored stack count to milliseconds for display.
+    { Boon::Tempo,        SPELL_BOON_TEMPO,        1,   4, MASK_ALL,      4, "Boon of Tempo",        "off your global cooldown (never below 0.5 sec)", " ms" },
     // Communion's shape: unique, and only offered to a party of two or more
     // (CanTake) - with nobody else in the run it would never do anything.
     { Boon::Deliverance,  SPELL_BOON_DELIVERANCE,  1,   1, MASK_ALL,      2, "Boon of Deliverance",  "your critical strikes free a random ally from all crowd control and give them 50% speed for 3 sec (once every 3 sec, unique)", "" },
@@ -751,7 +749,7 @@ static bool UsesStackingGrantMultiplier(BoonInfo const& info)
 
     // A one-stack grant normally represents a discrete mechanic rather than
     // a numeric power value (one broker, one guardian, one unlock, and so on).
-    // Tempo is numeric despite using one 100 ms stack as its base grant.
+    // Tempo is numeric despite using one 125 ms stack as its base grant.
     return info.grantStacks > 1 || info.boon == Boon::Tempo;
 }
 
@@ -767,6 +765,12 @@ uint8 GetGrantStacks(BoonInfo const& info)
 uint8 GetMaxStacks(BoonInfo const& info)
 {
     if (!UsesStackingGrantMultiplier(info))
+        return info.maxStacks;
+
+    // These ceilings are intentional. With a stacking grant multiplier the
+    // final pick clamps to the remaining amount instead of lowering the cap
+    // to the nearest multiple of the effective grant.
+    if (info.boon == Boon::CcDuration || info.boon == Boon::Resilience)
         return info.maxStacks;
 
     uint8 const grantStacks = GetGrantStacks(info);
@@ -1997,9 +2001,10 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Abundance:
             return Trinity::StringFormat("{}: {} [{}/{}]{}", info.name, info.summary, uint32(held), uint32(maxStacks), blocked);
         case Boon::Tempo:
-            // "[200/500 ms]", not the default's "[2/500 ms]".
-            return Trinity::StringFormat("{}: {} ms {} [{}/{} ms]{}", info.name, uint32(grantStacks) * 100, info.summary,
-                uint32(held) * 100, uint32(maxStacks) * 100, blocked);
+            // "[250/500 ms]", not the default's "[2/4 ms]".
+            return Trinity::StringFormat("{}: {} ms {} [{}/{} ms]{}", info.name,
+                uint32(grantStacks) * TEMPO_MS_PER_STACK, info.summary,
+                uint32(held) * TEMPO_MS_PER_STACK, uint32(maxStacks) * TEMPO_MS_PER_STACK, blocked);
         default:
             return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]{}", info.name, uint32(grantStacks), info.unit,
                 info.summary, uint32(held), uint32(maxStacks), info.unit, blocked);
@@ -2010,7 +2015,7 @@ int32 GetCcDurationReductionPct(Unit const* target, uint32 mechanicMask)
 {
     if (!(mechanicMask & CC_MECHANIC_MASK))
         return 0;
-    return AmountOf(target, SPELL_BOON_CC_DURATION, 90);
+    return AmountOf(target, SPELL_BOON_CC_DURATION, 95);
 }
 
 int32 GetMountCastTimeReductionMs(Unit const* caster)
@@ -2046,7 +2051,7 @@ int32 ApplyGlobalCooldownReduction(Unit const* caster, int32 gcd)
     if (!tempo)
         return gcd;
 
-    int32 const cut = std::min<int32>(int32(tempo->GetStackAmount()) * 100, TEMPO_MAX_MS);
+    int32 const cut = std::min<int32>(int32(tempo->GetStackAmount()) * TEMPO_MS_PER_STACK, TEMPO_MAX_MS);
     return std::max<int32>(TEMPO_FLOOR_MS, gcd - cut);
 }
 

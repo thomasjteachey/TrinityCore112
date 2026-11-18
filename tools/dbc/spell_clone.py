@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Dump a Spell.dbc row, or append clones of one with fields overridden.
+"""Dump, patch, or append clones of Spell.dbc rows.
 
     spell_clone.py dump  <Spell.dbc> <id>
+    spell_clone.py patch <Spell.dbc> <spec.json> [--write]
     spell_clone.py clone <Spell.dbc> <donor> <spec.json> [--write]
 
 spec.json is a list of {"id": N, "name": "...", "description": "...",
@@ -9,10 +10,10 @@ spec.json is a list of {"id": N, "name": "...", "description": "...",
 Spell.dbc FIELD indices (234 per record), NOT mirror column ordinals: see
 reference_spell_lplus_pipeline for why those differ (+0 / +1 / +2).
 
-Clones are appended in ascending id order; the new ids must all be above the
-file's current highest id and not already present, or nothing is written.
-Strings go on the end of the string block. Without --write it only prints
-what it would do. With --write the original is kept as <file>.bak-<stamp>.
+Patch specs update existing rows; clone specs append in ascending id order and
+must all be above the file's current highest id. Strings go on the end of the
+string block. Without --write either mutation only prints what it would do.
+With --write the original is kept as <file>.bak-<stamp>.
 
 Fixed 3.3.5 field indices used here (DBCStructure.h SpellEntry):
     136 SpellName[enUS]   153 Rank[enUS]   170 Description[enUS]   187 ToolTip[enUS]
@@ -65,6 +66,48 @@ def dump(path, sid):
             print("%3d  %10d  0x%08X%s" % (i, v, v, extra))
 
 
+def patch(path, spec_path, write):
+    records, rows, strings = load(path)
+    mutable_rows = bytearray(rows)
+    spec = json.load(open(spec_path))
+    changed_total = 0
+
+    for s in spec:
+        sid = s["id"]
+        row_index = None
+        for r in range(records):
+            if struct.unpack_from("<I", rows, r * 936)[0] == sid:
+                row_index = r
+                break
+        if row_index is None:
+            sys.exit("id %d not found" % sid)
+
+        row = list(struct.unpack_from("<234I", rows, row_index * 936))
+        changed = []
+        for k, v in s.get("fields", {}).items():
+            field = int(k)
+            value = v & 0xFFFFFFFF
+            if row[field] != value:
+                row[field] = value
+                changed.append("%d=%d" % (field, value))
+        struct.pack_into("<234I", mutable_rows, row_index * 936, *row)
+        changed_total += len(changed)
+        print("%d: %s" % (sid, ", ".join(changed) if changed else "unchanged"))
+
+    if not write:
+        print("dry run - pass --write to patch %d field(s)" % changed_total)
+        return
+    if not changed_total:
+        print("nothing to write")
+        return
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    shutil.copy2(path, "%s.bak-%s" % (path, stamp))
+    header = struct.pack("<4sIIII", b"WDBC", records, 234, 936, len(strings))
+    open(path, "wb").write(header + bytes(mutable_rows) + strings)
+    print("wrote %s (%d fields patched), backup .bak-%s" % (path, changed_total, stamp))
+
+
 def clone(path, donor, spec_path, write):
     records, rows, strings = load(path)
     base = row_of(rows, records, donor)
@@ -114,6 +157,8 @@ def clone(path, donor, spec_path, write):
 if __name__ == "__main__":
     if len(sys.argv) >= 4 and sys.argv[1] == "dump":
         dump(sys.argv[2], int(sys.argv[3]))
+    elif len(sys.argv) >= 4 and sys.argv[1] == "patch":
+        patch(sys.argv[2], sys.argv[3], "--write" in sys.argv)
     elif len(sys.argv) >= 5 and sys.argv[1] == "clone":
         clone(sys.argv[2], int(sys.argv[3]), sys.argv[4], "--write" in sys.argv)
     else:

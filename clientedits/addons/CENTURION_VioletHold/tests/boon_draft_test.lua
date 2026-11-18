@@ -202,6 +202,17 @@ check(buttons == 2, "Take and Second Opinion are the only buttons (got " .. butt
 events.scripts.OnEvent(events, "PLAYER_ENTERING_WORLD");
 check(not frame.shown, "leaving the Hold puts the hand away");
 
+-- Numeric units belong only on the new value and cap. This keeps longer
+-- values such as Tempo's milliseconds inside their two fixed footer columns.
+fire("VHBOON:DEAL:" .. TAG .. "^7^30^0^0^0^0^1^Baku^4");
+fire("VHBOON:CARD:" .. TAG .. "^60^B^4^0^0^S94318^Boon of Tempo^+250 ms^off your global cooldown (never below 0.5 sec)^0^250^500^ ms^0");
+fire("VHBOON:SHOW:" .. TAG);
+local tempo = card(60);
+check(tempo and tempo.stack.text == "0 > |cffffffff250 ms|r", "Tempo range uses one unit (got " .. tostring(tempo and tempo.stack.text) .. ")");
+check(tempo and tempo.cap.text == "500 ms max", "Tempo cap stays in its column (got " .. tostring(tempo and tempo.cap.text) .. ")");
+check(tempo and tempo.stack.w == 80 and tempo.cap.w == 50, "footer labels have fixed non-overlapping widths");
+fire("VHBOON:GONE:" .. TAG);
+
 -- the demo hand sends nothing
 before = #sent;
 SlashCmdList.CENTURIONVHDRAFT("demo");

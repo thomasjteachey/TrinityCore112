@@ -249,9 +249,13 @@ local function MakeCard(i)
 	c.barGain:SetHeight(2);
 	c.stack = Text(c, 9);
 	c.stack:SetPoint("TOPLEFT", c.barBg, "BOTTOMLEFT", 0, -4);
+	c.stack:SetWidth(80);
+	c.stack:SetJustifyH("LEFT");
 	c.stack:SetTextColor(0.62, 0.62, 0.68);
 	c.cap = Text(c, 9);
 	c.cap:SetPoint("TOPRIGHT", c.barBg, "BOTTOMRIGHT", 0, -4);
+	c.cap:SetWidth(50);
+	c.cap:SetJustifyH("RIGHT");
 	c.cap:SetTextColor(0.45, 0.45, 0.52);
 
 	-- why it is not yours, over the bottom of the card
@@ -335,8 +339,8 @@ local function DrawCard(c, card, index, count)
 		c.barHave:SetWidth(math.max(have > 0 and 2 or 0.01, width * have));
 		c.barGain:SetWidth(math.max(gain > 0 and 3 or 0.01, width * gain));
 		c.barGain:SetVertexColor(rarity.r, rarity.g, rarity.b);
-		c.stack:SetText(Unit(card, card.held) .. " > |cffffffff" .. Unit(card, card.after) .. "|r");
-		c.cap:SetText("max " .. Unit(card, card.cap));
+		c.stack:SetText(card.held .. " > |cffffffff" .. Unit(card, card.after) .. "|r");
+		c.cap:SetText(Unit(card, card.cap) .. " max");
 		c.barBg:Show(); c.barHave:Show(); c.barGain:Show(); c.stack:Show(); c.cap:Show();
 	else
 		c.barBg:Hide(); c.barHave:Hide(); c.barGain:Hide(); c.stack:Hide(); c.cap:Hide();
