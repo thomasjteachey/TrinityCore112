@@ -968,6 +968,11 @@ namespace VioletHoldBoons
     // Boon of Atonement: heals counted toward the charge, once per wave.
     constexpr uint32 ATONEMENT_HEALS = 5;
     constexpr int32 ATONEMENT_DAMAGE_MULTIPLIER = 10;
+    // Played on the healer when the charge goes up, seen and heard by everyone
+    // near them: stock SpellVisualKit ids, each carrying its own sound.
+    // Avenging Wrath's impact (golden burst at the feet, avengingwrath_impact_base)
+    // and Heroism's (flames over the head, Heroism_Cast's drums).
+    constexpr uint32 ATONEMENT_ARMED_KITS[] = { 6839, 6897 };
     // Spell::_cast, once the cast is going ahead. Counts a holder's heals
     // (the fifth of the wave puts SPELL_ATONEMENT_EMPOWERED up, once per wave)
     // and, for a damaging spell, spends that charge. True = this cast is the

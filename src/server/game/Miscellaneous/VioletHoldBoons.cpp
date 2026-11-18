@@ -2855,7 +2855,12 @@ bool OnSpellCast(Unit* caster, SpellInfo const* spellInfo, bool triggered, bool 
     if (run->CountPerWave(SPELL_BOON_ATONEMENT, player->GetGUID()) != ATONEMENT_HEALS)
         return false;
     if (run->ClaimOncePerWave(SPELL_BOON_ATONEMENT, player->GetGUID()))
+    {
         player->CastSpell(player, SPELL_ATONEMENT_EMPOWERED, TRIGGERED_FULL_MASK);
+        // Big and unmistakable: the next damaging spell is the one.
+        for (uint32 kit : ATONEMENT_ARMED_KITS)
+            player->SendPlaySpellVisual(kit);
+    }
     return false;
 }
 
