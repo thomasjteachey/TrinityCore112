@@ -340,6 +340,20 @@ public:
     // lifecycle's positioning profile, so the two can never disagree about
     // where an enhancement shaman stands.
     static bool UsesMeleeSpacing(Player const* player);
+    // Whether this bot heals for its team, by the class selector's own read of
+    // its talents: a priest outside Shadow, a holy paladin, a restoration
+    // shaman, a restoration druid out of cat and bear form.
+    static bool IsHealerSpec(Player const* player);
+    // The teammate a healing bot in a battleground or arena keeps inside its
+    // heals' reach - the most hurt one, else the nearest one in a fight - or
+    // nullptr when it has nobody to look after, or a battleground job (a flag,
+    // an escort, a leashed base) that already says where it stands.
+    static Player* GetHealerWard(Player const* healer);
+    // The teammate a healing bot has to walk to before its heals can land on
+    // them - too far away, or out of sight round a pillar or a start ramp - or
+    // nullptr. One answer for the lifecycle, which walks the healer there, and
+    // the class executor, which keeps its spells' own movement out of the way.
+    static Player* GetHealerWardToApproach(Player const* healer);
     static bool IsMovementPreventedByRoot(Player const* player);
     // The spell a stealthed rogue opens with (Garrote 703 or Cheap Shot 1833),
     // or 0 when it knows neither. One answer for the class selector and the

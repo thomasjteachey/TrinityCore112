@@ -581,6 +581,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance);
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
+    bool TryWalkHealerToWard(Player* player);
 
     bool IsCrowdControlledForAction(Player const* player)
     {
@@ -773,8 +774,19 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!player || !player->InBattleground())
             return false;
 
+        // A healer first gets to where its heals reach its team; the enemy it
+        // would chase is somebody else's fight until then.
+        if (TryWalkHealerToWard(player))
+            return true;
+
         float const combatEngageDistance = std::clamp(GetAggressiveCombatScanDistance(player, 100.0f), 25.0f, 60.0f);
         if (playerbot::EngageNearestEnemyPlayer(player, combatEngageDistance))
+            return true;
+
+        // Nobody in reach to fight, but a teammate in reach to heal: the healer
+        // stays with them rather than set off across the arena after a distant
+        // enemy, or on the hidden-enemy search, and walk back again.
+        if (playerbot::PvpCore::GetHealerWard(player))
             return true;
 
         Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr);
@@ -2849,7 +2861,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (player->GetClass() == CLASS_PALADIN && !HasTeammateNeedingHeal(player, kPaladinHealerStandBackHealthPct))
             return { 0.0f, 3.0f, 8.0f, false, false, true, "paladin-nothing-to-heal" };
 
-        if (Trinity::Helpers::Entity::IsPlayerHealer(player))
+        // The class selector's read of the talents, so the band and the heals
+        // agree on who is a healer (and with the healer-ward walk below).
+        if (playerbot::PvpCore::IsHealerSpec(player))
         {
             switch (player->GetClass())
             {
@@ -2932,6 +2946,50 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             player->GetPositionY() + std::sin(angleAway) * moveDistance,
             player->GetPositionZ(), player->GetOrientation());
         return IssueMovePointThrottled(player, destination, 4.0f, 500);
+    }
+
+    // A healer whose teammate is out of its heals' reach walks to them, ahead
+    // of anything its own fight wants: PvpCore::GetHealerWardToApproach says
+    // who and when. In sight but too far, it walks to a point short of them;
+    // out of sight, straight at them, so the route rounds whatever is in the
+    // way. When the walk ends it stops there, rather than finish an order
+    // aimed at the teammate's feet.
+    std::unordered_map<uint64, bool> g_HealerWardWalkingByGuid;
+    constexpr float kHealerWardWalkStopShort = 16.0f;
+
+    bool TryWalkHealerToWard(Player* player)
+    {
+        if (!player || !player->InBattleground())
+            return false;
+
+        Player* ward = playerbot::PvpCore::GetHealerWardToApproach(player);
+        if (!ward)
+        {
+            if (bool* walking = playerbot::LockedFind(g_HealerWardWalkingByGuid, player->GetGUID().GetRawValue()); walking && *walking)
+            {
+                *walking = false;
+                if (player->GetMotionMaster()->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE)
+                    StopVirtualPlayerbotMovement(player);
+            }
+            return false;
+        }
+
+        if (!CanIssueBotMovement(player))
+            return false;
+
+        Position const destination = player->IsWithinLOSInMap(ward)
+            ? BuildFollowDestination(player, ward, kHealerWardWalkStopShort)
+            : ward->GetPosition();
+        bool const moving = IssueMovePointThrottled(player, destination, 4.0f, 500) || player->isMoving();
+        playerbot::LockedGetOrCreate(g_HealerWardWalkingByGuid, player->GetGUID().GetRawValue()) = moving;
+
+        EmitBattlegroundGmDebug(player, "healer-ward walk ward=" + ward->GetName() +
+            " dist=" + std::to_string(int32(player->GetDistance(ward))) +
+            " los=" + std::to_string(player->IsWithinLOSInMap(ward) ? 1 : 0), 2000);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP healer walks to its ward: bot={} ward={} distance={} moving={}.",
+            player->GetGUID().ToString(), ward->GetGUID().ToString(), player->GetDistance(ward), moving ? 1 : 0);
+        return moving;
     }
 
     bool TryDrivePlayerbotEscapeAura(Player* player, Unit* target)
@@ -5381,6 +5439,15 @@ namespace playerbot
         if (!CanIssueBotMovement(player))
             return false;
 
+        // A healer's place is measured from the teammate it heals before the
+        // enemy it is fighting: the band below only ever looked at the enemy,
+        // and held still anywhere inside it - a start ramp, the far side of a
+        // pillar - with the teammate out of reach. Ahead of the recent-order
+        // preservation too, since the class layer stands its own movement down
+        // while this walk is on (PvpClassActions::Execute).
+        if (TryWalkHealerToWard(player))
+            return true;
+
         // Hunter movement is handled by DriveHunterKiteLoop below. Do not issue
         // an early generic flee here; re-issuing ad-hoc destinations every tick
         // was one cause of visible triangle/orbit movement.
@@ -5418,8 +5485,13 @@ namespace playerbot
 
         float const distance = player->GetDistance(target);
         bool const hasLos = player->IsWithinLOSInMap(target);
+        // A healer standing where its heals reach its ward stays there. Going
+        // round a pillar to see its enemy, or closing on one that stands off,
+        // would walk it back out of reach, and the walk above would bring it
+        // straight back: a healer pacing between the two.
+        bool const healerHoldsWithWard = profile.primarilyRanged && playerbot::PvpCore::GetHealerWard(player) != nullptr;
         if (!hasLos)
-            return TryRecoverLineOfSight(player, target, profile, "drive-combat-positioning");
+            return healerHoldsWithWard || TryRecoverLineOfSight(player, target, profile, "drive-combat-positioning");
 
         if (HoldPositionForWand(player, target, "combat_positioning_hold_for_wand"))
             return true;
@@ -5459,7 +5531,7 @@ namespace playerbot
                 return MoveAwayFromUnit(player, target, player->GetClass() == CLASS_HUNTER ? std::min(profile.preferredIdealRange, 16.0f) : profile.preferredIdealRange);
             }
 
-            if (distance > profile.preferredMaxPressureRange)
+            if (distance > profile.preferredMaxPressureRange && !healerHoldsWithWard)
             {
                 // A hunter with valid Auto Shot range data is fully owned by
                 // DriveHunterKiteLoop above. Reaching this generic fallback

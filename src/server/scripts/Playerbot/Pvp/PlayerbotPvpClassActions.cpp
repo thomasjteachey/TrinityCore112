@@ -6504,7 +6504,11 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     // moving, while cast times, channels, items, and class movement directives
     // yield to the active route.
     bool const seekingLightwell = PvpCore::ShouldSeekLightwell(player);
-    if (context.preserveFlagObjectiveMovement || seekingLightwell)
+    // A healer walking back to the teammate it heals (the lifecycle's
+    // TryWalkHealerToWard) is held to the same terms: anything instant that
+    // works from where it is, nothing that stops it or turns it round.
+    bool const walkingToHealerWard = PvpCore::GetHealerWardToApproach(player) != nullptr;
+    if (context.preserveFlagObjectiveMovement || seekingLightwell || walkingToHealerWard)
     {
         bool allowInstantSpell = false;
         if (context.spellId)
@@ -6564,15 +6568,32 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         }
         // A healthstone or potion goes down at a run: a flag route is no reason
         // to die holding one.
-        else if (context.itemEntry && context.preserveFlagObjectiveMovement)
+        else if (context.itemEntry && (context.preserveFlagObjectiveMovement || walkingToHealerWard))
             allowInstantSpell = true;
 
         if (!allowInstantSpell)
         {
             SetLastExecutionStatus(player, seekingLightwell ? "lightwell_recovery_movement_before_class_action" :
+                walkingToHealerWard ? "healer_ward_walk_before_class_action" :
                 "flag_objective_movement_before_class_action");
             return true;
         }
+    }
+
+    // A healer already standing where its heals reach its ward is not walked
+    // off by its own spells: closing on an enemy for a Smite, or backing off
+    // one, takes it out of reach, and the walk back brings it straight in
+    // again. Movement toward a friendly target (a heal out of range) still
+    // goes; so does the critical low-mana disengage, which outranks staying.
+    bool holdingWithHealerWard = false;
+    if (!walkingToHealerWard && context.movementPriority < 99.0f &&
+        (context.movementDirective == PvpClassSpellContext::MovementDirective::ReachMeleeRange ||
+            context.movementDirective == PvpClassSpellContext::MovementDirective::ReachSpellRange ||
+            context.movementDirective == PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell) &&
+        PvpCore::GetHealerWard(player))
+    {
+        Unit const* movementUnit = context.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*player, context.movementTargetGuid);
+        holdingWithHealerWard = !movementUnit || !IsFriendlySupportTarget(player, movementUnit, nullptr);
     }
 
     bool const hasCastIntent = context.spellId != 0 || context.itemEntry != 0;
@@ -6583,7 +6604,14 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             context.movementDirective != PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell &&
             context.movementDirective != PvpClassSpellContext::MovementDirective::FaceSpellTarget);
 
-    if (!escapingHazard && context.movementDirective != PvpClassSpellContext::MovementDirective::None && shouldExecuteMovementBeforeCast)
+    if (holdingWithHealerWard && !hasCastIntent)
+    {
+        SetLastExecutionStatus(player, "move_held_with_healer_ward");
+        return true;
+    }
+
+    if (!escapingHazard && !walkingToHealerWard && !holdingWithHealerWard &&
+        context.movementDirective != PvpClassSpellContext::MovementDirective::None && shouldExecuteMovementBeforeCast)
     {
         if (ShouldThrottleDirective(player, context))
         {
@@ -6666,7 +6694,12 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 float desiredRange = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange * PvpCore::SpellRangeFactor(player) - 1.0f));
                 Unit* approachTarget = movementTarget;
-                if (approachTarget && !player->IsValidAttackTarget(approachTarget))
+                // A friendly target is approached as it is: "reach party member
+                // to heal" was being swapped for the bot's enemy below, so the
+                // one order meant to bring a healer to a hurt teammate walked it
+                // at the enemy instead.
+                if (approachTarget && !player->IsValidAttackTarget(approachTarget) &&
+                    !IsFriendlySupportTarget(player, approachTarget, nullptr))
                 {
                     // Defensive fallback: spacing directives are intended to
                     // close on hostile casts. If the preserved movement target
@@ -6789,8 +6822,11 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     // explicit re-positioning before retrying the same cast. Without this,
     // caster bots can repeatedly fail with LOS while remaining idle when
     // class-selection keeps returning a spell action without a move directive.
-    if (!escapingHazard && hasCastIntent &&
+    // Not for a healer on its way to, or standing with, the teammate it heals:
+    // going round a pillar to see an enemy is what took it out of reach.
+    if (!escapingHazard && hasCastIntent && !walkingToHealerWard &&
         context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
+        !(context.targetMode == PvpClassSpellContext::TargetMode::Enemy && PvpCore::GetHealerWard(player)) &&
         CanIssueFollowCommands(player))
     {
         std::string const lastStatus = GetLastExecutionStatus(player);

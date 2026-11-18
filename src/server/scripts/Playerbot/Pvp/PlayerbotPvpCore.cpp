@@ -9385,6 +9385,191 @@ bool PvpCore::UsesMeleeSpacing(Player const* player)
     return player && UsesMeleeSpacingProfile(player, DetectClassicClassProfile(player));
 }
 
+bool PvpCore::IsHealerSpec(Player const* player)
+{
+    if (!player)
+        return false;
+
+    ClassicClassProfile const profile = DetectClassicClassProfile(player).profile;
+    switch (player->GetClass())
+    {
+    case CLASS_PRIEST:
+        // 15473 is Shadowform, the talent and the aura alike.
+        return profile != ClassicClassProfile::TertiaryClassic && !player->HasAura(15473);
+    case CLASS_PALADIN:
+        return profile == ClassicClassProfile::PrimaryClassic;
+    case CLASS_SHAMAN:
+        return profile == ClassicClassProfile::TertiaryClassic;
+    case CLASS_DRUID:
+        return profile == ClassicClassProfile::SecondaryClassic && !IsDruidMeleeForm(player);
+    default:
+        return false;
+    }
+}
+
+namespace
+{
+    // In an arena every teammate is somebody the healer looks after: it is one
+    // room, and a teammate at the far wall is still the healer's job. In a
+    // battleground only the ones within this: a healer keeps to the fight it is
+    // in, it does not cross the map to the most hurt player on the team.
+    constexpr float kHealerWardBattlegroundScanRange = 45.0f;
+    // Below this a teammate is hurt, and the most hurt one is the ward.
+    constexpr float kHealerWardHurtPct = 95.0f;
+    // A holy paladin with nobody this hurt fights in melee instead (the
+    // lifecycle's paladin-nothing-to-heal profile), so it has no ward then.
+    constexpr float kHealerWardPaladinHealthPct = 85.0f;
+    // Out of reach: further than heal range less this, or out of sight.
+    constexpr float kHealerWardReachMargin = 6.0f;
+    // A walk to the ward ends in sight of it and this close, well inside the
+    // reach above, so a teammate on the move or a pillar's edge does not start
+    // the next walk a step after this one ends.
+    constexpr float kHealerWardSettleRange = 22.0f;
+
+    // Each healer's ward and whether it is walking to them. Worked out once a
+    // world tick: the lifecycle and the class executor both ask, more than
+    // once, and the answer costs a pass over the map's players and a line of
+    // sight test.
+    struct HealerWardState
+    {
+        uint32 evaluatedMs = 0;
+        ObjectGuid ward;
+        bool walking = false;
+    };
+    std::unordered_map<uint64, HealerWardState> g_HealerWardByGuid;
+
+    // Who a healing bot keeps inside its heals' reach: the most hurt teammate,
+    // and when nobody is hurt the nearest one in a fight - the heals that
+    // matter are the first ones, and a healer that waits for the damage before
+    // it walks over arrives after it.
+    //
+    // Nobody when the bot has a battleground job that places it: a flag to
+    // carry or run, an escort or a flag room to hold, a base it is leashed to.
+    // Those already say where it stands.
+    Player* SelectHealerWard(Player const* healer)
+    {
+        if (!healer->IsAlive())
+            return nullptr;
+
+        Battleground const* battleground = healer->GetBattleground();
+        Map* map = healer->FindMap();
+        if (!battleground || !map || battleground->GetStatus() != STATUS_IN_PROGRESS)
+            return nullptr;
+
+        if (PvpCore::IsBattlegroundFlagCarrier(healer))
+            return nullptr;
+
+        CtfBotOrders ctfOrders;
+        if (CtfCoordinator::GetOrders(healer, ctfOrders) &&
+            ctfOrders.role != CtfRole::None && ctfOrders.role != CtfRole::Midfield)
+            return nullptr;
+
+        NodeBotOrders nodeOrders;
+        if (NodeCoordinator::GetOrders(healer, nodeOrders) && nodeOrders.hasNode && nodeOrders.leash)
+            return nullptr;
+
+        float const scanRange = battleground->isArena() ? std::numeric_limits<float>::max() : kHealerWardBattlegroundScanRange;
+
+        Player* hurt = nullptr;
+        float hurtTriage = 101.0f;
+        float hurtDistance = std::numeric_limits<float>::max();
+        Player* fighting = nullptr;
+        float fightingDistance = std::numeric_limits<float>::max();
+
+        Map::PlayerList const& players = map->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            Player* candidate = itr->GetSource();
+            if (!candidate || candidate == healer || !candidate->IsAlive() || candidate->IsGameMaster() ||
+                candidate->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                continue;
+            if (candidate->GetBattlegroundId() != healer->GetBattlegroundId() || !IsFriendlySupportTarget(healer, candidate))
+                continue;
+
+            float const distance = healer->GetDistance(candidate);
+            if (distance > scanRange)
+                continue;
+
+            if (candidate->GetHealthPct() < kHealerWardHurtPct)
+            {
+                float const triage = GetHealTriageHealthPct(candidate);
+                if (triage < hurtTriage || (std::abs(triage - hurtTriage) < 0.1f && distance < hurtDistance))
+                {
+                    hurt = candidate;
+                    hurtTriage = triage;
+                    hurtDistance = distance;
+                }
+            }
+            else if (candidate->IsInCombat() && distance < fightingDistance)
+            {
+                fighting = candidate;
+                fightingDistance = distance;
+            }
+        }
+
+        Player* ward = hurt ? hurt : fighting;
+        if (ward && healer->GetClass() == CLASS_PALADIN && ward->GetHealthPct() > kHealerWardPaladinHealthPct)
+            return nullptr;
+
+        return ward;
+    }
+
+    // The walk starts once the ward is out of reach and ends in sight of it,
+    // inside kHealerWardSettleRange.
+    HealerWardState const& EvaluateHealerWard(Player const* healer)
+    {
+        HealerWardState& state = playerbot::LockedGetOrCreate(g_HealerWardByGuid, healer->GetGUID().GetRawValue());
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        if (state.evaluatedMs == nowMs && nowMs != 0)
+            return state;
+        state.evaluatedMs = nowMs;
+
+        Player* ward = SelectHealerWard(healer);
+        if (!ward)
+        {
+            state.ward.Clear();
+            state.walking = false;
+            return state;
+        }
+
+        if (state.ward != ward->GetGUID())
+            state.walking = false;
+        state.ward = ward->GetGUID();
+
+        bool const inSight = healer->IsWithinLOSInMap(ward);
+        float const reach = std::max(kHealerWardSettleRange, GetConfiguredHealRangeFor(healer) - kHealerWardReachMargin);
+        bool const outOfReach = !inSight || !healer->IsWithinDistInMap(ward, reach);
+        bool const settled = inSight && healer->IsWithinDistInMap(ward, kHealerWardSettleRange);
+        state.walking = outOfReach || (state.walking && !settled);
+        return state;
+    }
+}
+
+Player* PvpCore::GetHealerWard(Player const* healer)
+{
+    if (!healer || !healer->InBattleground() || !IsHealerSpec(healer))
+        return nullptr;
+
+    HealerWardState const& state = EvaluateHealerWard(healer);
+    return state.ward.IsEmpty() ? nullptr : ObjectAccessor::GetPlayer(*healer, state.ward);
+}
+
+// A healing bot used to stand wherever its own fight put it. Its place was
+// measured from the enemy it had targeted - hold 25 to 34 yards off it, stop
+// there - and it noticed a hurt teammate only inside forty yards and in line
+// of sight. Nothing ever asked where the teammate it heals was. So a healer
+// whose fight settled it in its start ramp, or with a pillar between it and
+// its partner, stood there at full health and mana while the partner died out
+// of sight: a 2v2 played one against two (Saksak's report, 2026-11-18).
+Player* PvpCore::GetHealerWardToApproach(Player const* healer)
+{
+    if (!healer || !healer->InBattleground() || !IsHealerSpec(healer))
+        return nullptr;
+
+    HealerWardState const& state = EvaluateHealerWard(healer);
+    return state.walking && !state.ward.IsEmpty() ? ObjectAccessor::GetPlayer(*healer, state.ward) : nullptr;
+}
+
 uint32 PvpCore::GetRogueStealthOpenerSpellId(Player const* player)
 {
     return SelectRogueStealthOpenerSpellId(player);
