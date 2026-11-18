@@ -176,7 +176,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::JudgementDay,  94345, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Judgement Day",     "Judgement also strikes every enemy within 20 yd of your target", "" },
     { Boon::PointBlank,    94346, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of Point Blank",       "no dead zone; Auto Shot keeps firing while moving, and Aimed Shot and Multi-Shot can be cast while moving", "" },
     { Boon::Trapper,       94347, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Trapper",       "your traps no longer share a cooldown and can be laid in combat, you can have one of each trap down, and Freezing Trap no longer breaks on damage", "" },
-    { Boon::Barrage,       94348, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Barrage",       "your Multi-Shot hits any number of targets", "" },
+    { Boon::Barrage,       94348, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Barrage",       "Multi-Shot hits every non-crowd-controlled target within range of you, regardless of where you aim", "" },
     { Boon::Assassin,      94349, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Assassin",      "Backstab works from the front and is never dodged, parried or blocked; Sinister Strike also hits a second enemy; Hemorrhage gives 1 extra combo point", "" },
     { Boon::Unseen,        94350, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Unseen",        "damage and hostile effects no longer break your Stealth", "" },
     { Boon::Crippler,      94351, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Crippler",      "Kidney Shot lasts three times as long", "" },

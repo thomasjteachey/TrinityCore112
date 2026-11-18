@@ -152,7 +152,7 @@ namespace VioletHoldBoons
         JudgementDay,   // paladin: Judgement hits every enemy within 20 yd of the target
         PointBlank,     // hunter: no dead zone; Auto/Aimed/Multi-Shot while moving (Skirmisher folded in)
         Trapper,        // hunter: traps unshared, in combat, one of each down; Freezing Trap holds through damage
-        Barrage,        // hunter: Multi-Shot hits any number of targets (was Skirmisher)
+        Barrage,        // hunter: Multi-Shot sweeps every non-CC target in range (was Skirmisher)
         Assassin,       // rogue: Backstab from the front, unavoidable; Sinister Strike cleaves; Hemorrhage +1 combo point
         Unseen,         // rogue: Stealth does not break from damage or effects
         Crippler,       // rogue: Kidney Shot lasts 3x as long

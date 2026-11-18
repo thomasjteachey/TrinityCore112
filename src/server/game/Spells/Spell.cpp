@@ -1829,6 +1829,40 @@ void Spell::SelectImplicitTargetObjectTargets(SpellEffectInfo const& spellEffect
 
 void Spell::SelectImplicitChainTargets(SpellEffectInfo const& spellEffectInfo, SpellImplicitTargetInfo const& targetType, WorldObject* target, uint32 effMask)
 {
+    // Violet Hold Barrage is not a chain originating at the aimed target. It
+    // is a 360-degree hunter-centered sweep across Multi-Shot's full modified
+    // range. Field Medic preserves its ally-healing interaction, while hostile
+    // break-on-damage CC is left completely untouched.
+    if (Unit* unitCaster = m_caster->ToUnit(); VioletHoldClassBoons::IsBarrage(unitCaster, m_spellInfo))
+    {
+        for (size_t k = spellEffectInfo.EffectIndex; k < m_spellInfo->GetEffects().size(); ++k)
+            if (effMask & (1 << k))
+                m_damageMultipliers[k] = 1.0f;
+        m_applyMultiplierMask |= effMask;
+
+        bool const fieldMedic = VioletHoldClassBoons::ShootsAllies(m_caster, m_spellInfo);
+        float const range = GetMinMaxRange(false).second;
+        std::list<WorldObject*> targets;
+        SearchAreaTargets(targets, range, m_caster, m_caster, targetType.GetObjectType(),
+            fieldMedic ? TARGET_CHECK_DEFAULT : TARGET_CHECK_ENEMY, spellEffectInfo.ImplicitTargetConditions);
+        targets.remove_if([this, unitCaster, fieldMedic](WorldObject* object)
+        {
+            Unit* unit = object ? object->ToUnit() : nullptr;
+            if (!unit || unit == unitCaster)
+                return true;
+            if (VioletHoldClassBoons::BarrageAvoidsTarget(unitCaster, m_spellInfo, unit))
+                return true;
+            return !unitCaster->IsValidAttackTarget(unit, m_spellInfo)
+                && !(fieldMedic && VioletHoldClassBoons::IsFieldMedicHeal(m_caster, m_spellInfo, unit));
+        });
+
+        CallScriptObjectAreaTargetSelectHandlers(targets, spellEffectInfo.EffectIndex, targetType);
+        for (WorldObject* object : targets)
+            if (Unit* unit = object->ToUnit())
+                AddUnitTarget(unit, effMask, false);
+        return;
+    }
+
     uint32 maxTargets = spellEffectInfo.ChainTarget;
     if (Player* modOwner = m_caster->GetSpellModOwner())
         modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_JUMP_TARGETS, maxTargets, this);
@@ -2363,6 +2397,11 @@ class ProcReflectDelayed : public BasicEvent
 
 void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*= true*/, bool implicit /*= true*/, Position const* losPosition /*= nullptr*/)
 {
+    // Barrage never breaks deliberate crowd control, even when the controlled
+    // unit was the explicit target that caused this Multi-Shot cast to begin.
+    if (VioletHoldClassBoons::BarrageAvoidsTarget(m_caster->ToUnit(), m_spellInfo, target))
+        return;
+
     // Sap's targeting trace. Kept as a GM tool rather than deleted: it is the
     // only window into why a Sap silently comes up with no target. Scoped to the
     // Sap ranks because that is the hunt it was written for - widen the id test

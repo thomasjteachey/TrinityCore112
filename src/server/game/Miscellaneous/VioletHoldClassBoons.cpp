@@ -633,6 +633,25 @@ bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo)
         || Is(spellInfo, SPELLFAMILY_HUNTER, "Multi-Shot");
 }
 
+bool IsBarrage(Unit const* caster, SpellInfo const* spellInfo)
+{
+    return Holds(caster, SPELL_BARRAGE) && Is(spellInfo, SPELLFAMILY_HUNTER, "Multi-Shot");
+}
+
+bool BarrageAvoidsTarget(Unit const* caster, SpellInfo const* spellInfo, Unit const* target)
+{
+    if (!IsBarrage(caster, spellInfo) || !target || !caster->IsValidAttackTarget(target, spellInfo))
+        return false;
+
+    // The core helper catches Polymorph, Sap, Freezing Trap, breakable roots,
+    // and similar auras carrying TAKE_DAMAGE. Fears on this realm break through
+    // their proc instead, so include fear/confuse/transform explicitly.
+    return target->HasBreakableByDamageCrowdControlAura()
+        || target->HasAuraType(SPELL_AURA_MOD_FEAR)
+        || target->HasAuraType(SPELL_AURA_MOD_CONFUSE)
+        || target->HasAuraType(SPELL_AURA_TRANSFORM);
+}
+
 bool IsUnendingVolley(Unit const* caster, SpellInfo const* spellInfo)
 {
     return Is(spellInfo, SPELLFAMILY_HUNTER, "Volley") && Holds(caster, SPELL_UNENDING_VOLLEY);

@@ -20,7 +20,9 @@
  *  - Sealkeeper (2026-11-14): the record aura IS three seal spellmods
  *    (duration +100%, cost -100%, global cooldown -500 ms, paladin mask
  *    0x0A000200 = every seal), so the client shows and times them itself.
- *  - Barrage: the record aura is a +97 JUMP_TARGETS spellmod on Multi-Shot.
+ *  - Barrage: the record aura is a +97 JUMP_TARGETS spellmod on Multi-Shot so
+ *    the client advertises an uncapped shot. Server selection is caster-centered
+ *    and unlimited; see IsBarrage/BarrageAvoidsTarget below.
  *  - Serenity's ready charge (94382) is a -100% cost spellmod on Tranquility.
  *  - Warlord, Trapper: the cast's shared category cooldown is re-sent as a
  *    per-spell cooldown after SMSG_SPELL_GO (SpellHistory::SyncUnboundCategoryToClient,
@@ -205,6 +207,13 @@ namespace VioletHoldClassBoons
     // Skirmisher was folded into it 2026-11-14.
     TC_GAME_API bool IgnoresMinRange(Unit const* caster, SpellInfo const* spellInfo);
     TC_GAME_API bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo);
+    // Barrage: Multi-Shot selects every valid unit in its full range around
+    // the hunter, regardless of facing or the explicitly aimed target. Hostile
+    // units under break-on-damage crowd control are excluded, including the
+    // explicit target. Field Medic allies remain eligible because the shot
+    // heals rather than damages them.
+    TC_GAME_API bool IsBarrage(Unit const* caster, SpellInfo const* spellInfo);
+    TC_GAME_API bool BarrageAvoidsTarget(Unit const* caster, SpellInfo const* spellInfo, Unit const* target);
     // Unending Volley: the channel becomes a placed permanent dynamic aura.
     // A new Volley removes every older rank first, so recasting moves it.
     TC_GAME_API bool IsUnendingVolley(Unit const* caster, SpellInfo const* spellInfo);
