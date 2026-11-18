@@ -131,7 +131,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // engine already applies (197 crit taken, 101 armor %, 232 disarm
     // duration); the other four are procs in scripts/Custom/violet_hold_boons.cpp.
     // Weaponmaster covers what Resolve leaves out on purpose: disarms.
-    { Boon::Resilience,   SPELL_BOON_RESILIENCE,   6,  30, MASK_ALL,      7, "Boon of Resilience",   "less chance to be critically hit",        "%" },
+    { Boon::Resilience,   SPELL_BOON_RESILIENCE,   6,  45, MASK_ALL,      7, "Boon of Resilience",   "less chance to be critically hit",        "%" },
     { Boon::Divinity,     SPELL_BOON_DIVINITY,     5,  25, MASK_ALL,      5, "Boon of Divinity",     "of your damage and healing builds a shield (up to 25% of your health)", "%" },
     { Boon::Clearcasting, SPELL_BOON_CLEARCASTING, 5,  40, MASK_ALL,      5, "Boon of Clearcasting", "chance on damage or healing that your next spell or ability costs nothing", "%" },
     { Boon::Viper,        SPELL_BOON_VIPER,        5,  25, MASK_MANA,     6, "Boon of the Viper",    "of damage dealt returned to you as mana", "%" },
@@ -768,7 +768,7 @@ uint8 GetMaxStacks(BoonInfo const& info)
     if (!UsesStackingGrantMultiplier(info))
         return info.maxStacks;
 
-    // Resilience's 30% ceiling is intentional. With a stacking grant
+    // Resilience's 45% ceiling is intentional. With a stacking grant
     // multiplier its final pick clamps to the remaining amount instead of
     // lowering the cap to the nearest multiple of the effective grant.
     if (info.boon == Boon::Resilience)
