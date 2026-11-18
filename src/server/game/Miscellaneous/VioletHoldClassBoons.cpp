@@ -1028,6 +1028,25 @@ void LeavePrimalEcho(Unit* druid, uint8 previousForm)
     uint32 const healthPct = previousForm == FORM_BEAR || previousForm == FORM_DIREBEAR ? 40u : 25u;
     echo->SetMaxHealth(std::max<uint32>(1, druid->CountPctFromMaxHealth(healthPct)));
     echo->SetHealth(echo->GetMaxHealth());
+    switch (previousForm)
+    {
+        case FORM_CAT:
+            echo->SetPowerType(POWER_ENERGY);
+            echo->SetMaxPower(POWER_ENERGY, 100);
+            echo->SetPower(POWER_ENERGY, 100);
+            break;
+        case FORM_BEAR:
+        case FORM_DIREBEAR:
+            echo->SetPowerType(POWER_RAGE);
+            echo->SetMaxPower(POWER_RAGE, 1000);
+            echo->SetPower(POWER_RAGE, 0);
+            break;
+        default:
+            echo->SetPowerType(POWER_MANA);
+            echo->SetMaxPower(POWER_MANA, std::max<uint32>(1, druid->GetMaxPower(POWER_MANA)));
+            echo->SetPower(POWER_MANA, echo->GetMaxPower(POWER_MANA));
+            break;
+    }
     echo->SetAttackTime(BASE_ATTACK, druid->GetAttackTime(BASE_ATTACK));
     echo->SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE,
         std::max<float>(1.0f, druid->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE) * 0.25f));

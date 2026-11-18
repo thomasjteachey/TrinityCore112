@@ -371,9 +371,11 @@ class spell_vhr_serenity : public SpellScript
 };
 
 // Boon of the Primal Echo: the core summons this creature with the display and
-// form being left. Caster and Tree echoes mend the weakest nearby party member;
-// Moonkin echoes throw Wrath; physical forms fight at a quarter of the druid's
-// weapon damage. A newer shift dismisses the previous echo in LeavePrimalEcho.
+// form being left. It is a creature rather than a Player, so it cannot run the
+// Playerbot brain directly; give each copied form the small druid rotation that
+// brain would have selected instead of reducing every physical form to an auto
+// attack and caster form to an invisible synthetic heal. A newer shift dismisses
+// the previous echo in LeavePrimalEcho.
 class npc_violet_hold_primal_echo : public CreatureScript
 {
 public:
@@ -386,7 +388,9 @@ public:
         void Reset() override
         {
             _form = FORM_NONE;
-            _pulseMs = 0;
+            _ready = false;
+            _pulseMs = 250;
+            _sequence = 0;
             me->SetReactState(REACT_AGGRESSIVE);
         }
 
@@ -395,6 +399,7 @@ public:
             if (type == DATA_PRIMAL_ECHO_FORM)
             {
                 _form = uint8(value);
+                _ready = true;
                 _pulseMs = 0;
                 Act();
             }
@@ -416,51 +421,129 @@ public:
             return me->SelectNearestTarget(40.0f);
         }
 
-        void Mend(Player* owner)
+        Player* LowestInjuredAlly(Player* owner, uint32 healthPctCeiling)
         {
             Battleground* bg = owner->GetBattleground();
             if (!bg || bg->GetTypeID() != BATTLEGROUND_VHR)
-                return;
+                return owner->GetHealthPct() < healthPctCeiling ? owner : nullptr;
+
+            Player* lowest = nullptr;
+            auto consider = [this, &lowest, healthPctCeiling](Player* candidate)
+            {
+                if (!candidate || !candidate->IsAlive() || !candidate->IsInWorld() || candidate->GetMap() != me->GetMap()
+                    || !candidate->IsWithinDistInMap(me, 40.0f) || candidate->GetHealthPct() >= healthPctCeiling)
+                    return;
+                if (!lowest || uint64(candidate->GetHealth()) * lowest->GetMaxHealth()
+                    < uint64(lowest->GetHealth()) * candidate->GetMaxHealth())
+                    lowest = candidate;
+            };
 
             // Echoes fight beside the whole team, including Fellowship and
-            // playerbot companions. CollectHumanPlayers is intentionally for
-            // broker ownership and excluded exactly the allies most likely to
-            // need this heal in a solo run.
-            Player* lowest = nullptr;
+            // playerbot companions. Always consider the owner explicitly: a
+            // just-seated player can briefly precede their BG roster entry.
+            consider(owner);
             for (auto const& [guid, bgPlayer] : bg->GetPlayers())
             {
                 if (bgPlayer.Team != owner->GetBGTeam())
                     continue;
-                Player* candidate = ObjectAccessor::GetPlayer(*owner, guid);
-                if (!candidate || !candidate->IsAlive() || !candidate->IsInWorld() || candidate->GetMap() != me->GetMap()
-                    || !candidate->IsWithinDistInMap(me, 40.0f) || candidate->GetHealth() >= candidate->GetMaxHealth())
-                    continue;
-                if (!lowest || uint64(candidate->GetHealth()) * lowest->GetMaxHealth()
-                    < uint64(lowest->GetHealth()) * candidate->GetMaxHealth())
-                    lowest = candidate;
+                consider(ObjectAccessor::GetPlayer(*owner, guid));
             }
-            if (!lowest)
-                return;
+            return lowest;
+        }
 
-            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(SPELL_PRIMAL_ECHO);
-            if (!spellInfo)
+        uint32 Rank(uint32 firstRank, Player const* owner) const
+        {
+            return VioletHoldBoons::ResolveRank(firstRank, owner->GetLevel());
+        }
+
+        bool Mend(Player* owner, bool tree)
+        {
+            // Caster form triages meaningful damage and otherwise helps kill;
+            // Tree form is a dedicated healer and tops off any injured ally.
+            Player* target = LowestInjuredAlly(owner, tree ? 100u : 80u);
+            if (!target)
+                return false;
+
+            uint32 spell = 0;
+            if (tree && !target->GetAura(Rank(774, owner), me->GetGUID())) // Rejuvenation
+                spell = Rank(774, owner);
+            else if ((_sequence++ & 1u) == 0)
+                spell = Rank(8936, owner); // Regrowth
+            else
+                spell = Rank(5185, owner); // Healing Touch
+
+            me->GetMotionMaster()->MoveIdle();
+            me->SetFacingToObject(target);
+            me->CastSpell(target, spell, false);
+            _pulseMs = 500;
+            return true;
+        }
+
+        void CastAtEnemy(Player* owner, Unit* target, bool moonkin)
+        {
+            AttackStartCaster(target, 30.0f);
+            uint32 const moonfire = Rank(8921, owner);
+            uint32 spell = 0;
+            if (!target->GetAura(moonfire, me->GetGUID()))
+                spell = moonfire;
+            else if (moonkin && (_sequence++ & 1u))
+                spell = Rank(2912, owner); // Starfire
+            else
+                spell = Rank(5176, owner); // Wrath
+            me->CastSpell(target, spell, false);
+            _pulseMs = 500;
+        }
+
+        void FightInCat(Player* owner, Unit* target)
+        {
+            AttackStart(target);
+            if (!me->IsWithinMeleeRange(target))
+            {
+                _pulseMs = 250;
                 return;
-            HealInfo heal(me, lowest, std::max<uint32>(1, lowest->CountPctFromMaxHealth(5)), spellInfo, SPELL_SCHOOL_MASK_NATURE);
-            me->HealBySpell(heal);
+            }
+            uint32 const rake = Rank(1822, owner);
+            uint32 const spell = !target->GetAura(rake, me->GetGUID()) ? rake : Rank(1082, owner); // Claw
+            me->CastSpell(target, spell, TRIGGERED_FULL_MASK);
+            DoMeleeAttackIfReady();
+            _pulseMs = 1500;
+        }
+
+        void FightInBear(Player* owner, Unit* target)
+        {
+            AttackStart(target);
+            if (!me->IsWithinMeleeRange(target))
+            {
+                _pulseMs = 250;
+                return;
+            }
+            uint32 spell = 0;
+            switch (_sequence++ % 3)
+            {
+                case 0: spell = Rank(6795, owner); break; // Growl: be the tank
+                case 1: spell = Rank(779, owner);  break; // Swipe
+                default: spell = Rank(6807, owner); break; // Maul
+            }
+            me->CastSpell(target, spell, TRIGGERED_FULL_MASK);
+            DoMeleeAttackIfReady();
+            _pulseMs = 1500;
         }
 
         void Act()
         {
             Player* owner = Owner();
-            if (!owner || !owner->IsAlive() || !owner->IsInWorld())
+            if (!_ready || !owner || !owner->IsAlive() || !owner->IsInWorld())
                 return;
 
-            if (_form == FORM_NONE || _form == FORM_TREE)
+            if (_form == FORM_TREE)
             {
-                Mend(owner);
-                _pulseMs = 2000;
+                if (!Mend(owner, true))
+                    _pulseMs = 500;
                 return;
             }
+
+            if (_form == FORM_NONE && Mend(owner, false))
+                return;
 
             Unit* target = Enemy(owner);
             if (!target)
@@ -472,11 +555,14 @@ public:
             // Acquire the druid's target as part of summon setup instead of
             // waiting for the creature's next aggro scan/fade-in cycle.
             me->EngageWithTarget(target);
-            if (_form == FORM_MOONKIN)
+            switch (_form)
             {
-                me->CastSpell(target, VioletHoldBoons::ResolveRank(5176, owner->GetLevel()), TRIGGERED_FULL_MASK);
-                _pulseMs = 2500;
-                return;
+                case FORM_NONE:     CastAtEnemy(owner, target, false); return;
+                case FORM_MOONKIN:  CastAtEnemy(owner, target, true);  return;
+                case FORM_CAT:      FightInCat(owner, target);         return;
+                case FORM_BEAR:
+                case FORM_DIREBEAR: FightInBear(owner, target);        return;
+                default: break;
             }
 
             AttackStart(target);
@@ -493,10 +579,13 @@ public:
                 return;
             }
 
+            if (!_ready || me->HasUnitState(UNIT_STATE_CASTING))
+                return;
+
             if (_pulseMs > diff)
             {
                 _pulseMs -= diff;
-                if (_form != FORM_NONE && _form != FORM_TREE && _form != FORM_MOONKIN)
+                if (_form == FORM_CAT || _form == FORM_BEAR || _form == FORM_DIREBEAR)
                     DoMeleeAttackIfReady();
                 return;
             }
@@ -506,7 +595,9 @@ public:
 
     private:
         uint8 _form = FORM_NONE;
+        bool _ready = false;
         uint32 _pulseMs = 500;
+        uint32 _sequence = 0;
     };
 
     CreatureAI* GetAI(Creature* creature) const override
