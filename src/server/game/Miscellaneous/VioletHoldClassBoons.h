@@ -582,7 +582,7 @@ namespace VioletHoldClassBoons
     TC_GAME_API bool MakesAuraEndless(Unit const* caster, SpellInfo const* spellInfo);
 
     // ---- the ninth block (2026-11-18) --------------------------------------
-    constexpr float STORM_CLEAVE_RADIUS = 5.0f;
+    constexpr float STORM_CLEAVE_RADIUS = 10.0f;
     constexpr float SUPERCHARGED_SHIELD_RANGE = 40.0f;
     constexpr int32 SUPERCHARGED_SHIELD_FACTOR = 5;
 
@@ -590,7 +590,7 @@ namespace VioletHoldClassBoons
     // in a holder's Polymorph gets none of the sheep's fast regeneration (and
     // no other health regeneration while it lasts).
     TC_GAME_API bool IsWoolenPrisoner(Unit const* target);
-    // Storm Cleave: spell_sha_windfury_weapon - the other enemies within 5 yd
+    // Storm Cleave: spell_sha_windfury_weapon - the other enemies within 10 yd
     // of the Windfury target that a holder's two extra attacks also strike.
     // Empty for anyone else.
     TC_GAME_API std::vector<Unit*> StormCleaveTargets(Unit* shaman, Unit* victim);

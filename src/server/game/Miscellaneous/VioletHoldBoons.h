@@ -251,7 +251,7 @@ namespace VioletHoldBoons
 
         // Ninth block (records 94457-94459, in this order; keep contiguous).
         WoolenPrison,    // mage: Polymorph holds through damage and stops health regeneration
-        StormCleave,     // shaman: Windfury Weapon's extra attacks hit every enemy within 5 yd of the target
+        StormCleave,     // shaman: Windfury Weapon's extra attacks hit every enemy within 10 yd of the target
         SuperchargedShield, // shaman, party: Lightning Shield orbs deal 5x and it can be cast on an ally
 
         // A common stacking boon, after the artifact blocks (2026-11-18).

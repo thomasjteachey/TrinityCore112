@@ -270,7 +270,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
 
     // The ninth block, spells 94457-94459 in this order.
     { Boon::WoolenPrison,   SPELL_BOON_WOOLEN_PRISON,   1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Woolen Prison", "Polymorph no longer breaks from damage and no longer regenerates the target's health", "" },
-    { Boon::StormCleave,    SPELL_BOON_STORM_CLEAVE,    1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Storm Cleave", "Windfury Weapon's extra attacks also hit every enemy within 5 yd of the target", "" },
+    { Boon::StormCleave,    SPELL_BOON_STORM_CLEAVE,    1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Storm Cleave", "Windfury Weapon's extra attacks also hit every enemy within 10 yd of the target", "" },
     { Boon::SuperchargedShield, SPELL_BOON_SUPERCHARGED_SHIELD, 1, 1, ClassBit(CLASS_SHAMAN), 0, "Boon of the Supercharged Shield", "Lightning Shield's orbs deal five times as much damage, and it can be cast on an ally: cast it with a friendly player targeted and it goes to them", "" },
 
     // One stack is 15% (DisplayPerStack): a pick adds 15%, up to 300% at 20

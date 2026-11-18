@@ -2133,7 +2133,7 @@ class spell_sha_windfury_weapon : public AuraScript
             player->CastSpell(eventInfo.GetProcTarget(), spellId, args);
 
         // Violet Hold Storm Cleave: a holder's two extra attacks also strike
-        // every other enemy within 5 yd of the target.
+        // every other enemy within 10 yd of the target.
         for (Unit* other : VioletHoldClassBoons::StormCleaveTargets(player, eventInfo.GetProcTarget()))
             for (uint8 i = 0; i < 2; ++i)
                 player->CastSpell(other, spellId, args);
