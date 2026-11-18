@@ -7,12 +7,15 @@
 #include "Battleground.h"
 #include "BattlegroundVHR.h"
 #include "CellImpl.h"
+#include "Chat.h"
+#include "ChatCommand.h"
 #include "Containers.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "Map.h"
 #include "Player.h"
 #include "Random.h"
+#include "RBAC.h"
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
@@ -30,6 +33,7 @@
 #include "ObjectMgr.h"
 #include "StringConvert.h"
 #include "StringFormat.h"
+#include "TemporarySummon.h"
 #include "Util.h"
 #include "VioletHoldBoons.h"
 #include "VioletHoldClassBoons.h"
@@ -44,11 +48,19 @@
 #include <vector>
 
 using namespace VioletHoldBoons;
+using namespace Trinity::ChatCommands;
 
 namespace
 {
 constexpr uint32 ACTION_PICK_BASE = GOSSIP_ACTION_INFO_DEF + 100;   // + uint8(Boon)
 constexpr uint32 ACTION_REROLL = GOSSIP_ACTION_INFO_DEF + 500;
+constexpr uint32 ACTION_TEST_PREVIOUS = GOSSIP_ACTION_INFO_DEF + 501;
+constexpr uint32 ACTION_TEST_NEXT = GOSSIP_ACTION_INFO_DEF + 502;
+constexpr size_t TEST_OFFERS_PER_PAGE = 10;
+
+// At most one all-boons test broker per GM character. A stale entry is harmless
+// and is replaced the next time that character runs the command.
+std::unordered_map<ObjectGuid, ObjectGuid> TestBrokerByOwner;
 
 // "%s takes the %s." - see sql/custom/world/2026_08_15_00_world_violet_hold_boons.sql
 constexpr uint32 STRING_BOON_TAKEN = 20101;
@@ -383,14 +395,43 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         me->SetReactState(REACT_PASSIVE);
     }
 
+    uint32 ConfigureForTesting(Player* owner)
+    {
+        _testOwner = owner ? owner->GetGUID() : ObjectGuid::Empty;
+        _offers.clear();
+        _looks.clear();
+        _lookTimes.clear();
+        _testPage = 0;
+        _consumed = false;
+
+        uint32 eligible = 0;
+        if (owner)
+            for (uint16 index = 0; index < uint16(Boon::Max); ++index)
+            {
+                Offer offer{ Offer::Kind::Boon, uint8(index) };
+                _offers.push_back(offer);
+                if (CanTake(owner, offer) == PickResult::Ok)
+                    ++eligible;
+            }
+
+        _rolled = true;
+        return eligible;
+    }
+
     bool OnGossipHello(Player* player) override
     {
         BattlegroundVHR* run = GetRun(me);
-        if (!MayTrade(player, run, me->GetGUID()) || _consumed)
+        if (!MayTradeWith(player, run) || _consumed)
         {
             CloseGossipMenuFor(player);
             return true;
         }
+
+        // A full class-eligible pool is far wider than the addon card frame.
+        // Keep the normal production broker on cards, and present only this GM
+        // test broker as a compact paged gossip list.
+        if (_testOwner)
+            return ShowTestPage(player, run);
 
         // The board minus whatever has gone dead since it was rolled: a
         // unique boon somebody claimed, a class spell its only owner
@@ -407,10 +448,10 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
                 session->SendNotification("The broker has nothing left that would help anyone here.");
             CloseGossipMenuFor(player);
             _consumed = true;
-            SendToBrokerAudience(run, me->GetGUID(), "VHBOON:GONE:" + BrokerTag(me->GetGUID()));
+            SendAudience(run, "VHBOON:GONE:" + BrokerTag(me->GetGUID()));
             // Frees the slot and removes the creature at the end of the
             // update. Nothing below may touch `me` after this.
-            run->ConsumeBoonBroker(me->GetGUID());
+            Retire(run);
             return true;
         }
 
@@ -421,7 +462,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         for (Offer const& offer : offers)
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, DescribeOffer(player, offer),
                 GOSSIP_SENDER_MAIN, ACTION_PICK_BASE + offer.Encode());
-        if (run->GetSecondOpinionCharges(player))
+        if (!_testOwner && run->GetSecondOpinionCharges(player))
             AddGossipItemFor(player, GOSSIP_ICON_CHAT,
                 Trinity::StringFormat("Ask for a second opinion ({} left)", uint32(run->GetSecondOpinionCharges(player))),
                 GOSSIP_SENDER_MAIN, ACTION_REROLL);
@@ -434,6 +475,20 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
     {
         uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
         CloseGossipMenuFor(player);
+
+        if (_testOwner && action == ACTION_TEST_PREVIOUS)
+        {
+            if (_testPage)
+                --_testPage;
+            OnGossipHello(player);
+            return true;
+        }
+        if (_testOwner && action == ACTION_TEST_NEXT)
+        {
+            ++_testPage;
+            OnGossipHello(player);
+            return true;
+        }
 
         if (action == ACTION_REROLL)
         {
@@ -453,7 +508,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
     bool Reroll(Player* player)
     {
         BattlegroundVHR* run = GetRun(me);
-        if (!MayTrade(player, run, me->GetGUID()) || _consumed || !_rolled
+        if (_testOwner || !MayTradeWith(player, run) || _consumed || !_rolled
             || !player->GetNPCIfCanInteractWith(me->GetGUID(), UNIT_NPC_FLAG_GOSSIP)
             || !run->SpendSecondOpinion(player))
             return false;
@@ -461,7 +516,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         _offers.clear();
         _looks.clear();
         _rolled = false;
-        SendToBrokerAudience(run, me->GetGUID(), Trinity::StringFormat("VHBOON:REROLLED:{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName())));
+        SendAudience(run, Trinity::StringFormat("VHBOON:REROLLED:{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName())));
         return true;
     }
 
@@ -469,7 +524,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
     void Pick(Player* player, Offer offer)
     {
         BattlegroundVHR* run = GetRun(me);
-        if (!MayTrade(player, run, me->GetGUID()) || _consumed)
+        if (!MayTradeWith(player, run) || _consumed)
             return;
 
         // The pick has to be one of the offers this broker is actually
@@ -485,19 +540,29 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
             // whoever it does fit. Nothing was changed.
             if (WorldSession* session = player->GetSession())
                 session->SendNotification("%s", GetPickResultText(result));
+            if (_testOwner)
+                OnGossipHello(player);
             return;
         }
-
-        _consumed = true;
 
         char const* name = offer.kind == Offer::Kind::Boon ? GetBoon(Boon(offer.index)).name
                          : offer.kind == Offer::Kind::ClassSpell ? GetClassSpell(offer.index).name
                          : GetItemGrant(offer.index).name;
         if (WorldSession* session = player->GetSession())
             session->SendNotification("You receive %s.", name);
+        if (_testOwner)
+        {
+            // Unlike a real draft, the test broker remains so the GM can take
+            // another card. LiveOffersFor removes capped/unique cards and keeps
+            // stackable cards until their real cap is reached.
+            OnGossipHello(player);
+            return;
+        }
+
+        _consumed = true;
         if (!run->UsesPersonalBrokers())
             run->PSendMessageToAll(STRING_BOON_TAKEN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, player->GetName().c_str(), name);
-        SendToBrokerAudience(run, me->GetGUID(), Trinity::StringFormat("VHBOON:TAKEN:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), offer.Encode()));
+        SendAudience(run, Trinity::StringFormat("VHBOON:TAKEN:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), offer.Encode()));
 
         // Frees the slot and removes the creature at the end of the update.
         // Nothing below may touch `me` after this.
@@ -509,7 +574,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
     void Look(Player* player, uint32 code)
     {
         BattlegroundVHR* run = GetRun(me);
-        if (!MayTrade(player, run, me->GetGUID()) || _consumed)
+        if (!MayTradeWith(player, run) || _consumed)
             return;
 
         Offer offer;
@@ -528,18 +593,97 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         else
             _looks[player->GetGUID()] = code;
 
-        SendToBrokerAudience(run, me->GetGUID(), Trinity::StringFormat("VHBOON:LOOK:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), code), player);
+        SendAudience(run, Trinity::StringFormat("VHBOON:LOOK:{}^{}^{}", BrokerTag(me->GetGUID()), Field(player->GetName()), code), player);
     }
 
 private:
+    bool ShowTestPage(Player* player, BattlegroundVHR* run)
+    {
+        std::vector<Offer> const offers = LiveOffersFor(run);
+        if (offers.empty())
+        {
+            if (WorldSession* session = player->GetSession())
+                session->SendNotification("You have no eligible boons left on this test broker.");
+            CloseGossipMenuFor(player);
+            _consumed = true;
+            Retire(run);
+            return true;
+        }
+
+        size_t const pages = (offers.size() + TEST_OFFERS_PER_PAGE - 1) / TEST_OFFERS_PER_PAGE;
+        if (_testPage >= pages)
+            _testPage = uint32(pages - 1);
+        size_t const first = size_t(_testPage) * TEST_OFFERS_PER_PAGE;
+        size_t const last = std::min(offers.size(), first + TEST_OFFERS_PER_PAGE);
+
+        ClearGossipMenuFor(player);
+        if (_testPage)
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                Trinity::StringFormat("Previous page ({}/{})", _testPage, pages),
+                GOSSIP_SENDER_MAIN, ACTION_TEST_PREVIOUS);
+        for (size_t i = first; i < last; ++i)
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, DescribeOffer(player, offers[i]),
+                GOSSIP_SENDER_MAIN, ACTION_PICK_BASE + offers[i].Encode());
+        if (last < offers.size())
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                Trinity::StringFormat("Next page ({}/{})", _testPage + 2, pages),
+                GOSSIP_SENDER_MAIN, ACTION_TEST_NEXT);
+
+        SendGossipMenuFor(player, NPC_TEXT_BOON_BROKER, me->GetGUID());
+        return true;
+    }
+
+    bool MayTradeWith(Player const* player, BattlegroundVHR const* run) const
+    {
+        if (!_testOwner)
+            return MayTrade(player, run, me->GetGUID());
+        return player && player->GetGUID() == _testOwner && MayTrade(player, run);
+    }
+
+    void CollectRoster(BattlegroundVHR const* run, std::vector<Player const*>& out) const
+    {
+        if (_testOwner)
+        {
+            if (Player const* owner = ObjectAccessor::FindPlayer(_testOwner))
+                out.push_back(owner);
+            return;
+        }
+        CollectBrokerRoster(run, me->GetGUID(), out);
+    }
+
+    void SendAudience(BattlegroundVHR const* run, std::string const& line, Player const* except = nullptr) const
+    {
+        if (_testOwner)
+        {
+            if ((!except || except->GetGUID() != _testOwner))
+                if (Player* owner = ObjectAccessor::FindPlayer(_testOwner))
+                    Battleground::SendSquadFeedLine(owner, line);
+            return;
+        }
+        SendToBrokerAudience(run, me->GetGUID(), line, except);
+    }
+
+    void Retire(BattlegroundVHR* run)
+    {
+        if (_testOwner)
+        {
+            auto itr = TestBrokerByOwner.find(_testOwner);
+            if (itr != TestBrokerByOwner.end() && itr->second == me->GetGUID())
+                TestBrokerByOwner.erase(itr);
+            me->DespawnOrUnsummon();
+            return;
+        }
+        run->ConsumeBoonBroker(me->GetGUID());
+    }
+
     void SendDeal(Player* viewer, BattlegroundVHR* run, std::vector<Offer> const& live)
     {
         std::string const tag = BrokerTag(me->GetGUID());
         std::vector<Player const*> roster;
-        CollectBrokerRoster(run, me->GetGUID(), roster);
+        CollectRoster(run, roster);
 
         std::string deal = Trinity::StringFormat("VHBOON:DEAL:{}^{}^{}^{}^{}^{}^{}^{}", tag, run->GetWaveNumber(), uint32(BG_VHR_FINAL_WAVE),
-            uint32(run->GetBrokerBonusOffers(viewer)), uint32(run->GetBonusRunesPerWave()), uint32(run->GetBonusBrokersPerWave(viewer)),
+            uint32(_testOwner ? 0 : run->GetBrokerBonusOffers(viewer)), uint32(run->GetBonusRunesPerWave()), uint32(run->GetBonusBrokersPerWave(viewer)),
             uint32(run->GetSecondOpinionCharges(viewer)), run->IsCommonOnlyBroker(me->GetGUID()) ? 1 : 0);
         for (Player const* member : roster)
             if (member && deal.size() < MAX_LINE - 20)
@@ -551,7 +695,7 @@ private:
         for (Offer const& offer : live)
         {
             size_t const position = size_t(std::find(rolled.begin(), rolled.end(), offer) - rolled.begin());
-            Battleground::SendSquadFeedLine(viewer, CardLine(viewer, tag, offer, position >= OFFERS_PER_BROKER, roster));
+            Battleground::SendSquadFeedLine(viewer, CardLine(viewer, tag, offer, !_testOwner && position >= OFFERS_PER_BROKER, roster));
         }
 
         SendDeck(viewer, tag);
@@ -575,7 +719,7 @@ private:
     std::vector<Offer> LiveOffersFor(BattlegroundVHR const* run)
     {
         std::vector<Player const*> roster;
-        CollectBrokerRoster(run, me->GetGUID(), roster);
+        CollectRoster(run, roster);
 
         std::vector<Offer> live;
         for (Offer const& offer : OffersFor(run))
@@ -594,7 +738,7 @@ private:
         if (!_rolled)
         {
             std::vector<Player const*> roster;
-            CollectBrokerRoster(run, me->GetGUID(), roster);
+            CollectRoster(run, roster);
             // Boon of Greed widens every broker rolled after it.
             Player const* owner = roster.empty() ? nullptr : roster.front();
             _offers = RollOffers(roster, uint8(std::min<uint32>(OFFERS_PER_BROKER + run->GetBrokerBonusOffers(owner), 12)),
@@ -607,6 +751,8 @@ private:
     std::vector<Offer> _offers;
     std::unordered_map<ObjectGuid, uint32> _looks;
     std::unordered_map<ObjectGuid, uint32> _lookTimes;
+    ObjectGuid _testOwner;
+    uint32 _testPage = 0;
     bool _rolled;
     bool _consumed;
 };
@@ -679,6 +825,78 @@ public:
     CreatureAI* GetAI(Creature* creature) const override
     {
         return new npc_violet_hold_boon_brokerAI(creature);
+    }
+};
+
+// `.vhr broker`: a private, persistent test draft containing every boon the
+// invoking GM can legally take at that moment. It deliberately uses CanTake,
+// Take, and the normal gossip interaction so it tests the production grant
+// path. One successful pick does not consume this special broker.
+class violet_hold_boon_commands : public CommandScript
+{
+public:
+    violet_hold_boon_commands() : CommandScript("violet_hold_boon_commands") { }
+
+    ChatCommandTable GetCommands() const override
+    {
+        static ChatCommandTable vhrTable =
+        {
+            { "broker", HandleBroker, rbac::RBAC_PERM_COMMAND_GM, Console::No },
+        };
+        static ChatCommandTable commandTable =
+        {
+            { "vhr", vhrTable },
+        };
+        return commandTable;
+    }
+
+    static bool HandleBroker(ChatHandler* handler)
+    {
+        WorldSession* session = handler->GetSession();
+        Player* player = session ? session->GetPlayer() : nullptr;
+        BattlegroundVHR* run = RunOfPlayer(player);
+        if (!player || !MayTrade(player, run))
+        {
+            handler->SendSysMessage("You must be a real party member inside an active Violet Hold run.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        auto old = TestBrokerByOwner.find(player->GetGUID());
+        if (old != TestBrokerByOwner.end())
+        {
+            if (Creature* broker = ObjectAccessor::GetCreature(*player, old->second))
+            {
+                Battleground::SendSquadFeedLine(player, "VHBOON:GONE:" + BrokerTag(broker->GetGUID()));
+                broker->DespawnOrUnsummon();
+            }
+            TestBrokerByOwner.erase(old);
+        }
+
+        Position spot = player->GetNearPosition(2.0f, 0.0f);
+        spot.SetOrientation(spot.GetAbsoluteAngle(player));
+        TempSummon* broker = player->SummonCreature(NPC_BOON_BROKER, spot, TEMPSUMMON_MANUAL_DESPAWN);
+        npc_violet_hold_boon_brokerAI* ai = broker ? dynamic_cast<npc_violet_hold_boon_brokerAI*>(broker->AI()) : nullptr;
+        if (!ai)
+        {
+            if (broker)
+                broker->DespawnOrUnsummon();
+            handler->SendSysMessage("The Violet Hold boon broker could not be spawned.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint32 const count = ai->ConfigureForTesting(player);
+        if (!count)
+        {
+            broker->DespawnOrUnsummon();
+            handler->SendSysMessage("You currently have no eligible boons to test.");
+            return true;
+        }
+
+        TestBrokerByOwner[player->GetGUID()] = broker->GetGUID();
+        handler->PSendSysMessage("Spawned a private test broker with %u eligible boons. It remains after each pick; run .vhr broker again to replace it.", count);
+        return true;
     }
 };
 
@@ -1463,6 +1681,7 @@ void AddSC_violet_hold_boons()
 {
     new vhr_party_boon_damage();
     new npc_violet_hold_boon_broker();
+    new violet_hold_boon_commands();
     AddonRequestRoutes::Register("VHBOON", &HandleBoonRequest);
     RegisterSpellScript(spell_vhr_boon_flurry);
     RegisterSpellScript(spell_vhr_boon_echoes);
