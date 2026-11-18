@@ -27,6 +27,7 @@
 #include "ScriptedCreature.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
+#include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
@@ -373,10 +374,10 @@ class spell_vhr_serenity : public SpellScript
 
 // Boon of the Primal Echo: the core summons this creature with the display and
 // form being left. It is a creature rather than a Player, so it cannot run the
-// Playerbot brain directly; give each copied form the small druid rotation that
-// brain would have selected instead of reducing every physical form to an auto
-// attack and caster form to an invisible synthetic heal. A newer shift dismisses
-// the previous echo in LeavePrimalEcho.
+// Playerbot brain directly. Its cat decisions deliberately follow the active
+// playerbot feral attack path (charge, Faerie Fire, Dash, finisher, builders and
+// Shred flanking), while bear is the intentionally narrower Charge/Bash/Maul
+// memory. A newer shift dismisses the previous echo in LeavePrimalEcho.
 class npc_violet_hold_primal_echo : public CreatureScript
 {
 public:
@@ -457,6 +458,65 @@ public:
             return VioletHoldBoons::ResolveRank(firstRank, owner->GetLevel());
         }
 
+        uint32 KnownRank(uint32 spellId, Player const* owner) const
+        {
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!owner || !spellInfo)
+                return 0;
+
+            // Match the playerbot resolver: walk down from the top of the
+            // chain and use the highest rank the echo's owner actually knows.
+            for (SpellInfo const* rank = spellInfo->ChainEntry ? spellInfo->ChainEntry->last : spellInfo;
+                rank; rank = rank->ChainEntry ? rank->ChainEntry->prev : nullptr)
+                if (owner->HasSpell(rank->Id))
+                    return rank->Id;
+            return 0;
+        }
+
+        bool HasAuraFromChain(Unit const* target, uint32 spellId) const
+        {
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!target || !spellInfo)
+                return false;
+
+            SpellInfo const* rank = spellInfo->ChainEntry ? spellInfo->ChainEntry->first : spellInfo;
+            for (; rank; rank = rank->ChainEntry ? rank->ChainEntry->next : nullptr)
+                if (target->HasAura(rank->Id))
+                    return true;
+            return false;
+        }
+
+        bool Ready(uint32 spellId) const
+        {
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!spellInfo || me->GetSpellHistory()->HasCooldown(spellId))
+                return false;
+            if (spellInfo->IsNextMeleeSwingSpell() && me->GetCurrentSpell(CURRENT_MELEE_SPELL))
+                return false;
+            if (spellInfo->PowerType < 0 || spellInfo->PowerType >= MAX_POWERS)
+                return true;
+
+            int32 const cost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
+            return cost <= 0 || me->GetPower(Powers(spellInfo->PowerType)) >= cost;
+        }
+
+        bool Use(Unit* target, uint32 spellId, uint32 nextDecisionMs = 1500)
+        {
+            if (!target || !spellId || !Ready(spellId))
+                return false;
+
+            // The echo looks like the copied form but deliberately has no
+            // shapeshift aura (adding one would replace the copied model).
+            // Ignore only that requirement: costs, combo points and native
+            // spell/category cooldowns still behave normally.
+            constexpr TriggerCastFlags flags = TriggerCastFlags(
+                TRIGGERED_IGNORE_SHAPESHIFT | TRIGGERED_DONT_REPORT_CAST_ERROR);
+            me->SetFacingToObject(target);
+            me->CastSpell(target, spellId, flags);
+            _pulseMs = nextDecisionMs;
+            return true;
+        }
+
         bool Mend(Player* owner, bool tree)
         {
             // Caster form triages meaningful damage and otherwise helps kill;
@@ -497,37 +557,109 @@ public:
 
         void FightInCat(Player* owner, Unit* target)
         {
-            AttackStart(target);
+            if (me->HasUnitState(UNIT_STATE_CHARGING))
+            {
+                _pulseMs = 100;
+                return;
+            }
+
+            float const distance = me->GetDistance(target);
+            uint32 const charge = KnownRank(49376, owner); // Feral Charge - Cat
+            if (distance >= 8.0f && distance <= 25.0f && Use(target, charge, 250))
+                return;
+
+            // This is the same opening order as the playerbot feral fast path:
+            // armor debuff before ordinary travel, then Dash if Charge was not
+            // available and the cat is still outside melee range.
+            uint32 const faerieFire = KnownRank(17392, owner); // Faerie Fire (Feral)
+            if (!HasAuraFromChain(target, 17392) && !HasAuraFromChain(target, 9907) && Use(target, faerieFire))
+                return;
+
             if (!me->IsWithinMeleeRange(target))
             {
+                uint32 const dash = KnownRank(9821, owner);
+                if (!HasAuraFromChain(me, 1850) && Use(me, dash, 250))
+                {
+                    AttackStart(target);
+                    return;
+                }
+                AttackStart(target);
                 _pulseMs = 250;
                 return;
             }
-            uint32 const rake = Rank(1822, owner);
-            uint32 const spell = !target->GetAura(rake, me->GetGUID()) ? rake : Rank(1082, owner); // Claw
-            me->CastSpell(target, spell, TRIGGERED_FULL_MASK);
+
+            AttackStart(target);
+            uint8 const comboPoints = me->GetComboPoints(target);
+            uint32 const rip = KnownRank(9896, owner);
+            if (comboPoints >= 5 && Use(target, rip))
+                return;
+
+            uint32 const shred = KnownRank(9830, owner);
+            bool const behind = !target->HasInArc(3.14159265f, me);
+            bool const mayFlank = target->GetVictim() && target->GetVictim() != me;
+            bool const shredViable = behind || mayFlank;
+
+            // Preserve the active playerbot path's frontal-builder rule: if
+            // this cat holds aggro and cannot safely flank, Claw comes before
+            // the bleed. Otherwise Rake is maintained before walking behind.
+            uint32 const claw = KnownRank(9850, owner);
+            if (!shredViable && !HasAuraFromChain(target, 33876) && Use(target, claw))
+                return;
+
+            uint32 const rake = KnownRank(9904, owner);
+            if (!HasAuraFromChain(target, 1822) && Use(target, rake))
+                return;
+
+            if (shred && Ready(shred) && !behind && mayFlank)
+            {
+                me->GetMotionMaster()->MoveChase(target, 0.0f, 3.14159265f);
+                _pulseMs = 250;
+                return;
+            }
+            if (behind && Use(target, shred))
+                return;
+
+            // Claw is the playerbot's frontal builder whenever the target is
+            // fixated on the cat or a safe Shred angle is unavailable.
+            if (Use(target, claw))
+                return;
+
+            // Low energy/cooldown: keep swinging while the next decision waits
+            // for regeneration instead of repeatedly issuing a failed spell.
             DoMeleeAttackIfReady();
-            _pulseMs = 1500;
+            _pulseMs = 250;
         }
 
         void FightInBear(Player* owner, Unit* target)
         {
+            if (me->HasUnitState(UNIT_STATE_CHARGING))
+            {
+                _pulseMs = 100;
+                return;
+            }
+
+            float const distance = me->GetDistance(target);
+            uint32 const charge = KnownRank(16979, owner); // Feral Charge - Bear
+            if (distance >= 8.0f && distance <= 25.0f && Use(target, charge, 250))
+                return;
+
             AttackStart(target);
             if (!me->IsWithinMeleeRange(target))
             {
                 _pulseMs = 250;
                 return;
             }
-            uint32 spell = 0;
-            switch (_sequence++ % 3)
-            {
-                case 0: spell = Rank(6795, owner); break; // Growl: be the tank
-                case 1: spell = Rank(779, owner);  break; // Swipe
-                default: spell = Rank(6807, owner); break; // Maul
-            }
-            me->CastSpell(target, spell, TRIGGERED_FULL_MASK);
+
+            // Bear echoes intentionally do only these attacks. Bash wins when
+            // ready; otherwise Maul is queued onto the next ordinary swing.
+            uint32 const bash = KnownRank(8983, owner);
+            if (Use(target, bash))
+                return;
+            uint32 const maul = KnownRank(9881, owner);
+            Use(target, maul, 250);
             DoMeleeAttackIfReady();
-            _pulseMs = 1500;
+            if (!_pulseMs)
+                _pulseMs = 250;
         }
 
         void Act()

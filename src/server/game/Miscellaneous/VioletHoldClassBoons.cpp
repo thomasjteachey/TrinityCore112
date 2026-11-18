@@ -1039,7 +1039,10 @@ void LeavePrimalEcho(Unit* druid, uint8 previousForm)
         case FORM_DIREBEAR:
             echo->SetPowerType(POWER_RAGE);
             echo->SetMaxPower(POWER_RAGE, 1000);
-            echo->SetPower(POWER_RAGE, 0);
+            // Creature echoes do not receive player-style rage from their
+            // outgoing white damage. Seed a full bar so the short-lived bear
+            // can actually pay for Charge, Bash and queued Mauls.
+            echo->SetPower(POWER_RAGE, 1000);
             break;
         default:
             echo->SetPowerType(POWER_MANA);
