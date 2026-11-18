@@ -1641,6 +1641,10 @@ void World::LoadConfigSettings(bool reload)
     // (BattlegroundVHR::SpawnWaveRewardBuffs carries the fraction wave to wave).
     m_float_configs[CONFIG_CENTURION_VHR_BROKERS_PER_EXTRA_PLAYER] = std::clamp(
         sConfigMgr->GetFloatDefault("Centurion.VioletHold.BrokersPerExtraPlayer", 0.05f), 0.0f, 1.0f);
+    // Multiplies the number of stacks granted by numeric stacking boons. The
+    // boon system deliberately exempts Beastmaster, Ascension, and rage/energy talents.
+    m_float_configs[CONFIG_CENTURION_VHR_STACKING_BOON_GRANT_MULTIPLIER] = std::clamp(
+        sConfigMgr->GetFloatDefault("Centurion.VioletHold.StackingBoonGrantMultiplier", 1.5f), 0.1f, 5.0f);
     // End-of-match honor set so every kind of battleground and arena match
     // earns the same honor per hour at its median length
     // (BattlegroundMgr::GetHourlyHonorPayout). Read at every match end, so

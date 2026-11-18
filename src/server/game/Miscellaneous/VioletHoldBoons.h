@@ -7,10 +7,11 @@
  * player to take one consumes him. Offers come from two pools:
  *
  *  - Boons: permanent self-auras whose base points are ONE unit per stack
- *    (1%, 1 resistance, 1 level), whose Spell.dbc StackAmount is the
- *    advertised cap, and which a pick advances by `grantStacks` - so "+8%
- *    speed, stacks to 255%" is 8 stacks of a 255-stack, 1%-per-stack aura.
- *    The engine multiplies base points by the stack count in
+ *    (1%, 1 resistance, 1 level). Spell.dbc StackAmount is the hard ceiling;
+ *    the advertised cap rounds down to a whole number of configured grants.
+ *    At the default 1.5 multiplier, "+12% speed, stacks to 252%" is 12 stacks
+ *    per pick of a 255-stack, 1%-per-stack aura. The engine multiplies base
+ *    points by the stack count in
  *    AuraEffect::CalculateAmount, which is what keeps the family data-driven.
  *
  *  - Class spells: three per class (Killing Spree, Lava Burst, ...) taught
@@ -159,7 +160,7 @@ namespace VioletHoldBoons
         ShatteredWard,  // priest: Power Word: Shield explodes for what it absorbed
         Agony,          // priest: Shadow Word: Pain all at once
         Frostwalker,    // mage: Blink casts Frost Nova where you leave and where you land
-        Spellbreaker,   // mage: a successful Counterspell clears every lockout on you and your allies
+        Spellbreaker,   // mage: Counterspell clears allied lockouts and spreads its school lockout to every enemy
         Transmutation,  // mage: instant Polymorph, on up to three targets
         Contagion,      // warlock: DoTs jump when their target dies
         Indelible,      // warlock: undispellable debuffs
@@ -414,7 +415,7 @@ namespace VioletHoldBoons
     {
         Boon boon;
         uint32 spellId;
-        uint8 grantStacks;      // stacks one pick adds
+        uint8 grantStacks;      // base stacks one pick adds, before configured scaling
         uint8 maxStacks;        // must equal the spell's StackAmount
         // Classes the boon is offered to, as a ChrClasses bitmask (1 << (class-1)).
         // A rage discount is noise to a mage; the roll skips it instead.
@@ -531,6 +532,13 @@ namespace VioletHoldBoons
     constexpr uint8 BOON_OUTRIDER_MIN_LEVEL = 40;
 
     TC_GAME_API BoonInfo const& GetBoon(Boon boon);
+    // Effective stacks awarded by one pick. Numeric stacking boons use the
+    // live config multiplier; one-stack mechanics other than Tempo,
+    // Beastmaster, Ascension, and rage/energy talents retain their base grant.
+    TC_GAME_API uint8 GetGrantStacks(BoonInfo const& info);
+    // The advertised/reachable cap. It never exceeds the aura's DBC cap and
+    // rounds down to a whole number of configured grants.
+    TC_GAME_API uint8 GetMaxStacks(BoonInfo const& info);
     TC_GAME_API ClassSpellInfo const& GetClassSpell(uint8 index);
     TC_GAME_API ItemGrantInfo const& GetItemGrant(uint8 index);
     TC_GAME_API BoonInfo const* FindBySpell(uint32 spellId);

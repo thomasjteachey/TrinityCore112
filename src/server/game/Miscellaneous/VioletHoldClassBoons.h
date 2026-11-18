@@ -26,7 +26,8 @@
  *  - Warlord, Trapper: the cast's shared category cooldown is re-sent as a
  *    per-spell cooldown after SMSG_SPELL_GO (SpellHistory::SyncUnboundCategoryToClient,
  *    the T2 unbound-shock recipe).
- *  - Spellbreaker: every cleared lockout is an SMSG_CLEAR_COOLDOWN.
+ *  - Spellbreaker: every cleared lockout is an SMSG_CLEAR_COOLDOWN; the enemy
+ *    side receives the interrupted school's normal Counterspell lockout.
  *  - NOT reachable without the client DLL (see the report): Point Blank's
  *    minimum range, the Untamed shapeshift while stunned/feared/polymorphed,
  *    and the totem bar for more than one totem per element.
@@ -37,6 +38,7 @@
 
 #include "Define.h"
 #include "ObjectGuid.h"
+#include "SharedDefines.h"
 #include <vector>
 
 class Aura;
@@ -240,7 +242,10 @@ namespace VioletHoldClassBoons
     // Frostwalker: the Frost Nova rank this mage knows (0 if none).
     TC_GAME_API uint32 GetFrostNovaRank(Unit const* caster);
     // Spellbreaker: Spell::EffectInterruptCast, after something was interrupted.
-    TC_GAME_API void OnSuccessfulInterrupt(Unit* caster, SpellInfo const* spellInfo);
+    // Clears allied lockouts and spreads the interrupted school's lockout to
+    // every living enemy (and their controlled units) in the run.
+    TC_GAME_API void OnSuccessfulInterrupt(Unit* caster, SpellInfo const* spellInfo, Unit* interruptedTarget,
+        SpellSchoolMask schoolMask, uint32 lockoutTime);
 
     // ---- priest (Second Coming) ---------------------------------------------
     // While the charge is up, priest Resurrection (family 6, RESURRECT_NEW) is
@@ -317,7 +322,8 @@ namespace VioletHoldClassBoons
     TC_GAME_API void OnWaveRestored(Player* player);
 
     // ---- shaman ------------------------------------------------------------
-    // Stormcaller: Purge's dispel count becomes "everything" (Spell::EffectDispel).
+    // Stormcaller: Purge's dispel count becomes "everything", and every
+    // successful removal is transferred to the shaman (Spell::EffectDispel).
     TC_GAME_API bool DispelsEverything(WorldObject const* caster, SpellInfo const* spellInfo);
     // Totem Lord: Spell::EffectSummonType, before the totem is made: the
     // holder's earlier copy of this same totem goes, and the duration becomes

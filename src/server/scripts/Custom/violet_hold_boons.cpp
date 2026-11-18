@@ -261,8 +261,9 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
             name = info.name;
             runWide = IsRunWideBoon(info.boon, viewer);
             held = GetStacks(viewer, info.boon);
-            cap = info.maxStacks;
-            after = std::min<uint32>(held + info.grantStacks, cap);
+            cap = GetMaxStacks(info);
+            uint8 const grantStacks = GetGrantStacks(info);
+            after = std::min<uint32>(held + grantStacks, cap);
             unit = info.unit;
             text = info.summary;
             if (BattlegroundVHR* run = RunOfPlayer(viewer); run && run->UsesPersonalBrokers())
@@ -275,7 +276,7 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
                     default: break;
                 }
             if (cap > 1)
-                headline = Trinity::StringFormat("+{}{}", uint32(info.grantStacks), info.unit);
+                headline = Trinity::StringFormat("+{}{}", uint32(grantStacks), info.unit);
             if (info.boon == Boon::Healthstone)
                 if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(GetHealthstoneFor(viewer->GetLevel())))
                     text = proto->Name1 + ", " + info.summary;

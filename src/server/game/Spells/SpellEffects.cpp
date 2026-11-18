@@ -2688,8 +2688,10 @@ void Spell::EffectDispel()
 
     uint32 dispelCount = uint32(damage);
 
-    // Violet Hold Stormcaller: Purge takes everything it can.
-    if (VioletHoldClassBoons::DispelsEverything(m_caster, m_spellInfo))
+    // Violet Hold Stormcaller: Purge takes everything it can, then transfers
+    // every successful removal to its caster below.
+    bool const stormcaller = VioletHoldClassBoons::DispelsEverything(m_caster, m_spellInfo);
+    if (stormcaller)
         dispelCount = 255;
 
     DispelChargesList dispelList;
@@ -2766,7 +2768,19 @@ void Spell::EffectDispel()
         // Send dispelled spell info
         dataSuccess << uint32(itr->GetAura()->GetId());         // Spell Id
         dataSuccess << uint8(0);                                // 0 - dispelled !=0 cleansed
-        unitTarget->RemoveAurasDueToSpellByDispel(itr->GetAura()->GetId(), m_spellInfo->Id, itr->GetAura()->GetCasterGUID(), m_caster, itr->GetDispelCharges());
+        uint32 const auraId = itr->GetAura()->GetId();
+        ObjectGuid const auraCaster = itr->GetAura()->GetCasterGUID();
+        if (stormcaller)
+        {
+            // RemoveAurasDueToSpellBySteal transfers one charge or stack at a
+            // time and preserves the original aura amounts and remaining
+            // duration. Artifact Purge deliberately steals even a normally
+            // non-stealable magic buff: if Purge succeeded, Stormcaller owns it.
+            for (uint8 charge = 0; charge < itr->GetDispelCharges(); ++charge)
+                unitTarget->RemoveAurasDueToSpellBySteal(auraId, auraCaster, m_caster);
+        }
+        else
+            unitTarget->RemoveAurasDueToSpellByDispel(auraId, m_spellInfo->Id, auraCaster, m_caster, itr->GetDispelCharges());
     }
     m_caster->SendMessageToSet(&dataSuccess, true);
 
@@ -3904,6 +3918,8 @@ void Spell::EffectInterruptCast()
     // also exist case: apply cooldown to interrupted cast only and to all spells
     // there is no CURRENT_AUTOREPEAT_SPELL spells that can be interrupted
     bool interruptedSomething = false;
+    SpellSchoolMask interruptedSchools = SPELL_SCHOOL_MASK_NONE;
+    uint32 longestLockout = 0;
     for (uint32 i = CURRENT_FIRST_NON_MELEE_SPELL; i < CURRENT_AUTOREPEAT_SPELL; ++i)
     {
         if (Spell* spell = unitTarget->GetCurrentSpell(CurrentSpellTypes(i)))
@@ -3920,7 +3936,11 @@ void Spell::EffectInterruptCast()
                 if (Unit* unitCaster = GetUnitCasterForEffectHandlers())
                 {
                     int32 duration = Aura::CalcMaxDuration(m_spellInfo, unitCaster);
-                    unitTarget->GetSpellHistory()->LockSpellSchool(curSpellInfo->GetSchoolMask(), unitTarget->ModSpellDuration(m_spellInfo, unitTarget, duration, false, 1 << effectInfo->EffectIndex));
+                    uint32 lockout = unitTarget->ModSpellDuration(m_spellInfo, unitTarget, duration, false, 1 << effectInfo->EffectIndex);
+                    SpellSchoolMask school = curSpellInfo->GetSchoolMask();
+                    unitTarget->GetSpellHistory()->LockSpellSchool(school, lockout);
+                    interruptedSchools = SpellSchoolMask(interruptedSchools | school);
+                    longestLockout = std::max(longestLockout, lockout);
                     if (m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MAGIC)
                         Unit::ProcSkillsAndAuras(unitCaster, unitTarget, PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_NEG, PROC_FLAG_TAKEN_SPELL_MAGIC_DMG_CLASS_NEG,
                             PROC_SPELL_TYPE_MASK_ALL, PROC_SPELL_PHASE_HIT, PROC_HIT_INTERRUPT, nullptr, nullptr, nullptr);
@@ -3941,10 +3961,11 @@ void Spell::EffectInterruptCast()
             T2SpellHooks::OnInterruptWhileNotCasting(unitCaster, unitTarget);
 
     // Violet Hold Spellbreaker: a Counterspell that landed frees the caster's
-    // whole side from their own lockouts.
+    // whole side from their own lockouts, then locks the interrupted schools
+    // for every enemy in the run.
     if (interruptedSomething)
         if (Unit* unitCaster = GetUnitCasterForEffectHandlers())
-            VioletHoldClassBoons::OnSuccessfulInterrupt(unitCaster, m_spellInfo);
+            VioletHoldClassBoons::OnSuccessfulInterrupt(unitCaster, m_spellInfo, unitTarget, interruptedSchools, longestLockout);
 }
 
 void Spell::EffectSummonObjectWild()

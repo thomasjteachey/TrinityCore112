@@ -613,9 +613,11 @@ uint32 GetFrostNovaRank(Unit const* caster)
     return best;
 }
 
-void OnSuccessfulInterrupt(Unit* caster, SpellInfo const* spellInfo)
+void OnSuccessfulInterrupt(Unit* caster, SpellInfo const* spellInfo, Unit* interruptedTarget,
+    SpellSchoolMask schoolMask, uint32 lockoutTime)
 {
-    if (!Is(spellInfo, SPELLFAMILY_MAGE, "Counterspell") || !Holds(caster, SPELL_SPELLBREAKER))
+    if (!Is(spellInfo, SPELLFAMILY_MAGE, "Counterspell") || !Holds(caster, SPELL_SPELLBREAKER)
+        || schoolMask == SPELL_SCHOOL_MASK_NONE || !lockoutTime)
         return;
 
     // SpellHistory::ClearSchoolLockouts tells each client (SMSG_CLEAR_COOLDOWN
@@ -625,6 +627,34 @@ void OnSuccessfulInterrupt(Unit* caster, SpellInfo const* spellInfo)
         ally->GetSpellHistory()->ClearSchoolLockouts();
         if (Pet* pet = ally->GetPet())
             pet->GetSpellHistory()->ClearSchoolLockouts();
+    }
+
+    Player* mage = caster->GetCharmerOrOwnerPlayerOrPlayerItself();
+    Battleground* battleground = mage ? mage->GetBattleground() : nullptr;
+    if (!battleground || battleground->GetTypeID() != BATTLEGROUND_VHR)
+        return;
+
+    // The opposing Battleground roster is the current clone wave; dead clones
+    // from earlier waves may still be present, so only touch living units on
+    // this map. The directly interrupted unit already received this exact
+    // lockout in Spell::EffectInterruptCast.
+    uint32 const mageTeam = mage->GetBGTeam();
+    for (auto const& [guid, bgPlayer] : battleground->GetPlayers())
+    {
+        if (bgPlayer.Team == mageTeam)
+            continue;
+
+        Player* enemy = ObjectAccessor::GetPlayer(*mage, guid);
+        if (!enemy || !enemy->IsInWorld() || !enemy->IsAlive() || enemy->GetMap() != mage->GetMap())
+            continue;
+
+        if (enemy != interruptedTarget)
+            enemy->GetSpellHistory()->LockSpellSchool(schoolMask, lockoutTime);
+
+        for (Unit* controlled : enemy->m_Controlled)
+            if (controlled && controlled != interruptedTarget && controlled->IsInWorld() && controlled->IsAlive()
+                && controlled->GetMap() == mage->GetMap())
+                controlled->GetSpellHistory()->LockSpellSchool(schoolMask, lockoutTime);
     }
 }
 

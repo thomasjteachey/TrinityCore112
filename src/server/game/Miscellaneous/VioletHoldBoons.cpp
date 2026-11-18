@@ -35,6 +35,7 @@
 #include "SpellMgr.h"
 #include "StringFormat.h"
 #include "TournamentMode.h"
+#include "World.h"
 
 #include <algorithm>
 #include <array>
@@ -185,7 +186,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::ShatteredWard, 94353, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Shattered Ward", "your Power Word: Shield explodes when it breaks or expires, dealing what it absorbed to enemies within 10 yd", "" },
     { Boon::Agony,         94354, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of Agony",             "Shadow Word: Pain deals all of its damage at once", "" },
     { Boon::Frostwalker,   94355, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Frostwalker",   "Blink casts Frost Nova where you leave and where you land", "" },
-    { Boon::Spellbreaker,  94356, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Spellbreaker",  "a successful Counterspell clears every spell school lockout on you and your allies", "" },
+    { Boon::Spellbreaker,  94356, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Spellbreaker",  "a successful Counterspell clears every spell school lockout on you and your allies, then locks every enemy out of the interrupted school", "" },
     { Boon::Transmutation, 94357, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of Transmutation",     "Polymorph is instant, and you can polymorph up to 3 targets at once", "" },
     { Boon::Contagion,     94358, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of Contagion",         "when a target dies, your damage over time effects on it jump to the nearest enemy", "" },
     { Boon::Indelible,     94359, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Indelible",     "your harmful effects cannot be dispelled", "" },
@@ -193,7 +194,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Untamed,       94361, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Untamed",       "you can shapeshift while stunned, feared or polymorphed, and the shift breaks it", "" },
     { Boon::Wellspring,    94362, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Wellspring",    "falling below 50% mana gives you and your party a 5 sec Innervate (once per wave)", "" },
     { Boon::Serenity,      94363, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Serenity",          "once per wave, Tranquility costs no mana and heals its full amount at once, with no channel", "" },
-    { Boon::Stormcaller,   94364, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Stormcaller",   "Purge removes every magic buff on the target", "" },
+    { Boon::Stormcaller,   94364, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Stormcaller",   "Purge steals every magic buff on the target", "" },
     { Boon::TotemLord,     94365, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Totem Lord",    "your totems slowly follow you, never expire and no longer share a slot by element", "" },
     { Boon::Ancestors,     94366, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Ancestors",     "once per wave a killing blow Reincarnates you on the spot instead (no cooldown, no Ankh; Improved Reincarnation adds to it)", "" },
 
@@ -733,6 +734,48 @@ BoonInfo const& GetBoon(Boon boon)
     return kBoons[uint8(boon)];
 }
 
+static bool UsesStackingGrantMultiplier(BoonInfo const& info)
+{
+    switch (info.boon)
+    {
+        case Boon::Level:
+        case Boon::RageCost:
+        case Boon::EnergyCost:
+        case Boon::EnergyRegen:
+        case Boon::RageGeneration:
+        case Boon::Beastmaster:
+            return false;
+        default:
+            break;
+    }
+
+    // A one-stack grant normally represents a discrete mechanic rather than
+    // a numeric power value (one broker, one guardian, one unlock, and so on).
+    // Tempo is numeric despite using one 100 ms stack as its base grant.
+    return info.grantStacks > 1 || info.boon == Boon::Tempo;
+}
+
+uint8 GetGrantStacks(BoonInfo const& info)
+{
+    if (!UsesStackingGrantMultiplier(info))
+        return info.grantStacks;
+
+    float const multiplier = sWorld->getFloatConfig(CONFIG_CENTURION_VHR_STACKING_BOON_GRANT_MULTIPLIER);
+    return uint8(std::clamp<int32>(int32(std::lround(float(info.grantStacks) * multiplier)), 1, info.maxStacks));
+}
+
+uint8 GetMaxStacks(BoonInfo const& info)
+{
+    if (!UsesStackingGrantMultiplier(info))
+        return info.maxStacks;
+
+    uint8 const grantStacks = GetGrantStacks(info);
+    if (grantStacks <= 1)
+        return info.maxStacks;
+
+    return info.maxStacks - (info.maxStacks % grantStacks);
+}
+
 ClassSpellInfo const& GetClassSpell(uint8 index)
 {
     ASSERT(index < CLASS_SPELL_COUNT);
@@ -919,7 +962,7 @@ PickResult CanTake(Player const* player, Offer offer)
         // way) counts as having it. No item row loaded = never on offer.
         if (info.boon == Boon::Healthstone)
         {
-            if (GetStacks(player, info.boon) >= info.maxStacks)
+            if (GetStacks(player, info.boon) >= GetMaxStacks(info))
                 return PickResult::AtCap;
             uint32 const entry = GetHealthstoneFor(player->GetLevel());
             if (!entry || !sObjectMgr->GetItemTemplate(entry))
@@ -972,7 +1015,7 @@ PickResult CanTake(Player const* player, Offer offer)
                 return PickResult::AtCap;
         }
 
-        return GetStacks(player, info.boon) < info.maxStacks ? PickResult::Ok : PickResult::AtCap;
+        return GetStacks(player, info.boon) < GetMaxStacks(info) ? PickResult::Ok : PickResult::AtCap;
     }
 
     if (offer.kind == Offer::Kind::Item)
@@ -1358,8 +1401,12 @@ PickResult Take(Player* player, Offer offer)
         return PickResult::Ok;
     }
 
+    uint8 const grantStacks = GetGrantStacks(info);
+    uint8 const maxStacks = GetMaxStacks(info);
     uint32 const boonSpellId = GetBoonSpellFor(info.boon, player->GetClass());
     Aura* aura = player->GetAura(boonSpellId);
+    uint8 const heldStacks = aura ? aura->GetStackAmount() : 0;
+    uint8 const targetStacks = std::min<uint16>(uint16(heldStacks) + grantStacks, maxStacks);
     if (!aura)
     {
         player->CastSpell(player, boonSpellId, true);
@@ -1371,12 +1418,18 @@ PickResult Take(Player* player, Offer offer)
             return PickResult::Failed;
         }
 
-        // The cast made stack one; ModStackAmount clamps to the DBC cap.
-        if (info.grantStacks > 1)
-            aura->ModStackAmount(info.grantStacks - 1);
+        // The cast made stack one. Apply only the remainder up to the effective
+        // cap, which also handles a live config change between picks.
+        int32 const delta = int32(targetStacks) - int32(aura->GetStackAmount());
+        if (delta)
+            aura->ModStackAmount(delta);
     }
     else
-        aura->ModStackAmount(info.grantStacks);
+    {
+        int32 const delta = int32(targetStacks) - int32(aura->GetStackAmount());
+        if (delta)
+            aura->ModStackAmount(delta);
+    }
 
     // Taken for the whole run, whatever becomes of the aura from here.
     bool const personalBrokerUnique = GetRunOf(player) && GetRunOf(player)->UsesPersonalBrokers()
@@ -1395,15 +1448,15 @@ PickResult Take(Player* player, Offer offer)
     {
         case Boon::Greed:
             if (BattlegroundVHR* run = GetRunOf(player))
-                run->AddBrokerBonusOffers(player, info.grantStacks);
+                run->AddBrokerBonusOffers(player, grantStacks);
             break;
         case Boon::Hoarder:
             if (BattlegroundVHR* run = GetRunOf(player))
-                run->AddBonusBrokersPerWave(player, info.grantStacks);
+                run->AddBonusBrokersPerWave(player, grantStacks);
             break;
         case Boon::Abundance:
             if (BattlegroundVHR* run = GetRunOf(player))
-                run->AddBonusRunesPerWave(info.grantStacks);
+                run->AddBonusRunesPerWave(grantStacks);
             break;
         case Boon::SecondOpinion:
             if (BattlegroundVHR* run = GetRunOf(player))
@@ -1415,7 +1468,7 @@ PickResult Take(Player* player, Offer offer)
             break;
         case Boon::Fellowship:
             if (BattlegroundVHR* run = GetRunOf(player))
-                for (uint8 i = 0; i < info.grantStacks; ++i)
+                for (uint8 i = 0; i < grantStacks; ++i)
                     run->RequestAlly(player);
             break;
         case Boon::Beastmaster:
@@ -1884,6 +1937,7 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
 
     BoonInfo const& info = kBoons[offer.index];
     uint8 const held = GetStacks(viewer, info.boon);
+    uint8 const maxStacks = GetMaxStacks(info);
 
     // Artifacts are one-stack: "Boon of the Juggernaut (artifact): ...".
     if (IsArtifact(info.boon))
@@ -1894,10 +1948,10 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         {
             case Boon::Greed:
                 return Trinity::StringFormat("{}: extra option at each of your brokers [{}/{}]{}", info.name,
-                    uint32(held), uint32(info.maxStacks), blocked);
+                    uint32(held), uint32(maxStacks), blocked);
             case Boon::Hoarder:
                 return Trinity::StringFormat("{}: an extra private broker after every wave [{}/{}]{}", info.name,
-                    uint32(held), uint32(info.maxStacks), blocked);
+                    uint32(held), uint32(maxStacks), blocked);
             case Boon::SecondOpinion:
                 return Trinity::StringFormat("{}: three whole-hand rerolls for your brokers{}", info.name, blocked);
             case Boon::Crucible:
@@ -1906,6 +1960,7 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
                 break;
         }
 
+    uint8 const grantStacks = GetGrantStacks(info);
     switch (info.boon)
     {
         case Boon::MountSpeed:
@@ -1940,14 +1995,14 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Fellowship:
         case Boon::Menagerie:
         case Boon::Abundance:
-            return Trinity::StringFormat("{}: {} [{}/{}]{}", info.name, info.summary, uint32(held), uint32(info.maxStacks), blocked);
+            return Trinity::StringFormat("{}: {} [{}/{}]{}", info.name, info.summary, uint32(held), uint32(maxStacks), blocked);
         case Boon::Tempo:
             // "[200/500 ms]", not the default's "[2/500 ms]".
-            return Trinity::StringFormat("{}: {} ms {} [{}/{} ms]{}", info.name, uint32(info.grantStacks) * 100, info.summary,
-                uint32(held) * 100, uint32(info.maxStacks) * 100, blocked);
+            return Trinity::StringFormat("{}: {} ms {} [{}/{} ms]{}", info.name, uint32(grantStacks) * 100, info.summary,
+                uint32(held) * 100, uint32(maxStacks) * 100, blocked);
         default:
-            return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]{}", info.name, uint32(info.grantStacks), info.unit,
-                info.summary, uint32(held), uint32(info.maxStacks), info.unit, blocked);
+            return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]{}", info.name, uint32(grantStacks), info.unit,
+                info.summary, uint32(held), uint32(maxStacks), info.unit, blocked);
     }
 }
 
@@ -2459,7 +2514,7 @@ void PassInheritance(BattlegroundVHR* run, Player const* dead, std::vector<Inher
             uint32 const spellId = GetBoonSpellFor(info.boon, heir->GetClass());
             Aura* aura = heir->GetAura(spellId);
             uint32 const before = aura ? aura->GetStackAmount() : 0;
-            uint32 const after = std::min<uint32>(before + stacks, info.maxStacks);
+            uint32 const after = std::min<uint32>(before + stacks, GetMaxStacks(info));
             if (after <= before)
                 continue;
 

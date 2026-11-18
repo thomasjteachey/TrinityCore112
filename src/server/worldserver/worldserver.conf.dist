@@ -6760,6 +6760,15 @@ Centurion.Marks.HonorCostMultiplier = 0
 #        Default:     0.05
 #                     0    - (Off: one broker per three players, as before)
 #
+#    Centurion.VioletHold.StackingBoonGrantMultiplier
+#        Description: Multiplies the stacks awarded by numeric stacking boons, rounded to
+#                     the nearest whole stack. Tempo is included; Beastmaster, one-stack
+#                     mechanics, Ascension, and the rage/energy cost and generation
+#                     talents are not. Each affected cap rounds down to a whole number of
+#                     grants. Clamped 0.1-5.0. Live: `.reload config` applies to the next
+#                     boon picked.
+#        Default:     1.5
+#
 #    Centurion.VioletHold.PersonalBrokers
 #        Description: Experimental Violet Hold economy and party scaling. Each player gets
 #                     one owner-only broker after each of waves 1-9, then two after wave 10
@@ -6817,6 +6826,7 @@ Centurion.VioletHold.CopiesInheritBoons = 0
 Centurion.VioletHold.MenagerieTrace = 0
 Centurion.VioletHold.ExperienceMultiplier = 1.5
 Centurion.VioletHold.BrokersPerExtraPlayer = 0.05
+Centurion.VioletHold.StackingBoonGrantMultiplier = 1.5
 Centurion.VioletHold.PersonalBrokers = 0
 Centurion.VioletHold.PersonalSecondBrokerWave = 10
 Centurion.VioletHold.PersonalDifficulty.RampStartWave = 5
