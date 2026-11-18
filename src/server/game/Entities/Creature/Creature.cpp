@@ -67,6 +67,7 @@
 #include "Transport.h"
 #include "Util.h"
 #include "Vehicle.h"
+#include "VioletHoldClassBoons.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include <G3D/g3dmath.h>
@@ -1055,6 +1056,10 @@ void Creature::Regenerate(Powers power)
 void Creature::RegenerateHealth()
 {
     if (!CanRegenerateHealth())
+        return;
+
+    // Violet Hold Woolen Prison: no mending at all inside a holder's Polymorph.
+    if (VioletHoldClassBoons::IsWoolenPrisoner(this))
         return;
 
     uint32 curValue = GetHealth();

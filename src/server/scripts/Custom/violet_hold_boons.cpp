@@ -278,13 +278,13 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
             after = std::min<uint32>(held + grantStacks, cap);
             unit = info.unit;
             text = info.summary;
+            // Tempo's stacks read as ms, Devastation's as 15% each.
+            uint32 const perStack = DisplayPerStack(info.boon);
+            held *= perStack;
+            after *= perStack;
+            cap *= perStack;
             if (info.boon == Boon::Tempo)
-            {
-                held *= TEMPO_MS_PER_STACK;
-                after *= TEMPO_MS_PER_STACK;
-                cap *= TEMPO_MS_PER_STACK;
-                headline = Trinity::StringFormat("+{} ms", uint32(grantStacks) * TEMPO_MS_PER_STACK);
-            }
+                headline = Trinity::StringFormat("+{} ms", uint32(grantStacks) * perStack);
             if (BattlegroundVHR* run = RunOfPlayer(viewer); run && run->UsesPersonalBrokers())
                 switch (info.boon)
                 {
@@ -295,7 +295,7 @@ std::string CardLine(Player const* viewer, std::string const& tag, Offer offer, 
                     default: break;
                 }
             if (cap > 1 && info.boon != Boon::Tempo)
-                headline = Trinity::StringFormat("+{}{}", uint32(grantStacks), info.unit);
+                headline = Trinity::StringFormat("+{}{}", uint32(grantStacks) * perStack, info.unit);
             if (info.boon == Boon::Healthstone)
                 if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(GetHealthstoneFor(viewer->GetLevel())))
                     text = proto->Name1 + ", " + info.summary;
@@ -346,7 +346,7 @@ void SendDeck(Player* viewer, std::string const& tag)
         if (info.boon == Boon::Tempo)
             value = Trinity::StringFormat("{} ms", uint32(stacks) * TEMPO_MS_PER_STACK);
         else if (info.maxStacks > 1)
-            value = *info.unit ? Trinity::StringFormat("{}{}", uint32(stacks), info.unit) : Trinity::StringFormat("x{}", uint32(stacks));
+            value = *info.unit ? Trinity::StringFormat("{}{}", uint32(stacks) * DisplayPerStack(info.boon), info.unit) : Trinity::StringFormat("x{}", uint32(stacks));
         entries.push_back(Trinity::StringFormat("{}^{}^{}", uint32(RarityTier(offer)), Field(ShortBoonName(info.name)), Field(value)));
     }
 
@@ -1639,12 +1639,16 @@ public:
         int32 const pct = GetPartyDamageBonusPct(attacker, target);
         if (pct > 0)
             damage += CalculatePct(damage, pct);
+        damage = VioletHoldClassBoons::ModifyMarkedPreyDamage(attacker, target, damage);
         return VioletHoldClassBoons::ModifyWarBannerDamage(attacker, target, damage);
     }
 
     void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
     {
         damage = Boosted(attacker, target, damage);
+        // Boon of the Ice Fortress: a melee hit on a holder in Ice Armor.
+        if (damage)
+            VioletHoldClassBoons::OnMeleeStruck(attacker, target);
     }
 
     void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage) override
@@ -1674,6 +1678,8 @@ public:
             NoteHit(attacker, victim);
         // Boon of the Body Double: a party member about to drop below 25%.
         VioletHoldClassBoons::OnAllyDamaged(victim, damage);
+        // Boon of the Guardian Beast: one about to drop below 50%.
+        VioletHoldClassBoons::OnAllyStruck(attacker, victim, damage);
     }
 };
 

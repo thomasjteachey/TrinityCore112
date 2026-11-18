@@ -1919,6 +1919,13 @@ void AuraEffect::HandleAuraModShapeshift(AuraApplication const* aurApp, uint8 mo
         if (prevForm != form)
             HandleShapeshiftBoosts(target, true);
 
+        // Violet Hold Commander: the new stance's rally, one event on (not
+        // from inside this aura handler).
+        if (prevForm != form && target->GetClass() == CLASS_WARRIOR)
+            if (Player* warrior = target->ToPlayer())
+                warrior->m_Events.AddEventAtOffset([warrior]() { VioletHoldClassBoons::SyncCommand(warrior); },
+                    std::chrono::milliseconds(1));
+
         if (modelid > 0)
         {
             SpellInfo const* transformSpellInfo = sSpellMgr->GetSpellInfo(target->GetTransformSpell());
@@ -5607,14 +5614,20 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
 
     float gainMultiplier = GetSpellEffectInfo().CalcValueMultiplier(caster);
 
-    uint32 heal = caster->SpellHealingBonusDone(caster, GetSpellInfo(), uint32(new_damage * gainMultiplier), DOT, GetSpellEffectInfo(), { }, GetBase()->GetStackAmount());
-    heal = caster->SpellHealingBonusTaken(caster, GetSpellInfo(), heal, DOT);
+    // Violet Hold Siphon Soul: a holder's Drain Life heals the most injured
+    // ally instead, for twice as much (the caster itself when nobody else is hurt).
+    Unit* recipient = VioletHoldClassBoons::GetLeechHealRecipient(caster, GetSpellInfo());
+    if (recipient != caster)
+        gainMultiplier *= 2.0f;
 
-    HealInfo healInfo(caster, caster, heal, GetSpellInfo(), GetSpellInfo()->GetSchoolMask());
+    uint32 heal = caster->SpellHealingBonusDone(recipient, GetSpellInfo(), uint32(new_damage * gainMultiplier), DOT, GetSpellEffectInfo(), { }, GetBase()->GetStackAmount());
+    heal = recipient->SpellHealingBonusTaken(caster, GetSpellInfo(), heal, DOT);
+
+    HealInfo healInfo(caster, recipient, heal, GetSpellInfo(), GetSpellInfo()->GetSchoolMask());
     caster->HealBySpell(healInfo);
 
-    caster->GetThreatManager().ForwardThreatForAssistingMe(caster, healInfo.GetEffectiveHeal() * 0.5f, GetSpellInfo());
-    Unit::ProcSkillsAndAuras(caster, caster, PROC_FLAG_DONE_PERIODIC, PROC_FLAG_TAKEN_PERIODIC, PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, hitMask, nullptr, nullptr, &healInfo);
+    recipient->GetThreatManager().ForwardThreatForAssistingMe(caster, healInfo.GetEffectiveHeal() * 0.5f, GetSpellInfo());
+    Unit::ProcSkillsAndAuras(caster, recipient, PROC_FLAG_DONE_PERIODIC, PROC_FLAG_TAKEN_PERIODIC, PROC_SPELL_TYPE_HEAL, PROC_SPELL_PHASE_HIT, hitMask, nullptr, nullptr, &healInfo);
 }
 
 void AuraEffect::HandlePeriodicHealthFunnelAuraTick(Unit* target, Unit* caster) const

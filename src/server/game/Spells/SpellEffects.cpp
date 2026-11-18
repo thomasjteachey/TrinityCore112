@@ -747,6 +747,11 @@ void Spell::EffectSchoolDMG()
             damage = unitTarget->SpellDamageBonusTaken(unitCaster, m_spellInfo, (uint32)damage, SPELL_DIRECT_DAMAGE);
         }
 
+        // Violet Hold Supercharged Shield: a holder's Lightning Shield orbs hit
+        // five times as hard, whoever wears the shield (unitCaster is the
+        // original caster, the shaman).
+        damage = VioletHoldClassBoons::ModifyShieldOrbDamage(unitCaster, m_spellInfo, damage);
+
         m_damage += damage;
     }
 }

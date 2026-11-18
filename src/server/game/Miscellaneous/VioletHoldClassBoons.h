@@ -44,6 +44,7 @@
 #include <vector>
 
 class Aura;
+class AuraEffect;
 class BattlegroundVHR;
 class Creature;
 class GameObject;
@@ -160,6 +161,58 @@ namespace VioletHoldClassBoons
         SPELL_SHADOWSTALKER_VEIL = 94430,  // 3 sec: immune to all damage and harmful effects
         SPELL_DOMINATED         = 94431,   // 10 sec on the victim; spell_vhr_dominated gives the faction back
 
+        // The fifth artifact block (2026-11-18, later). Wrath of the Light's
+        // "any health" and Holy Pyre's instant cast and Shadowform waiver are
+        // auras on the record itself (262 / 108 / 275), so the client agrees.
+        SPELL_WRATH_OF_THE_LIGHT = 94432,  // paladin (spell_vhr_wrath_of_the_light resets on a kill)
+        SPELL_GUARDIAN_BEAST    = 94433,   // hunter, party; also its 2 sec throttle key
+        SPELL_MARKED_PREY       = 94434,   // hunter, party
+        SPELL_SMOKE_BOMB        = 94435,   // rogue, party
+        SPELL_HOLY_PYRE         = 94436,   // priest
+        SPELL_BOTTOMLESS_PACT   = 94437,   // warlock
+        SPELL_SIPHON_SOUL       = 94438,   // warlock, party
+        SPELL_GUARDIAN_TAUNT    = 94439,   // the pet's attack-me + fear taunt (Compel's shape; works on players)
+        SPELL_SMOKE_BOMB_VEIL   = 94440,   // 3 sec: stealth + total immunity (Body Double's veil, shorter)
+
+        // Commander: the record, and the three 30 yd party area auras (Pack
+        // Leader's native shape) the warrior carries one at a time by stance.
+        SPELL_COMMANDER         = 94441,   // warrior, party
+        SPELL_COMMAND_BATTLE    = 94442,   // +10% crit, melee, ranged and spell (aura 290)
+        SPELL_COMMAND_DEFENSIVE = 94443,   // 10% less damage taken
+        SPELL_COMMAND_BERSERKER = 94444,   // +10% melee, ranged and casting speed
+
+        // The seventh block (2026-11-18). Inner Flame is all data: its record
+        // aura is a +200% EFFECT1 spellmod (armor) and a -20 CHARGES spellmod
+        // on Inner Fire, and 0 charges is "never runs out" (Aura::CalcMaxCharges).
+        SPELL_BLOOD_PACT        = 94445,   // warrior, party
+        SPELL_BLADE_DANCE       = 94446,   // rogue, party
+        SPELL_INNER_FLAME       = 94447,   // priest (data only)
+        SPELL_ICE_FORTRESS      = 94448,   // mage
+        SPELL_SOUL_SWAP         = 94449,   // warlock
+        SPELL_SOUL_BOND         = 94450,   // warlock, party
+        SPELL_WILD_KINSHIP      = 94451,   // druid, party; also names its heal in the combat log
+        SPELL_BLADE_DANCE_BUFF  = 94452,   // on allies: Slice and Dice's melee/ranged haste (set per cast) + 20% casting
+        SPELL_ICE_FORTRESS_FREEZE = 94453, // 3 sec freeze that damage does not break
+
+        // The eighth block (2026-11-18). Elemental Ward's five times is a
+        // +400% EFFECT1 spellmod on the record (Fire Ward 0x8 | Frost Ward
+        // 0x100); only the "every school" half is code.
+        SPELL_INNER_LIGHT       = 94454,   // priest, party
+        SPELL_ELEMENTAL_WARD    = 94455,   // mage
+        SPELL_ENDLESS_CYCLE     = 94456,   // druid
+
+        // The ninth block (2026-11-18). All three are code; the records carry
+        // no spellmods.
+        SPELL_WOOLEN_PRISON     = 94457,   // mage
+        SPELL_STORM_CLEAVE      = 94458,   // shaman
+        SPELL_SUPERCHARGED_SHIELD = 94459, // shaman, party
+
+        // The tenth block (2026-11-18). Both records are code only; 94463 is
+        // Guardian Flame's debuff (aura 79, every school, -5 a stack, 15 stacks).
+        SPELL_SPELL_MIRROR      = 94461,   // shaman
+        SPELL_GUARDIAN_FLAME    = 94462,   // shaman, party
+        SPELL_GUARDIAN_FLAME_SAP = 94463,  // the stacking damage-done debuff
+
         SPELL_WINDFURY_WEAPON_PASSIVE = 33757,
         SPELL_ROGUE_EVASION     = 5277,
 
@@ -245,6 +298,7 @@ namespace VioletHoldClassBoons
     TC_GAME_API void MakeUnendingVolleyPermanent(Unit const* caster, SpellInfo const* spellInfo, Aura* aura);
     // Trapper (as well as the trap rules above): a holder's Freezing Trap does not break on damage
     // (Unit::RemoveAurasWithInterruptFlags, AURA_INTERRUPT_FLAG_TAKE_DAMAGE).
+    // Woolen Prison: nor does a holder's Polymorph.
     TC_GAME_API bool HoldsThroughDamage(Aura const* aura);
     // Field Medic: the holder's damaging shots (hunter family, ranged damage
     // class, nothing but damage effects - Auto Shot, Arcane Shot, Multi-Shot,
@@ -459,6 +513,107 @@ namespace VioletHoldClassBoons
     TC_GAME_API void Dominate(Unit* priest, Unit* victim);
     // ... until SPELL_DOMINATED comes off it (spell_vhr_dominated).
     TC_GAME_API void EndDomination(Unit* victim);
+
+    // ---- the fifth block (2026-11-18, later) -------------------------------
+    constexpr uint32 GUARDIAN_BEAST_HEALTH_PCT   = 50;
+    constexpr uint32 GUARDIAN_BEAST_THROTTLE_MS  = 2000;  // one rescue per hunter per 2 sec (an AoE crossing many allies at once)
+    constexpr int32  MARKED_PREY_BONUS_PCT       = 20;
+    constexpr float  MARKED_PREY_JUMP_RADIUS     = 40.0f;
+    constexpr float  HOLY_PYRE_RADIUS            = 8.0f;
+    constexpr float  SIPHON_SOUL_RANGE           = 40.0f;
+
+    // Guardian Beast: the party damage UnitScript's OnDamage, before the hit
+    // lands. A hit that takes a party member from 50% or more to below it
+    // (not a killing one) sends a holder's pet to the attacker to taunt it.
+    TC_GAME_API void OnAllyStruck(Unit* attacker, Unit* victim, uint32 damage);
+    // Marked Prey: the same damage hooks as War Banner - the holder's side
+    // deals +20% to the unit wearing the holder's Hunter's Mark. The jump on
+    // death is in OnUnitDying.
+    TC_GAME_API uint32 ModifyMarkedPreyDamage(Unit* attacker, Unit* victim, uint32 damage);
+    // Bottomless Pact: spell_warl_life_tap takes no health and needs none.
+    TC_GAME_API bool LifeTapIsFree(Unit const* caster);
+    // Siphon Soul: AuraEffect::HandlePeriodicHealthLeechAuraTick - who a
+    // leech heals. The caster, except for a holder's Drain Life: the most
+    // injured ally (by health percentage) within SIPHON_SOUL_RANGE, or the
+    // caster when no ally is hurt. The tick doubles the heal for an ally.
+    TC_GAME_API Unit* GetLeechHealRecipient(Unit* caster, SpellInfo const* spellInfo);
+    // Smoke Bomb and Holy Pyre hang off OnSpellCast; Wrath of the Light's
+    // reset is spell_vhr_wrath_of_the_light.
+
+    // Commander: the warrior carries the command aura of the stance they are
+    // in (none while dead or stanceless). Called one event after a stance
+    // change (AuraEffect::HandleAuraModShapeshift, once the form is set) and
+    // every second from UpdateRun; OnStripped takes all three off.
+    TC_GAME_API void SyncCommand(Player* warrior);
+
+    // ---- the seventh block (2026-11-18) ------------------------------------
+    constexpr float  BLOOD_PACT_RADIUS          = 30.0f;
+    constexpr uint32 BLOOD_PACT_PCT             = 20;
+    constexpr float  BLADE_DANCE_RADIUS         = 30.0f;
+    constexpr uint32 ICE_FORTRESS_COOLDOWN_MS   = 10000;   // per attacker, per mage
+    constexpr float  SOUL_BOND_RANGE            = 30.0f;   // the dying ally, from the warlock
+    constexpr uint32 WILD_KINSHIP_PCT           = 1;       // of maximum health, every 2nd UpdateRun tick
+
+    // Blood Pact, Blade Dance and Soul Swap hang off OnSpellCast; Wild
+    // Kinship's heal is in UpdateRun and its undispellable mark in
+    // IsUndispellable.
+    // Ice Fortress: the party damage UnitScript's ModifyMeleeDamage - a melee
+    // hit on a holder in Ice Armor freezes the attacker (once per 10 sec each).
+    TC_GAME_API void OnMeleeStruck(Unit* attacker, Unit* victim);
+    // Soul Bond: Unit::DealDamage, first of the death saves (before Undying,
+    // Ancestors and Phoenix: a demon is the cheapest thing to spend). True
+    // when a holder's demon will take the blow - the caller drops the damage
+    // to nothing; the demon dies one event later (Eternal Pact may return it).
+    TC_GAME_API bool TrySoulBond(Unit* victim);
+
+    // ---- the eighth block (2026-11-18) -------------------------------------
+    constexpr float INNER_LIGHT_RANGE = 40.0f;
+
+    // Inner Light hangs off OnSpellCast: the client always casts Inner Fire on
+    // the priest (it is a self spell in every DBC), so a holder's Inner Fire
+    // cast with a friendly player selected is moved onto that player one
+    // event later - the same rank, cast by the priest, so Inner Flame's
+    // spellmods still shape it.
+    // Elemental Ward: Unit::CalcAbsorbResist - a holder's Fire / Frost Ward
+    // absorbs whatever school hits.
+    TC_GAME_API bool AbsorbsEverySchool(AuraEffect const* absorb);
+    // Endless Cycle: Spell::DoSpellEffectHit (PreprocessSpellHitTarget's aura
+    // duration) - a holder's Rip, Rejuvenation and Moonfire land permanent.
+    TC_GAME_API bool MakesAuraEndless(Unit const* caster, SpellInfo const* spellInfo);
+
+    // ---- the ninth block (2026-11-18) --------------------------------------
+    constexpr float STORM_CLEAVE_RADIUS = 5.0f;
+    constexpr float SUPERCHARGED_SHIELD_RANGE = 40.0f;
+    constexpr int32 SUPERCHARGED_SHIELD_FACTOR = 5;
+
+    // Woolen Prison: Player::RegenerateHealth and Creature::Update - a target
+    // in a holder's Polymorph gets none of the sheep's fast regeneration (and
+    // no other health regeneration while it lasts).
+    TC_GAME_API bool IsWoolenPrisoner(Unit const* target);
+    // Storm Cleave: spell_sha_windfury_weapon - the other enemies within 5 yd
+    // of the Windfury target that a holder's two extra attacks also strike.
+    // Empty for anyone else.
+    TC_GAME_API std::vector<Unit*> StormCleaveTargets(Unit* shaman, Unit* victim);
+    // Supercharged Shield: Spell::EffectSchoolDMG. The wearer fires the orb
+    // with the shield's caster as original caster, so `caster` here is the
+    // shaman whether the shield is on them or on an ally.
+    TC_GAME_API int32 ModifyShieldOrbDamage(Unit const* caster, SpellInfo const* spellInfo, int32 damage);
+    // The ally half rides OnSpellCast, as Inner Light does.
+
+    // ---- the tenth block (2026-11-18) --------------------------------------
+    // Spell Mirror: Spell::AddUnitTarget. True when `target` is a holder's
+    // Grounding Totem: a hostile spell aimed at it (grounded onto it, or cast
+    // straight at it) is reflected the way Spell Reflection would, and
+    // EndSpellMirror then takes the totem down once that spell has landed
+    // (the reflected hit is resolved through the totem's GUID, so it must
+    // still exist when the spell arrives). OnUnitDying resets the Grounding
+    // Totem cooldown when a holder's totem dies, whatever killed it.
+    TC_GAME_API bool MirrorsSpells(Unit const* target);
+    TC_GAME_API void EndSpellMirror(Unit* totem, uint64 hitDelayMs);
+    // Guardian Flame: Spell's direct-damage path, after the damage is dealt.
+    // A holder's Searing Totem bolt ("Attack") puts a stack of 94463 on what
+    // it hit, cast by the shaman so stacks keep building across new totems.
+    TC_GAME_API void OnSpellDamageDealt(Unit* caster, Unit* victim, SpellInfo const* spellInfo);
 }
 
 #endif // TRINITYCORE_VIOLET_HOLD_CLASS_BOONS_H

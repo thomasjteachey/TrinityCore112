@@ -34,6 +34,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Unit.h"
+#include "VioletHoldClassBoons.h"
 #include "WorldPacket.h"
 #include "GameTime.h"
 #include <algorithm>
@@ -2130,6 +2131,12 @@ class spell_sha_windfury_weapon : public AuraScript
         // Attack twice
         for (uint8 i = 0; i < 2; ++i)
             player->CastSpell(eventInfo.GetProcTarget(), spellId, args);
+
+        // Violet Hold Storm Cleave: a holder's two extra attacks also strike
+        // every other enemy within 5 yd of the target.
+        for (Unit* other : VioletHoldClassBoons::StormCleaveTargets(player, eventInfo.GetProcTarget()))
+            for (uint8 i = 0; i < 2; ++i)
+                player->CastSpell(other, spellId, args);
             
     }
 

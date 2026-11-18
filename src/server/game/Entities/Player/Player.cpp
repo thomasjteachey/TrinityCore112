@@ -2925,6 +2925,10 @@ void Player::Regenerate(Powers power)
 
 void Player::RegenerateHealth()
 {
+    // Violet Hold Woolen Prison: no mending at all inside a holder's Polymorph.
+    if (VioletHoldClassBoons::IsWoolenPrisoner(this))
+        return;
+
     uint32 curValue = GetHealth();
     uint32 maxValue = GetMaxHealth();
 

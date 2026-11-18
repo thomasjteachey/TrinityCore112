@@ -222,6 +222,45 @@ namespace VioletHoldBoons
         Domination,     // priest: Mind Control = 10 sec autonomous ally, 50% faster cast, 10 sec cd
         PrimalReserves, // druid: double maximum mana, rage and energy
 
+        // 2026-11-18 (later), the fifth artifact block. Record auras 94432-94438
+        // in this order; keep contiguous.
+        WrathOfTheLight, // paladin: Hammer of Wrath at any health; a kill resets its cooldown
+        GuardianBeast,   // hunter, party: an ally knocked below 50% -> pet teleports to the attacker and taunts
+        MarkedPrey,      // hunter, party: +20% damage to your Hunter's Mark target; the mark jumps on death
+        SmokeBomb,       // rogue, party: Vanish stealths every ally, 3 sec total immunity
+        HolyPyre,        // priest: Holy Fire instant, usable in Shadowform, its burn spreads 8 yd
+        BottomlessPact,  // warlock: Life Tap costs no health
+        SiphonSoul,      // warlock, party: Drain Life heals the most injured ally instead, x2
+
+        // Sixth block (record 94441).
+        Commander,       // warrior, party: the stance rallies allies within 30 yd (crit / damage taken / haste)
+
+        // Seventh block (records 94445-94451, in this order; keep contiguous).
+        BloodPact,       // warrior, party: Bloodrage gives allies within 30 yd 20% of their resource
+        BladeDance,      // rogue, party: Slice and Dice's speed (+20% casting) goes to allies within 30 yd
+        InnerFlame,      // priest: Inner Fire never runs out of charges, triple armor (record spellmods)
+        IceFortress,     // mage: Ice Armor freezes melee attackers 3 sec (once per 10 sec each)
+        SoulSwap,        // warlock: Death Coil swaps health percentages with the target
+        SoulBond,        // warlock, party: the demon takes an ally's killing blow and dies instead
+        WildKinship,     // druid, party: you and your Mark of the Wild wearers heal 1%/2 sec; undispellable mark
+
+        // Eighth block (records 94454-94456, in this order; keep contiguous).
+        InnerLight,      // priest, party: Inner Fire can be cast on an ally
+        ElementalWard,   // mage: Fire Ward and Frost Ward absorb every school, five times as much
+        EndlessCycle,    // druid: Rip, Rejuvenation and Moonfire never end
+
+        // Ninth block (records 94457-94459, in this order; keep contiguous).
+        WoolenPrison,    // mage: Polymorph holds through damage and stops health regeneration
+        StormCleave,     // shaman: Windfury Weapon's extra attacks hit every enemy within 5 yd of the target
+        SuperchargedShield, // shaman, party: Lightning Shield orbs deal 5x and it can be cast on an ally
+
+        // A common stacking boon, after the artifact blocks (2026-11-18).
+        Devastation,     // +15% critical strike damage per stack, up to +300%
+
+        // Tenth artifact block (records 94461-94462, in this order; keep contiguous).
+        SpellMirror,     // shaman: Grounding Totem reflects what it catches and dies; dying resets its cooldown
+        GuardianFlame,   // shaman, party: Searing Totem hits cut the target's damage 5% for good, up to 75%
+
         Max
     };
 
@@ -430,6 +469,56 @@ namespace VioletHoldBoons
         SPELL_BOON_DOMINATION      = 94425,
         SPELL_BOON_PRIMAL_RESERVES = 94426,
         SPELL_BOON_CLASS_FOURTH_LAST = 94426,
+
+        // The fifth artifact block (2026-11-18, later), in Boon order. 94427-94431
+        // between the blocks are the fourth block's helper spells.
+        SPELL_BOON_CLASS_FIFTH_FIRST = 94432,
+        SPELL_BOON_WRATH_OF_THE_LIGHT = 94432,
+        SPELL_BOON_GUARDIAN_BEAST  = 94433,
+        SPELL_BOON_MARKED_PREY     = 94434,
+        SPELL_BOON_SMOKE_BOMB      = 94435,
+        SPELL_BOON_HOLY_PYRE       = 94436,
+        SPELL_BOON_BOTTOMLESS_PACT = 94437,
+        SPELL_BOON_SIPHON_SOUL     = 94438,
+        SPELL_BOON_CLASS_FIFTH_LAST = 94438,
+
+        // A single artifact past the fifth block's helpers (94439/94440).
+        SPELL_BOON_COMMANDER       = 94441,
+
+        // The seventh block, past Commander's helpers (94442-94444), in Boon order.
+        SPELL_BOON_CLASS_SEVENTH_FIRST = 94445,
+        SPELL_BOON_BLOOD_PACT      = 94445,
+        SPELL_BOON_BLADE_DANCE     = 94446,
+        SPELL_BOON_INNER_FLAME     = 94447,
+        SPELL_BOON_ICE_FORTRESS    = 94448,
+        SPELL_BOON_SOUL_SWAP       = 94449,
+        SPELL_BOON_SOUL_BOND       = 94450,
+        SPELL_BOON_WILD_KINSHIP    = 94451,
+        SPELL_BOON_CLASS_SEVENTH_LAST = 94451,
+
+        // The eighth block, past the seventh block's helpers (94452/94453).
+        SPELL_BOON_CLASS_EIGHTH_FIRST = 94454,
+        SPELL_BOON_INNER_LIGHT     = 94454,
+        SPELL_BOON_ELEMENTAL_WARD  = 94455,
+        SPELL_BOON_ENDLESS_CYCLE   = 94456,
+        SPELL_BOON_CLASS_EIGHTH_LAST = 94456,
+
+        // The ninth block, straight after the eighth.
+        SPELL_BOON_CLASS_NINTH_FIRST = 94457,
+        SPELL_BOON_WOOLEN_PRISON   = 94457,
+        SPELL_BOON_STORM_CLEAVE    = 94458,
+        SPELL_BOON_SUPERCHARGED_SHIELD = 94459,
+        SPELL_BOON_CLASS_NINTH_LAST = 94459,
+
+        // Common stacking boon: aura 163 MOD_CRIT_DAMAGE_BONUS, every school,
+        // 15 per stack, StackAmount 20.
+        SPELL_BOON_DEVASTATION     = 94460,
+
+        // The tenth artifact block.
+        SPELL_BOON_CLASS_TENTH_FIRST = 94461,
+        SPELL_BOON_SPELL_MIRROR    = 94461,
+        SPELL_BOON_GUARDIAN_FLAME  = 94462,
+        SPELL_BOON_CLASS_TENTH_LAST = 94462,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -762,6 +851,22 @@ namespace VioletHoldBoons
     constexpr int32 TEMPO_MS_PER_STACK = 125;
     constexpr int32 TEMPO_MAX_MS = 500;
     constexpr int32 TEMPO_FLOOR_MS = 500;
+
+    // Devastation: one stack is 15% (aura 163 holds 15 per stack); 300% does
+    // not fit an aura's uint8 stack count at 1% a stack.
+    constexpr uint32 DEVASTATION_PCT_PER_STACK = 15;
+
+    // How much one stack reads as on cards and in the deck: Tempo's 125 ms,
+    // Devastation's 15%, and 1 for every other boon.
+    inline uint32 DisplayPerStack(Boon boon)
+    {
+        switch (boon)
+        {
+            case Boon::Tempo:       return uint32(TEMPO_MS_PER_STACK);
+            case Boon::Devastation: return DEVASTATION_PCT_PER_STACK;
+            default:                return 1;
+        }
+    }
 
     // --- second-batch hooks -------------------------------------------------
     // Ricochet, Reflection and Vampire are aura procs (scripts/Custom). These

@@ -14,6 +14,7 @@
  *   spell_vhr_serenity        740, 8918, 9862, 9863                     Tranquility
  *   spell_vhr_domination      605, 10911, 10912                         Mind Control (Domination)
  *   spell_vhr_dominated       94431                                     Domination's mark on the victim
+ *   spell_vhr_wrath_of_the_light 24275, 24274, 24239, 27180, 48805, 48806  Hammer of Wrath
  */
 
 #include "CellImpl.h"
@@ -789,8 +790,30 @@ class spell_vhr_dominated : public AuraScript
     }
 };
 
+// Boon of the Wrath of the Light: a holder's Hammer of Wrath that kills its
+// target is ready again at once (the "any health" half is the record aura's
+// ABILITY_IGNORE_AURASTATE on Hammer of Wrath, which the client honours too).
+class spell_vhr_wrath_of_the_light : public SpellScript
+{
+    PrepareSpellScript(spell_vhr_wrath_of_the_light);
+
+    void ResetOnKill()
+    {
+        Unit* paladin = GetCaster();
+        Unit* target = GetHitUnit();
+        if (paladin && target && !target->IsAlive() && paladin->HasAura(SPELL_WRATH_OF_THE_LIGHT))
+            paladin->GetSpellHistory()->ResetCooldown(GetSpellInfo()->Id, true);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_vhr_wrath_of_the_light::ResetOnKill);
+    }
+};
+
 void AddSC_violet_hold_class_boons()
 {
+    RegisterSpellScript(spell_vhr_wrath_of_the_light);
     RegisterSpellScript(spell_vhr_domination);
     RegisterSpellScript(spell_vhr_dominated);
     RegisterSpellScript(spell_vhr_juggernaut);

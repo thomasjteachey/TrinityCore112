@@ -241,7 +241,45 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Diversion,      SPELL_BOON_DIVERSION,       1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of Diversion",        "Distract stuns every enemy in its area for 6 sec", "" },
     { Boon::Shadowstalker,  SPELL_BOON_SHADOWSTALKER,   1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Shadowstalker", "any killing blow puts you back in Stealth and makes you immune to all damage and effects for 3 sec", "" },
     { Boon::Domination,     SPELL_BOON_DOMINATION,      1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of Domination",       "Mind Control makes the victim fight for you on its own for 10 sec while you act freely; its cast is 50% faster and it has a 10 sec cooldown", "" },
-    { Boon::PrimalReserves, SPELL_BOON_PRIMAL_RESERVES, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Primal Reserves",  "your maximum mana, rage and energy are doubled", "" }
+    { Boon::PrimalReserves, SPELL_BOON_PRIMAL_RESERVES, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Primal Reserves",  "your maximum mana, rage and energy are doubled", "" },
+
+    // The fifth artifact block (2026-11-18, later), spells 94432-94438 in this order.
+    { Boon::WrathOfTheLight, SPELL_BOON_WRATH_OF_THE_LIGHT, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Wrath of the Light", "Hammer of Wrath is usable at any health, and a kill resets its cooldown", "" },
+    { Boon::GuardianBeast,  SPELL_BOON_GUARDIAN_BEAST,  1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Guardian Beast", "when a hit brings a party member below 50% health, your pet teleports to the attacker and taunts it", "" },
+    { Boon::MarkedPrey,     SPELL_BOON_MARKED_PREY,     1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of Marked Prey",      "allies deal 20% more damage to your Hunter's Mark target, and the mark jumps to the nearest enemy when its target dies", "" },
+    { Boon::SmokeBomb,      SPELL_BOON_SMOKE_BOMB,      1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Smoke Bomb",   "Vanish also stealths every ally and makes them immune to everything for 3 sec", "" },
+    { Boon::HolyPyre,       SPELL_BOON_HOLY_PYRE,       1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Holy Pyre",    "Holy Fire is instant, usable in Shadowform, and its burn spreads to every enemy within 8 yd of the target", "" },
+    { Boon::BottomlessPact, SPELL_BOON_BOTTOMLESS_PACT, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Bottomless Pact", "Life Tap costs no health", "" },
+    { Boon::SiphonSoul,     SPELL_BOON_SIPHON_SOUL,     1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Siphon Soul",  "Drain Life heals your most injured ally instead of you, for twice as much", "" },
+
+    { Boon::Commander,      SPELL_BOON_COMMANDER,       1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Commander",    "your stance rallies allies within 30 yd: Battle Stance +10% critical strike chance with attacks and spells, Defensive Stance 10% less damage taken, Berserker Stance +10% attack and casting speed", "" },
+
+    // The seventh block, spells 94445-94451 in this order.
+    { Boon::BloodPact,      SPELL_BOON_BLOOD_PACT,      1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Blood Pact",   "Bloodrage also gives every ally within 30 yd 20% of their maximum mana, rage or energy", "" },
+    { Boon::BladeDance,     SPELL_BOON_BLADE_DANCE,     1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Blade Dance",  "Slice and Dice also gives every ally within 30 yd its attack speed, plus 20% faster casting", "" },
+    { Boon::InnerFlame,     SPELL_BOON_INNER_FLAME,     1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Inner Flame",  "Inner Fire never runs out of charges, and its armor is tripled", "" },
+    { Boon::IceFortress,    SPELL_BOON_ICE_FORTRESS,    1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Ice Fortress", "while Ice Armor is up, enemies who hit you in melee are frozen solid for 3 sec (once per 10 sec each)", "" },
+    { Boon::SoulSwap,       SPELL_BOON_SOUL_SWAP,       1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Soul Swap",    "Death Coil swaps your health percentage with the target's", "" },
+    { Boon::SoulBond,       SPELL_BOON_SOUL_BOND,       1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Soul Bond",    "when an ally within 30 yd would take a killing blow, your demon takes it instead and dies", "" },
+    { Boon::WildKinship,    SPELL_BOON_WILD_KINSHIP,    1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Wild Kinship",     "you and allies wearing your Mark of the Wild heal 1% of their maximum health every 2 sec, and your Mark of the Wild cannot be dispelled", "" },
+
+    // The eighth block, spells 94454-94456 in this order.
+    { Boon::InnerLight,     SPELL_BOON_INNER_LIGHT,     1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Inner Light",  "Inner Fire can be cast on an ally: cast it with a friendly player targeted and it goes to them", "" },
+    { Boon::ElementalWard,  SPELL_BOON_ELEMENTAL_WARD,  1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Elemental Ward", "Fire Ward and Frost Ward absorb every school and five times as much", "" },
+    { Boon::EndlessCycle,   SPELL_BOON_ENDLESS_CYCLE,   1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Endless Cycle", "Rip, Rejuvenation and Moonfire's burn never end", "" },
+
+    // The ninth block, spells 94457-94459 in this order.
+    { Boon::WoolenPrison,   SPELL_BOON_WOOLEN_PRISON,   1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Woolen Prison", "Polymorph no longer breaks from damage and no longer regenerates the target's health", "" },
+    { Boon::StormCleave,    SPELL_BOON_STORM_CLEAVE,    1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Storm Cleave", "Windfury Weapon's extra attacks also hit every enemy within 5 yd of the target", "" },
+    { Boon::SuperchargedShield, SPELL_BOON_SUPERCHARGED_SHIELD, 1, 1, ClassBit(CLASS_SHAMAN), 0, "Boon of the Supercharged Shield", "Lightning Shield's orbs deal five times as much damage, and it can be cast on an ally: cast it with a friendly player targeted and it goes to them", "" },
+
+    // One stack is 15% (DisplayPerStack): a pick adds 15%, up to 300% at 20
+    // stacks. grantStacks 1 keeps the stacking grant multiplier off it.
+    { Boon::Devastation,  SPELL_BOON_DEVASTATION,  1,  20, MASK_ALL,      5, "Boon of Devastation",  "critical strike damage",                  "%" },
+
+    // The tenth artifact block, spells 94461-94462 in this order.
+    { Boon::SpellMirror,  SPELL_BOON_SPELL_MIRROR, 1, 1, ClassBit(CLASS_SHAMAN), 0, "Boon of the Spell Mirror", "Grounding Totem reflects the spell it catches back at whoever cast it, and that kills the totem; its cooldown resets whenever it dies", "" },
+    { Boon::GuardianFlame, SPELL_BOON_GUARDIAN_FLAME, 1, 1, ClassBit(CLASS_SHAMAN), 0, "Boon of the Guardian Flame", "every Searing Totem hit permanently lowers the target's damage by 5%, stacking up to 75%", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -863,6 +901,13 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_PRIMAL_ECHO
         || (spellId >= SPELL_BOON_CLASS_THIRD_FIRST && spellId <= SPELL_BOON_CLASS_THIRD_LAST)
         || (spellId >= SPELL_BOON_CLASS_FOURTH_FIRST && spellId <= SPELL_BOON_CLASS_FOURTH_LAST)
+        || (spellId >= SPELL_BOON_CLASS_FIFTH_FIRST && spellId <= SPELL_BOON_CLASS_FIFTH_LAST)
+        || spellId == SPELL_BOON_COMMANDER
+        || (spellId >= SPELL_BOON_CLASS_SEVENTH_FIRST && spellId <= SPELL_BOON_CLASS_SEVENTH_LAST)
+        || (spellId >= SPELL_BOON_CLASS_EIGHTH_FIRST && spellId <= SPELL_BOON_CLASS_EIGHTH_LAST)
+        || (spellId >= SPELL_BOON_CLASS_NINTH_FIRST && spellId <= SPELL_BOON_CLASS_NINTH_LAST)
+        || spellId == SPELL_BOON_DEVASTATION
+        || (spellId >= SPELL_BOON_CLASS_TENTH_FIRST && spellId <= SPELL_BOON_CLASS_TENTH_LAST)
         || (spellId >= SPELL_BOON_CLASS_FIRST && spellId <= SPELL_BOON_CLASS_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
@@ -874,8 +919,30 @@ bool IsArtifact(Boon boon)
         || (boon >= Boon::FieldMedic && boon <= Boon::Windlord)
         || boon == Boon::PrimalEcho
         || (boon >= Boon::UnendingVolley && boon <= Boon::LightningRod)
-        || (boon >= Boon::Unstoppable && boon <= Boon::PrimalReserves);
+        || (boon >= Boon::Unstoppable && boon <= Boon::PrimalReserves)
+        || (boon >= Boon::WrathOfTheLight && boon <= Boon::SiphonSoul)
+        || boon == Boon::Commander
+        || (boon >= Boon::BloodPact && boon <= Boon::WildKinship)
+        || (boon >= Boon::InnerLight && boon <= Boon::EndlessCycle)
+        || (boon >= Boon::WoolenPrison && boon <= Boon::SuperchargedShield)
+        || (boon >= Boon::SpellMirror && boon <= Boon::GuardianFlame);
 }
+
+static_assert(uint8(Boon::GuardianFlame) - uint8(Boon::SpellMirror)
+    == SPELL_BOON_CLASS_TENTH_LAST - SPELL_BOON_CLASS_TENTH_FIRST,
+    "the tenth artifact block and its spell block must be the same length");
+
+static_assert(uint8(Boon::SuperchargedShield) - uint8(Boon::WoolenPrison)
+    == SPELL_BOON_CLASS_NINTH_LAST - SPELL_BOON_CLASS_NINTH_FIRST,
+    "the ninth artifact block and its spell block must be the same length");
+
+static_assert(uint8(Boon::EndlessCycle) - uint8(Boon::InnerLight)
+    == SPELL_BOON_CLASS_EIGHTH_LAST - SPELL_BOON_CLASS_EIGHTH_FIRST,
+    "the eighth artifact block and its spell block must be the same length");
+
+static_assert(uint8(Boon::WildKinship) - uint8(Boon::BloodPact)
+    == SPELL_BOON_CLASS_SEVENTH_LAST - SPELL_BOON_CLASS_SEVENTH_FIRST,
+    "the seventh artifact block and its spell block must be the same length");
 
 // The artifact rows must sit on their spell ids in order: the class boon hooks
 // (VioletHoldClassBoons) name the spells, the table names the boons.
@@ -887,6 +954,9 @@ static_assert(uint8(Boon::LightningRod) - uint8(Boon::UnendingVolley)
 static_assert(uint8(Boon::PrimalReserves) - uint8(Boon::Unstoppable)
     == SPELL_BOON_CLASS_FOURTH_LAST - SPELL_BOON_CLASS_FOURTH_FIRST,
     "the fourth artifact block and its spell block must be the same length");
+static_assert(uint8(Boon::SiphonSoul) - uint8(Boon::WrathOfTheLight)
+    == SPELL_BOON_CLASS_FIFTH_LAST - SPELL_BOON_CLASS_FIFTH_FIRST,
+    "the fifth artifact block and its spell block must be the same length");
 
 bool SharesRunes(Player const* player)
 {
@@ -1032,6 +1102,11 @@ PickResult CanTake(Player const* player, Offer offer)
             // boons should need a party, including spellbreaker").
             || info.boon == Boon::Sacrifice || info.boon == Boon::Spellbreaker
             || info.boon == Boon::Wellspring || info.boon == Boon::WarBanner
+            || info.boon == Boon::GuardianBeast || info.boon == Boon::MarkedPrey
+            || info.boon == Boon::SmokeBomb || info.boon == Boon::SiphonSoul
+            || info.boon == Boon::Commander || info.boon == Boon::BloodPact || info.boon == Boon::BladeDance
+            || info.boon == Boon::SoulBond || info.boon == Boon::WildKinship || info.boon == Boon::InnerLight
+            || info.boon == Boon::SuperchargedShield || info.boon == Boon::GuardianFlame
             || (info.boon >= Boon::FieldMedic && info.boon <= Boon::Windlord))
         {
             BattlegroundVHR const* run = GetRunOf(player);
@@ -2049,8 +2124,11 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
                 uint32(grantStacks) * TEMPO_MS_PER_STACK, info.summary,
                 uint32(held) * TEMPO_MS_PER_STACK, uint32(maxStacks) * TEMPO_MS_PER_STACK, blocked);
         default:
-            return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]{}", info.name, uint32(grantStacks), info.unit,
-                info.summary, uint32(held), uint32(maxStacks), info.unit, blocked);
+        {
+            uint32 const perStack = DisplayPerStack(info.boon);
+            return Trinity::StringFormat("{}: +{}{} {} [{}/{}{}]{}", info.name, uint32(grantStacks) * perStack, info.unit,
+                info.summary, uint32(held) * perStack, uint32(maxStacks) * perStack, info.unit, blocked);
+        }
     }
 }
 

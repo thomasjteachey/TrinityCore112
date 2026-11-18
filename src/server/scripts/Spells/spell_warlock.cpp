@@ -36,6 +36,7 @@
 #include "SpellScript.h"
 #include "Pet.h"
 #include "SpellHistory.h"
+#include "VioletHoldClassBoons.h"
 #include <vector>
 #include <chrono>
 
@@ -769,7 +770,9 @@ class spell_warl_life_tap : public SpellScript
         int32 mana = round(fmana);
 
         // Shouldn't Appear in Combat Log
-        caster->ModifyHealth(-base);
+        // (Violet Hold Bottomless Pact: the health is not taken.)
+        if (!VioletHoldClassBoons::LifeTapIsFree(caster))
+            caster->ModifyHealth(-base);
 
         CastSpellExtraArgs args;
         args.AddSpellBP0(mana);
@@ -791,7 +794,8 @@ class spell_warl_life_tap : public SpellScript
 
     SpellCastResult CheckCast()
     {
-        if (int32(GetCaster()->GetHealth()) > int32(GetEffectInfo(EFFECT_0).CalcValue()))
+        if (VioletHoldClassBoons::LifeTapIsFree(GetCaster())
+            || int32(GetCaster()->GetHealth()) > int32(GetEffectInfo(EFFECT_0).CalcValue()))
             return SPELL_CAST_OK;
         return SPELL_FAILED_FIZZLE;
     }

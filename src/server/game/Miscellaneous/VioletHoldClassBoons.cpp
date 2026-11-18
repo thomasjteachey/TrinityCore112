@@ -73,6 +73,14 @@ constexpr uint32 CROWD_CONTROL_MASK =
 // Domination: the faction each dominated unit had before, to give back.
 std::unordered_map<ObjectGuid, uint32> DominatedFactions;
 
+// Ice Fortress: (mage, attacker) -> game time (ms) before which that attacker
+// cannot be frozen by that mage again.
+std::map<std::pair<ObjectGuid, ObjectGuid>, uint32> IceFortressCooldowns;
+
+// Soul Bond: demons already promised to a killing blow this instant, so two
+// lethal hits in one pass cannot both be taken by one demon.
+std::set<ObjectGuid> SoulBondSpent;
+
 bool Holds(Unit const* unit, uint32 boonSpellId)
 {
     return unit && unit->HasAura(boonSpellId);
@@ -501,6 +509,8 @@ void OnStripped(Player* player)
     player->RemoveAurasDueToSpell(SPELL_PLAGUE_BURDEN);
     player->RemoveAurasDueToSpell(SPELL_UNSTOPPABLE_BUFF);
     player->RemoveAurasDueToSpell(SPELL_SHADOWSTALKER_VEIL);
+    for (uint32 command : { SPELL_COMMAND_BATTLE, SPELL_COMMAND_DEFENSIVE, SPELL_COMMAND_BERSERKER })
+        player->RemoveAurasDueToSpell(command);
 
     // Alpha rides on the pet, which may be dead or dismissed: the blessing is
     // death-persistent like Beastmaster's.
@@ -741,11 +751,18 @@ bool IsFieldMedicHeal(WorldObject const* caster, SpellInfo const* spellInfo, Uni
 
 bool HoldsThroughDamage(Aura const* aura)
 {
+    if (!aura)
+        return false;
+    SpellInfo const* spellInfo = aura->GetSpellInfo();
     // Freezing Trap Effect, every rank. The trap casts it for its owner, so
     // the aura's caster is the hunter.
-    if (!aura || !Is(aura->GetSpellInfo(), SPELLFAMILY_HUNTER, "Freezing Trap Effect"))
-        return false;
-    return Holds(aura->GetCaster(), SPELL_TRAPPER);
+    if (Is(spellInfo, SPELLFAMILY_HUNTER, "Freezing Trap Effect"))
+        return Holds(aura->GetCaster(), SPELL_TRAPPER);
+    // Woolen Prison: every mage Polymorph (sheep, pig, turtle, cow, the rank
+    // copies) - whatever SpellInfo calls SPELL_SPECIFIC_MAGE_POLYMORPH.
+    if (spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && spellInfo->GetSpellSpecific() == SPELL_SPECIFIC_MAGE_POLYMORPH)
+        return Holds(aura->GetCaster(), SPELL_WOOLEN_PRISON);
+    return false;
 }
 
 // ---- rogue -------------------------------------------------------------------
@@ -979,6 +996,9 @@ bool IsUndispellable(Aura const* aura, Unit const* auraTarget)
     // Sacrifice: a holder's Hand of Sacrifice stays on through every dispel.
     if (Is(aura->GetSpellInfo(), SPELLFAMILY_PALADIN, "Hand of Sacrifice"))
         return Holds(aura->GetCaster(), SPELL_SACRIFICE);
+    // Wild Kinship: and a holder's Mark (or Gift) of the Wild.
+    if (Is(aura->GetSpellInfo(), SPELLFAMILY_DRUID, "Mark of the Wild") || Is(aura->GetSpellInfo(), SPELLFAMILY_DRUID, "Gift of the Wild"))
+        return Holds(aura->GetCaster(), SPELL_WILD_KINSHIP);
     if (aura->GetSpellInfo()->IsPositive())
         return false;
     if (auraTarget && aura->GetCasterGUID() == auraTarget->GetGUID())
@@ -989,10 +1009,37 @@ bool IsUndispellable(Aura const* aura, Unit const* auraTarget)
     return caster && caster->GetClass() == CLASS_WARLOCK && Holds(caster, SPELL_INDELIBLE);
 }
 
+namespace
+{
+// Spell Mirror. The Grounding Totem button is the wrapper 81478 (15 sec
+// cooldown); 8177, and the Autumn set's 81481, are what it casts, triggered.
+constexpr std::array<uint32, 3> GROUNDING_TOTEM_SPELLS = { 81478, 8177, 81481 };
+// How long a totem outlives the hit of the spell it caught.
+constexpr Milliseconds SPELL_MIRROR_LINGER = Milliseconds(1000);
+
+Unit* SpellMirrorOwner(Unit const* totem)
+{
+    if (!totem || !totem->IsTotem() || !totem->IsMagnet())
+        return nullptr;
+    Unit* owner = totem->GetOwner();
+    return owner && owner->GetClass() == CLASS_SHAMAN && Holds(owner, SPELL_SPELL_MIRROR) ? owner : nullptr;
+}
+
+void ResetGroundingTotem(Unit* shaman)
+{
+    for (uint32 spellId : GROUNDING_TOTEM_SPELLS)
+        shaman->GetSpellHistory()->ResetCooldown(spellId, true);
+}
+}
+
 void OnUnitDying(Unit* victim, Unit* attacker)
 {
     if (!victim || !victim->IsInWorld())
         return;
+
+    // Spell Mirror: a holder's Grounding Totem that falls is ready again.
+    if (Unit* shaman = SpellMirrorOwner(victim))
+        ResetGroundingTotem(shaman);
 
     // Vengeance: every kill while berserk heals the warrior (a pet's kill counts).
     if (Unit* killer = attacker ? attacker->GetCharmerOrOwnerOrSelf() : nullptr)
@@ -1003,6 +1050,25 @@ void OnUnitDying(Unit* victim, Unit* attacker)
 
     if (Pet* pet = victim->ToPet())
         ReturnTheDemon(pet);
+
+    // Marked Prey: a holder's Hunter's Mark moves on to the nearest enemy of
+    // the hunter around the fallen one. Collected first: casting while
+    // walking the victim's aura list would be walking a list that can change.
+    std::vector<std::pair<Unit*, uint32>> marks;
+    for (AuraEffect const* stalk : victim->GetAuraEffectsByType(SPELL_AURA_MOD_STALKED))
+        if (Is(stalk->GetSpellInfo(), SPELLFAMILY_HUNTER, "Hunter's Mark"))
+            if (Unit* hunter = stalk->GetCaster())
+                if (hunter != victim && hunter->IsAlive() && Holds(hunter, SPELL_MARKED_PREY))
+                    marks.emplace_back(hunter, stalk->GetId());
+    for (auto const& [hunter, markId] : marks)
+    {
+        Unit* next = nullptr;
+        for (Unit* enemy : EnemiesNear(victim, hunter, MARKED_PREY_JUMP_RADIUS))
+            if (!next || victim->GetExactDist(enemy) < victim->GetExactDist(next))
+                next = enemy;
+        if (next)
+            hunter->CastSpell(next, markId, TRIGGERED_FULL_MASK);
+    }
 
     // Shadowstalker: the rogue's own killing blow (not a pet's) puts them
     // straight back in Stealth, under 3 sec of total immunity so the fight
@@ -1349,6 +1415,59 @@ void EvenOutHealth(Player* shaman)
     for (Player* member : linked)
         member->SetHealth(std::max<uint32>(1, uint32(member->GetMaxHealth() * share)));
 }
+
+// Inner Light and Supercharged Shield: a self-only buff cast with a friendly
+// player selected goes to that player. The client always casts it on the
+// caster, so it is moved one event later, once it has landed (the same rank,
+// with the caster still its caster, so the caster's spellmods and boons keep
+// shaping it). Called from OnSpellCast, before the cast lands: whatever the
+// caster wore that this cast replaces on them - their own earlier copy, or for
+// an elemental shield the other shield - is noted here and put back.
+void CastOnSelectedAlly(Unit* caster, SpellInfo const* spellInfo, float range)
+{
+    Player* self = caster ? caster->ToPlayer() : nullptr;
+    Unit* ally = self ? ObjectAccessor::GetUnit(*self, self->GetTarget()) : nullptr;
+    if (!ally || ally == self || ally->GetTypeId() != TYPEID_PLAYER || !ally->IsAlive() || !self->IsValidAssistTarget(ally)
+        || !ally->IsWithinDistInMap(self, range) || !self->IsWithinLOSInMap(ally))
+        return;
+
+    SpellSpecificType const specific = spellInfo->GetSpellSpecific();
+    uint32 oldId = 0;
+    int32 oldDuration = 0;
+    uint8 oldCharges = 0;
+    for (auto const& [id, app] : self->GetAppliedAuras())
+    {
+        Aura const* aura = app->GetBase();
+        if (aura->GetCasterGUID() != self->GetGUID())
+            continue;
+        if (SameSpell(aura->GetSpellInfo(), spellInfo)
+            || (specific != SPELL_SPECIFIC_NORMAL && aura->GetSpellInfo()->GetSpellSpecific() == specific))
+        {
+            oldId = id;
+            oldDuration = aura->GetDuration();
+            oldCharges = aura->GetCharges();
+            break;
+        }
+    }
+
+    ObjectGuid const allyGuid = ally->GetGUID();
+    uint32 const spellId = spellInfo->Id;
+    self->m_Events.AddEventAtOffset([self, allyGuid, spellId, oldId, oldDuration, oldCharges]()
+    {
+        Unit* target = ObjectAccessor::GetUnit(*self, allyGuid);
+        if (!target || !target->IsAlive() || !target->IsInMap(self))
+            return;
+        self->RemoveAurasDueToSpell(spellId, self->GetGUID());
+        self->AddAura(spellId, target);
+        if (oldId)
+            if (Aura* back = self->AddAura(oldId, self))
+            {
+                back->SetDuration(oldDuration);
+                if (oldCharges)
+                    back->SetCharges(oldCharges);
+            }
+    }, std::chrono::milliseconds(1));
+}
 }
 
 void OnSpellCast(Unit* caster, SpellInfo const* spellInfo, Unit* explicitTarget)
@@ -1372,6 +1491,90 @@ void OnSpellCast(Unit* caster, SpellInfo const* spellInfo, Unit* explicitTarget)
         caster->RemoveAurasWithMechanic(CROWD_CONTROL_MASK, AURA_REMOVE_BY_DEFAULT, 0);
         caster->CastSpell(caster, SPELL_UNSTOPPABLE_BUFF, TRIGGERED_FULL_MASK);
     }
+
+    // Smoke Bomb: Vanish takes the whole party with it, wherever they stand.
+    if (Is(spellInfo, SPELLFAMILY_ROGUE, "Vanish") && caster->GetClass() == CLASS_ROGUE && Holds(caster, SPELL_SMOKE_BOMB))
+        for (Player* ally : AlliesOf(caster))
+            if (ally != caster && ally->IsAlive())
+                caster->AddAura(SPELL_SMOKE_BOMB_VEIL, ally);
+
+    // Holy Pyre: the burn (Holy Fire's periodic effect, with the priest's
+    // bonuses) also lands on every enemy around the target.
+    if (Is(spellInfo, SPELLFAMILY_PRIEST, "Holy Fire") && caster->GetClass() == CLASS_PRIEST && explicitTarget
+        && Holds(caster, SPELL_HOLY_PYRE) && caster->IsValidAttackTarget(explicitTarget))
+    {
+        uint8 burnMask = 0;
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.ApplyAuraName == SPELL_AURA_PERIODIC_DAMAGE)
+                burnMask |= uint8(1 << effect.EffectIndex);
+        if (burnMask)
+            for (Unit* enemy : EnemiesNear(explicitTarget, caster, HOLY_PYRE_RADIUS))
+                caster->AddAura(spellInfo, burnMask, enemy);
+    }
+
+    // Blood Pact: Bloodrage shares itself out as each ally's own resource.
+    if (Is(spellInfo, SPELLFAMILY_WARRIOR, "Bloodrage") && caster->GetClass() == CLASS_WARRIOR && Holds(caster, SPELL_BLOOD_PACT))
+        for (Player* ally : AlliesOf(caster))
+        {
+            if (ally == caster || !ally->IsAlive() || !ally->IsWithinDistInMap(caster, BLOOD_PACT_RADIUS))
+                continue;
+            Powers const power = ally->GetPowerType();
+            int32 const maximum = ally->GetMaxPower(power);
+            if (maximum > 0)
+                ally->ModifyPower(power, std::max<int32>(1, CalculatePct(maximum, BLOOD_PACT_PCT)));
+        }
+
+    // Blade Dance: once the new Slice and Dice is on the rogue (one event on),
+    // allies within 30 yd get its haste for as long as it lasts, plus 20% casting.
+    if (Is(spellInfo, SPELLFAMILY_ROGUE, "Slice and Dice") && caster->GetClass() == CLASS_ROGUE && Holds(caster, SPELL_BLADE_DANCE))
+        if (Player* rogue = caster->ToPlayer())
+            rogue->m_Events.AddEventAtOffset([rogue]()
+            {
+                AuraEffect const* slice = nullptr;
+                for (AuraEffect const* haste : rogue->GetAuraEffectsByType(SPELL_AURA_MOD_MELEE_HASTE))
+                    if (haste->GetCasterGUID() == rogue->GetGUID() && Is(haste->GetSpellInfo(), SPELLFAMILY_ROGUE, "Slice and Dice"))
+                        slice = haste;
+                if (!slice || !rogue->IsAlive())
+                    return;
+                int32 const amount = slice->GetAmount();
+                int32 const duration = slice->GetBase()->GetDuration();
+                for (Player* ally : AlliesOf(rogue))
+                {
+                    if (ally == rogue || !ally->IsAlive() || !ally->IsWithinDistInMap(rogue, BLADE_DANCE_RADIUS))
+                        continue;
+                    Aura* dance = rogue->AddAura(SPELL_BLADE_DANCE_BUFF, ally);
+                    if (!dance)
+                        continue;
+                    if (duration > 0)
+                    {
+                        dance->SetMaxDuration(duration);
+                        dance->SetDuration(duration);
+                    }
+                    for (SpellEffIndex melee : { EFFECT_0, EFFECT_1 })
+                        if (AuraEffect* haste = dance->GetEffect(melee))
+                            haste->ChangeAmount(amount);
+                }
+            }, std::chrono::milliseconds(1));
+
+    // Soul Swap: Death Coil trades health percentages with its target first.
+    if (Is(spellInfo, SPELLFAMILY_WARLOCK, "Death Coil") && caster->GetClass() == CLASS_WARLOCK && explicitTarget
+        && explicitTarget->IsAlive() && caster->IsValidAttackTarget(explicitTarget) && Holds(caster, SPELL_SOUL_SWAP))
+    {
+        float const mine = caster->GetHealthPct();
+        float const theirs = explicitTarget->GetHealthPct();
+        caster->SetHealth(std::max<uint32>(1, uint32(caster->GetMaxHealth() * theirs / 100.0f)));
+        explicitTarget->SetHealth(std::max<uint32>(1, uint32(explicitTarget->GetMaxHealth() * mine / 100.0f)));
+    }
+
+    // Inner Light: Inner Fire cast with a friendly player selected goes to them.
+    if (Is(spellInfo, SPELLFAMILY_PRIEST, "Inner Fire") && caster->GetClass() == CLASS_PRIEST && Holds(caster, SPELL_INNER_LIGHT))
+        CastOnSelectedAlly(caster, spellInfo, INNER_LIGHT_RANGE);
+
+    // Supercharged Shield: so does Lightning Shield (the shield itself; its
+    // orbs are triggered casts and never reach OnSpellCast).
+    if (Is(spellInfo, SPELLFAMILY_SHAMAN, "Lightning Shield") && spellInfo->HasAura(SPELL_AURA_PROC_TRIGGER_SPELL)
+        && caster->GetClass() == CLASS_SHAMAN && Holds(caster, SPELL_SUPERCHARGED_SHIELD))
+        CastOnSelectedAlly(caster, spellInfo, SUPERCHARGED_SHIELD_RANGE);
 
     // Unburdened: Lay on Hands leaves the paladin full instead of empty.
     if (Is(spellInfo, SPELLFAMILY_PALADIN, "Lay on Hands") && caster->GetClass() == CLASS_PALADIN
@@ -1517,6 +1720,32 @@ void UpdateRun(BattlegroundVHR* run, uint32 tick)
 
         if (player->GetClass() == CLASS_SHAMAN && player->IsAlive() && Holds(player, SPELL_LIGHTNING_ROD))
             FireLightningRods(player);
+
+        if (player->GetClass() == CLASS_WARRIOR && Holds(player, SPELL_COMMANDER))
+            SyncCommand(player);
+
+        // Wild Kinship: every 2 sec the druid, and every ally wearing the
+        // druid's Mark (or Gift) of the Wild, heals 1% of maximum health.
+        if (tick % 2 == 0 && player->GetClass() == CLASS_DRUID && player->IsAlive() && Holds(player, SPELL_WILD_KINSHIP))
+        {
+            SpellInfo const* kinship = sSpellMgr->GetSpellInfo(SPELL_WILD_KINSHIP);
+            for (Player* ally : AlliesOf(player))
+            {
+                if (!ally->IsAlive() || ally->GetHealth() >= ally->GetMaxHealth())
+                    continue;
+                bool marked = ally == player;
+                for (AuraEffect const* mark : ally->GetAuraEffectsByType(SPELL_AURA_MOD_RESISTANCE))
+                    if (!marked && mark->GetCasterGUID() == player->GetGUID()
+                        && (Is(mark->GetSpellInfo(), SPELLFAMILY_DRUID, "Mark of the Wild")
+                            || Is(mark->GetSpellInfo(), SPELLFAMILY_DRUID, "Gift of the Wild")))
+                        marked = true;
+                if (!marked || !kinship)
+                    continue;
+                HealInfo heal(player, ally, std::max<uint32>(1, uint32(ally->CountPctFromMaxHealth(WILD_KINSHIP_PCT))),
+                    kinship, kinship->GetSchoolMask());
+                player->HealBySpell(heal);
+            }
+        }
     }
 }
 
@@ -1774,5 +2003,276 @@ void EndDomination(Unit* victim)
     victim->CombatStop(true);
     if (Player* bot = victim->ToPlayer())
         bot->SetSelection(ObjectGuid::Empty);
+}
+
+// ---- the fifth block (2026-11-18, later) -------------------------------------
+
+void OnAllyStruck(Unit* attacker, Unit* victim, uint32 damage)
+{
+    // Every hit on the server passes here: the cheap tests first.
+    if (!damage || !attacker || !victim || attacker == victim || victim->GetTypeId() != TYPEID_PLAYER || !victim->IsAlive())
+        return;
+    uint32 const health = victim->GetHealth();
+    uint32 const half = uint32(victim->CountPctFromMaxHealth(GUARDIAN_BEAST_HEALTH_PCT));
+    if (damage >= health || health < half || health - damage >= half)
+        return;
+    Player* ally = victim->ToPlayer();
+    Battleground* bg = ally->GetBattleground();
+    if (!bg || bg->GetTypeID() != BATTLEGROUND_VHR)
+        return;
+
+    for (Player* hunter : AlliesOf(ally))
+    {
+        if (hunter->GetClass() != CLASS_HUNTER || !hunter->IsAlive() || !Holds(hunter, SPELL_GUARDIAN_BEAST)
+            || hunter->GetSpellHistory()->HasCooldown(SPELL_GUARDIAN_BEAST))
+            continue;
+        Pet* pet = hunter->GetPet();
+        if (!pet || !pet->IsAlive() || !pet->IsInMap(attacker) || !pet->IsValidAttackTarget(attacker))
+            continue;
+
+        hunter->GetSpellHistory()->AddCooldown(SPELL_GUARDIAN_BEAST, 0, std::chrono::milliseconds(GUARDIAN_BEAST_THROTTLE_MS));
+        // After the hit that called it has landed: nothing moves in the
+        // middle of the damage pass (Body Double's rule).
+        ObjectGuid const petGuid = pet->GetGUID();
+        ObjectGuid const foeGuid = attacker->GetGUID();
+        hunter->m_Events.AddEventAtOffset([hunter, petGuid, foeGuid]()
+        {
+            Pet* beast = hunter->GetPet();
+            if (!beast || beast->GetGUID() != petGuid || !beast->IsAlive() || !beast->IsInWorld())
+                return;
+            Unit* foe = ObjectAccessor::GetUnit(*beast, foeGuid);
+            if (!foe || !foe->IsAlive() || !foe->IsInMap(beast) || !beast->IsValidAttackTarget(foe))
+                return;
+            Position const spot = foe->GetNearPosition(1.0f, foe->GetRelativeAngle(beast));
+            beast->NearTeleportTo(spot.GetPositionX(), spot.GetPositionY(), spot.GetPositionZ(), beast->GetAbsoluteAngle(foe));
+            // The realm's player-safe taunt: ATTACK_ME + FEAR (Compel's shape).
+            beast->CastSpell(foe, SPELL_GUARDIAN_TAUNT, TRIGGERED_FULL_MASK);
+            if (beast->IsAIEnabled())
+                beast->AI()->AttackStart(foe);
+        }, std::chrono::milliseconds(1));
+        return;
+    }
+}
+
+uint32 ModifyMarkedPreyDamage(Unit* attacker, Unit* victim, uint32 damage)
+{
+    // Only a unit wearing a stalking aura (Hunter's Mark) is looked at.
+    if (!damage || !attacker || !victim || !victim->HasAuraType(SPELL_AURA_MOD_STALKED))
+        return damage;
+    Unit* dealer = attacker->GetCharmerOrOwnerOrSelf();
+    for (AuraEffect const* stalk : victim->GetAuraEffectsByType(SPELL_AURA_MOD_STALKED))
+    {
+        if (!Is(stalk->GetSpellInfo(), SPELLFAMILY_HUNTER, "Hunter's Mark"))
+            continue;
+        Unit* hunter = stalk->GetCaster();
+        if (!hunter || !Holds(hunter, SPELL_MARKED_PREY))
+            continue;
+        if (dealer == hunter || (hunter->IsInMap(dealer) && hunter->IsValidAssistTarget(dealer)))
+            return damage + CalculatePct(damage, MARKED_PREY_BONUS_PCT);
+    }
+    return damage;
+}
+
+bool LifeTapIsFree(Unit const* caster)
+{
+    return caster && caster->GetClass() == CLASS_WARLOCK && Holds(caster, SPELL_BOTTOMLESS_PACT);
+}
+
+Unit* GetLeechHealRecipient(Unit* caster, SpellInfo const* spellInfo)
+{
+    if (!caster || caster->GetClass() != CLASS_WARLOCK || !Is(spellInfo, SPELLFAMILY_WARLOCK, "Drain Life")
+        || !Holds(caster, SPELL_SIPHON_SOUL))
+        return caster;
+
+    Player* lowest = nullptr;
+    for (Player* ally : AlliesOf(caster))
+    {
+        if (ally == caster || !ally->IsAlive() || ally->GetHealth() >= ally->GetMaxHealth()
+            || !ally->IsWithinDistInMap(caster, SIPHON_SOUL_RANGE))
+            continue;
+        if (!lowest || uint64(ally->GetHealth()) * lowest->GetMaxHealth() < uint64(lowest->GetHealth()) * ally->GetMaxHealth())
+            lowest = ally;
+    }
+    return lowest ? static_cast<Unit*>(lowest) : caster;
+}
+
+void SyncCommand(Player* warrior)
+{
+    if (!warrior || !warrior->IsInWorld())
+        return;
+    uint32 wanted = 0;
+    if (warrior->IsAlive() && Holds(warrior, SPELL_COMMANDER))
+    {
+        switch (warrior->GetShapeshiftForm())
+        {
+            case FORM_BATTLESTANCE:    wanted = SPELL_COMMAND_BATTLE;    break;
+            case FORM_DEFENSIVESTANCE: wanted = SPELL_COMMAND_DEFENSIVE; break;
+            case FORM_BERSERKERSTANCE: wanted = SPELL_COMMAND_BERSERKER; break;
+            default: break;
+        }
+    }
+    for (uint32 command : { SPELL_COMMAND_BATTLE, SPELL_COMMAND_DEFENSIVE, SPELL_COMMAND_BERSERKER })
+        if (command != wanted && warrior->HasAura(command))
+            warrior->RemoveAurasDueToSpell(command);
+    // A 30 yd party area aura from the warrior: the aura engine adds and
+    // drops allies as they come and go.
+    if (wanted && !warrior->HasAura(wanted))
+        warrior->CastSpell(warrior, wanted, TRIGGERED_FULL_MASK);
+}
+
+// ---- the seventh block (2026-11-18) ------------------------------------------
+
+void OnMeleeStruck(Unit* attacker, Unit* victim)
+{
+    // Every melee swing on the server passes here: the cheap tests first.
+    if (!attacker || !victim || attacker == victim || victim->GetTypeId() != TYPEID_PLAYER
+        || victim->GetClass() != CLASS_MAGE || !attacker->IsAlive() || !Holds(victim, SPELL_ICE_FORTRESS))
+        return;
+    bool armored = false;
+    for (AuraEffect const* armor : victim->GetAuraEffectsByType(SPELL_AURA_MOD_RESISTANCE))
+        if (Is(armor->GetSpellInfo(), SPELLFAMILY_MAGE, "Ice Armor"))
+            armored = true;
+    if (!armored || !victim->IsValidAttackTarget(attacker))
+        return;
+
+    uint32 const now = GameTime::GetGameTimeMS();
+    auto const key = std::make_pair(victim->GetGUID(), attacker->GetGUID());
+    auto itr = IceFortressCooldowns.find(key);
+    if (itr != IceFortressCooldowns.end() && int32(now - itr->second) < 0)
+        return;
+    if (IceFortressCooldowns.size() > 512)   // forget long-expired pairs now and then
+        for (auto it = IceFortressCooldowns.begin(); it != IceFortressCooldowns.end();)
+            it = int32(now - it->second) >= 0 ? IceFortressCooldowns.erase(it) : std::next(it);
+    IceFortressCooldowns[key] = now + ICE_FORTRESS_COOLDOWN_MS;
+
+    // Not in the middle of the swing: one event on.
+    Player* mage = victim->ToPlayer();
+    ObjectGuid const foeGuid = attacker->GetGUID();
+    mage->m_Events.AddEventAtOffset([mage, foeGuid]()
+    {
+        Unit* foe = ObjectAccessor::GetUnit(*mage, foeGuid);
+        if (foe && foe->IsAlive() && foe->IsInMap(mage) && mage->IsValidAttackTarget(foe))
+            mage->CastSpell(foe, SPELL_ICE_FORTRESS_FREEZE, TRIGGERED_FULL_MASK);
+    }, std::chrono::milliseconds(1));
+}
+
+bool TrySoulBond(Unit* victim)
+{
+    Player* ally = victim ? victim->ToPlayer() : nullptr;
+    if (!ally || !ally->IsAlive())
+        return false;
+    Battleground* bg = ally->GetBattleground();
+    if (!bg || bg->GetTypeID() != BATTLEGROUND_VHR)
+        return false;
+
+    for (Player* lock : AlliesOf(ally))
+    {
+        if (lock->GetClass() != CLASS_WARLOCK || !lock->IsAlive() || !Holds(lock, SPELL_SOUL_BOND)
+            || !lock->IsWithinDistInMap(ally, SOUL_BOND_RANGE))
+            continue;
+        Pet* demon = lock->GetPet();
+        if (!demon || !demon->IsAlive() || SoulBondSpent.count(demon->GetGUID()))
+            continue;
+
+        ObjectGuid const demonGuid = demon->GetGUID();
+        SoulBondSpent.insert(demonGuid);
+        // The demon dies after this damage pass, not inside it (OnUnitDying's
+        // Eternal Pact may then bring it back).
+        lock->m_Events.AddEventAtOffset([lock, demonGuid]()
+        {
+            SoulBondSpent.erase(demonGuid);
+            Pet* bonded = lock->GetPet();
+            if (bonded && bonded->GetGUID() == demonGuid && bonded->IsAlive())
+                bonded->KillSelf(false);
+        }, std::chrono::milliseconds(1));
+        return true;
+    }
+    return false;
+}
+
+// ---- the eighth block (2026-11-18) -------------------------------------------
+
+bool AbsorbsEverySchool(AuraEffect const* absorb)
+{
+    if (!absorb)
+        return false;
+    SpellInfo const* ward = absorb->GetSpellInfo();
+    if (!Is(ward, SPELLFAMILY_MAGE, "Fire Ward") && !Is(ward, SPELLFAMILY_MAGE, "Frost Ward"))
+        return false;
+    return Holds(absorb->GetCaster(), SPELL_ELEMENTAL_WARD);
+}
+
+bool MakesAuraEndless(Unit const* caster, SpellInfo const* spellInfo)
+{
+    if (!caster || !spellInfo || caster->GetClass() != CLASS_DRUID || spellInfo->SpellFamilyName != SPELLFAMILY_DRUID)
+        return false;
+    return (NameIs(spellInfo, "Rip") || NameIs(spellInfo, "Rejuvenation") || NameIs(spellInfo, "Moonfire"))
+        && Holds(caster, SPELL_ENDLESS_CYCLE);
+}
+
+// ---- the ninth block (2026-11-18) ----------------------------------------
+
+bool IsWoolenPrisoner(Unit const* target)
+{
+    if (!target || !target->IsPolymorphed())
+        return false;
+    for (AuraEffect const* effect : target->GetAuraEffectsByType(SPELL_AURA_TRANSFORM))
+        if (effect->GetSpellInfo()->GetSpellSpecific() == SPELL_SPECIFIC_MAGE_POLYMORPH
+            && Holds(effect->GetCaster(), SPELL_WOOLEN_PRISON))
+            return true;
+    return false;
+}
+
+std::vector<Unit*> StormCleaveTargets(Unit* shaman, Unit* victim)
+{
+    if (!shaman || !victim || shaman->GetClass() != CLASS_SHAMAN || !Holds(shaman, SPELL_STORM_CLEAVE))
+        return {};
+    return EnemiesNear(victim, shaman, STORM_CLEAVE_RADIUS);
+}
+
+int32 ModifyShieldOrbDamage(Unit const* caster, SpellInfo const* spellInfo, int32 damage)
+{
+    // The orb is every rank's "Lightning Shield" SCHOOL_DAMAGE spell (26364
+    // and on); the shield itself is a PROC_TRIGGER_SPELL aura and never gets here.
+    if (damage <= 0 || !caster || caster->GetClass() != CLASS_SHAMAN
+        || !Is(spellInfo, SPELLFAMILY_SHAMAN, "Lightning Shield") || !spellInfo->HasEffect(SPELL_EFFECT_SCHOOL_DAMAGE)
+        || !Holds(caster, SPELL_SUPERCHARGED_SHIELD))
+        return damage;
+    return damage * SUPERCHARGED_SHIELD_FACTOR;
+}
+
+// ---- the tenth block (2026-11-18) ----------------------------------------
+
+bool MirrorsSpells(Unit const* target)
+{
+    return SpellMirrorOwner(target) != nullptr;
+}
+
+void EndSpellMirror(Unit* totem, uint64 hitDelayMs)
+{
+    if (!SpellMirrorOwner(totem))
+        return;
+    totem->m_Events.AddEventAtOffset([totem]()
+    {
+        Totem* self = totem->ToTotem();
+        if (!self || !self->IsAlive())
+            return;
+        // UnSummon, not a kill, so OnUnitDying does not reset it a second time.
+        if (Unit* shaman = SpellMirrorOwner(self))
+            ResetGroundingTotem(shaman);
+        self->UnSummon();
+    }, Milliseconds(hitDelayMs) + SPELL_MIRROR_LINGER);
+}
+
+void OnSpellDamageDealt(Unit* caster, Unit* victim, SpellInfo const* spellInfo)
+{
+    // The Searing Totem bolt, every rank: shaman family "Attack", cast by the totem.
+    if (!caster || !victim || !caster->IsTotem() || !Is(spellInfo, SPELLFAMILY_SHAMAN, "Attack")
+        || !(spellInfo->SpellFamilyFlags[0] & 0x40000000) || !victim->IsAlive())
+        return;
+    Unit* shaman = caster->GetOwner();
+    if (!shaman || shaman->GetClass() != CLASS_SHAMAN || !Holds(shaman, SPELL_GUARDIAN_FLAME))
+        return;
+    shaman->AddAura(SPELL_GUARDIAN_FLAME_SAP, victim);
 }
 }

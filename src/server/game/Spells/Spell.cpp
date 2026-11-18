@@ -2522,6 +2522,14 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
     // Violet Hold Field Medic: a shot at an ally always lands (as a heal).
     if (targetInfo.MissCondition != SPELL_MISS_NONE && VioletHoldClassBoons::IsFieldMedicHeal(caster, m_spellInfo, target))
         targetInfo.MissCondition = SPELL_MISS_NONE;
+    // Violet Hold Spell Mirror: a holder's Grounding Totem sends a hostile
+    // spell aimed at it (grounded onto it, or cast straight at it) back at its
+    // caster, through the Spell Reflection path below. Only the explicit
+    // target: an area spell sweeping over the totem is not caught.
+    bool const spellMirror = target == m_targets.GetUnitTarget() && !IsPositive()
+        && VioletHoldClassBoons::MirrorsSpells(target);
+    if (spellMirror && m_canReflect)
+        targetInfo.MissCondition = SPELL_MISS_REFLECT;
 
     // Spell have speed - need calculate incoming time
     // Incoming time is zero for self casts. At least I think so.
@@ -2566,6 +2574,10 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
     }
     else
         targetInfo.ReflectResult = SPELL_MISS_NONE;
+
+    // Spell Mirror: what the totem caught is its last spell, once it has landed.
+    if (spellMirror)
+        VioletHoldClassBoons::EndSpellMirror(target, targetInfo.TimeDelay);
 
     // Add target to list
     m_UniqueTargetInfo.emplace_back(std::move(targetInfo));
@@ -2988,6 +3000,8 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
                 // Violet Hold Gale: the holder's spells may throw the target up.
                 VioletHoldBoons::OnSpellDamageDealt(caster, spell->unitTarget, spell->m_spellInfo,
                     spell->IsTriggered(), spell->GetTriggeredByAuraSpell() != nullptr);
+                // Violet Hold Guardian Flame: a holder's Searing Totem saps what it hits.
+                VioletHoldClassBoons::OnSpellDamageDealt(caster, spell->unitTarget, spell->m_spellInfo);
             }
 
             // Do triggers for unit
@@ -3352,6 +3366,10 @@ void Spell::DoSpellEffectHit(Unit* unit, SpellEffectInfo const& spellEffectInfo,
                     hitInfo.HitAura->SetDiminishGroup(hitInfo.DRGroup);
 
                     hitInfo.AuraDuration = caster->ModSpellDuration(hitInfo.AuraSpellInfo, unit, hitInfo.AuraDuration, hitInfo.Positive, hitInfo.HitAura->GetEffectMask());
+
+                    // Violet Hold Endless Cycle: a holder's Rip, Rejuvenation and Moonfire never end.
+                    if (VioletHoldClassBoons::MakesAuraEndless(caster->ToUnit(), hitInfo.AuraSpellInfo))
+                        hitInfo.AuraDuration = -1;
 
                     // Haste modifies duration of channeled spells
                     if (m_spellInfo->IsChanneled())

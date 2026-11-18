@@ -1593,6 +1593,12 @@ static bool IsDuelOpponentsBlow(Unit const* attacker, Player const* opponent)
     // holder goes into its 30-sec immunity once the damage has landed below.
     // Phoenix is not touched here - its turn is the death the Undying clock
     // brings (BattlegroundVHR::UpdateUndying).
+    // Violet Hold "Boon of the Soul Bond", first of all the saves: a holder
+    // warlock's demon takes the killing blow instead (it dies one event on),
+    // so the blow does nothing here and the others below never see it.
+    if (!duel_hasEnded && damage >= health && VioletHoldClassBoons::TrySoulBond(victim))
+        damage = 0;
+
     bool undying = false;
     if (!duel_hasEnded && damage >= health && VioletHoldBoons::TryUndying(victim))
     {
@@ -2770,7 +2776,9 @@ void Unit::HandleEmoteCommand(Emote emoteId)
         AuraApplication const* aurApp = absorbAurEff->GetBase()->GetApplicationOfTarget(damageInfo.GetVictim()->GetGUID());
         if (!aurApp)
             continue;
-        if (!(absorbAurEff->GetMiscValue() & damageInfo.GetSchoolMask()))
+        // (Violet Hold Elemental Ward: a holder's Fire / Frost Ward takes any school.)
+        if (!(absorbAurEff->GetMiscValue() & damageInfo.GetSchoolMask())
+            && !VioletHoldClassBoons::AbsorbsEverySchool(absorbAurEff))
             continue;
 
         // get amount which can be still absorbed by the aura
@@ -7993,8 +8001,11 @@ void Unit::SetCharm(Unit* charm, bool apply)
 
 bool Unit::IsMagnet() const
 {
-    // Grounding Totem
-    if (GetUInt32Value(UNIT_CREATED_BY_SPELL) == 8177) /// @todo: find a more generic solution
+    // Grounding Totem, and the Autumn set's copy (81481) that its wrapper
+    // casts instead - otherwise a creature-type-limited spell (Polymorph)
+    // grounded onto that totem fails its target check and never lands.
+    uint32 const createdBy = GetUInt32Value(UNIT_CREATED_BY_SPELL);
+    if (createdBy == 8177 || createdBy == 81481) /// @todo: find a more generic solution
         return true;
 
     return false;
