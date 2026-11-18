@@ -1,10 +1,9 @@
 /*
  * Violet Hold class boons - the ARTIFACT tier (2026-11-13).
  *
- * Three per class, offered only to that class, rolled a little rarer than a
- * legendary weapon (VioletHoldBoons::ARTIFACT_ROLL_QUARTERS) and shown on the
- * top card frame. The boon itself is a unique record aura (Boon::Juggernaut ..
- * Boon::Ancestors, spells 94340-94366); everything it changes is here, called
+ * Offered only to their class, rolled a little rarer than a legendary weapon
+ * (VioletHoldBoons::ARTIFACT_ROLL_QUARTERS) and shown on the top card frame.
+ * Each boon is a unique record aura; everything it changes is here, called
  * from the core at the one place each rule lives, plus the spell scripts in
  * scripts/Custom/violet_hold_class_boons.cpp and two edits in spell_paladin.cpp.
  *
@@ -47,6 +46,7 @@ class BattlegroundVHR;
 class Creature;
 class GameObject;
 class Player;
+class Spell;
 class SpellInfo;
 class Totem;
 class Unit;
@@ -101,7 +101,7 @@ namespace VioletHoldClassBoons
         // every wave falls (OnWaveRestored).
         SPELL_SERENITY_READY    = 94382,
 
-        // The second artifact block (a fourth boon per class).
+        // The second artifact block (the first party-oriented additions).
         SPELL_FIELD_MEDIC       = 94383,   // hunter
         SPELL_SLIPSTREAM        = 94384,   // mage
         SPELL_SECOND_COMING     = 94385,   // priest record aura
@@ -122,6 +122,18 @@ namespace VioletHoldClassBoons
         SPELL_SPIRIT_LINK       = 94400,   // priest record (was the shaman's until 2026-11-15)
         SPELL_WINDLORD          = 94401,   // shaman record
         SPELL_PRIMAL_ECHO       = 94405,   // druid record
+
+        // The 2026-11-18 approved class-artifact block.
+        SPELL_UNENDING_VOLLEY   = 94406,   // hunter
+        SPELL_WAR_BANNER        = 94407,   // warrior
+        SPELL_ASPECT_SAVANT     = 94408,   // hunter
+        SPELL_MIRROR_IMAGE      = 94409,   // mage; also its 5 sec cooldown key
+        SPELL_MANA_CONDUIT      = 94410,   // mage, party
+        SPELL_CURSEWEAVER       = 94411,   // warlock
+        SPELL_PATIENT_GROWTH    = 94412,   // druid
+        SPELL_CLEANSE           = 94413,   // paladin, party
+        SPELL_LIGHTNING_ROD     = 94414,   // shaman
+
         SPELL_WINDFURY_WEAPON_PASSIVE = 33757,
         SPELL_ROGUE_EVASION     = 5277,
 
@@ -193,6 +205,11 @@ namespace VioletHoldClassBoons
     // Skirmisher was folded into it 2026-11-14.
     TC_GAME_API bool IgnoresMinRange(Unit const* caster, SpellInfo const* spellInfo);
     TC_GAME_API bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo);
+    // Unending Volley: the channel becomes a placed permanent dynamic aura.
+    // A new Volley removes every older rank first, so recasting moves it.
+    TC_GAME_API bool IsUnendingVolley(Unit const* caster, SpellInfo const* spellInfo);
+    TC_GAME_API void BeforeUnendingVolleyPlaced(Unit* caster);
+    TC_GAME_API void MakeUnendingVolleyPermanent(Unit const* caster, SpellInfo const* spellInfo, Aura* aura);
     // Trapper (as well as the trap rules above): a holder's Freezing Trap does not break on damage
     // (Unit::RemoveAurasWithInterruptFlags, AURA_INTERRUPT_FLAG_TAKE_DAMAGE).
     TC_GAME_API bool HoldsThroughDamage(Aura const* aura);
@@ -248,6 +265,10 @@ namespace VioletHoldClassBoons
     // every living enemy (and their controlled units) in the run.
     TC_GAME_API void OnSuccessfulInterrupt(Unit* caster, SpellInfo const* spellInfo, Unit* interruptedTarget,
         SpellSchoolMask schoolMask, uint32 lockoutTime);
+    // Mirror Image: Spell::cancel, before the original cast is torn down.
+    TC_GAME_API void OnSpellCanceled(Spell const* spell);
+    // Mana Conduit: the 2-second periodic effect of Evocation.
+    TC_GAME_API void OnEvocationTick(Unit* caster);
 
     // ---- priest (Second Coming) ---------------------------------------------
     // While the charge is up, priest Resurrection (family 6, RESURRECT_NEW) is
@@ -267,13 +288,24 @@ namespace VioletHoldClassBoons
     constexpr float WILDCALLER_RANGE        = 40.0f;
     constexpr uint32 WILDCALLER_MANA_CUT_PCT = 25;
     constexpr float SPIRIT_LINK_RADIUS      = 20.0f;
+    constexpr float WAR_BANNER_RADIUS       = 30.0f;
+    constexpr float MANA_CONDUIT_RADIUS     = 40.0f;
+    constexpr float LIGHTNING_ROD_WIDTH     = 2.0f;
+    constexpr uint32 MIRROR_IMAGE_COOLDOWN_MS = 5000;
+    constexpr uint32 LIGHTNING_ROD_PERIOD_MS  = 10000;
+    constexpr uint32 GO_WAR_BANNER_ALLIANCE   = 900010;
+    constexpr uint32 GO_WAR_BANNER_HORDE      = 900011;
+    constexpr uint32 NPC_MIRROR_IMAGE          = 900120;
     constexpr uint32 NPC_PRIMAL_ECHO         = 900119;
     constexpr uint32 PRIMAL_ECHO_DURATION_MS = 12000;
     constexpr uint32 DATA_PRIMAL_ECHO_FORM   = 1;
 
     // Spell::_cast, a cast the caster chose (not triggered): Aegis spreads
     // Divine Shield's bubble.
-    TC_GAME_API void OnSpellCast(Unit* caster, SpellInfo const* spellInfo);
+    TC_GAME_API void OnSpellCast(Unit* caster, SpellInfo const* spellInfo, Unit* explicitTarget);
+    // The banner's deliberately hostile zone: nearby enemies deal 110% and
+    // take 90%. Called from the same UnitScript hooks as party damage boons.
+    TC_GAME_API uint32 ModifyWarBannerDamage(Unit* attacker, Unit* victim, uint32 damage);
     // BattlegroundVHR::HandleKillPlayer, a member of the party fell:
     // every Vengeance holder in the run goes berserk, wherever they stand.
     TC_GAME_API void OnAllyDied(Player* dead);
@@ -303,10 +335,14 @@ namespace VioletHoldClassBoons
     // Effect's ExcludeTargetAuraState, SpellInfo::CheckTarget) are off for a
     // unit in a Violet Hold run. `spellInfo` null = the seal-strips-buff rule.
     TC_GAME_API bool KeepsWindfuryWithSeals(Unit const* unit, SpellInfo const* spellInfo);
+    // Aspect Savant: suppress Cheetah/Pack's triggered daze proc.
+    TC_GAME_API bool PreventsAspectDaze(Aura const* aura);
 
     // ---- warlock -----------------------------------------------------------
     // Indelible: Aura::CalcDispelChance -> 0.
     TC_GAME_API bool IsUndispellable(Aura const* aura, Unit const* auraTarget);
+    // Curseweaver is dispatched from OnSpellCast; this declaration documents
+    // that its other half is AurasStackFreely above.
     // Contagion and Eternal Pact: Unit::Kill, while the victim still has its
     // auras (any unit, not only in the Violet Hold - the holders only exist there).
     // Vengeance: a berserk killer (or its pet's owner) heals for the kill.
@@ -322,6 +358,9 @@ namespace VioletHoldClassBoons
     // Serenity: a wave just fell and `player` was put back on their feet
     // (BattlegroundVHR::RestorePartyAfterWave) - the ready charge comes back.
     TC_GAME_API void OnWaveRestored(Player* player);
+    // Patient Growth: Aura::UpdateOwner leaves both duration and HoT periodic
+    // clocks untouched while this says true.
+    TC_GAME_API bool PausesHealingOverTime(Aura const* aura, Unit const* target);
 
     // ---- shaman ------------------------------------------------------------
     // Stormcaller: Purge's dispel count becomes "everything", and every

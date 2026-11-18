@@ -1963,6 +1963,9 @@ void Spell::EffectPersistentAA()
     if (!unitCaster)
         return;
 
+    if (VioletHoldClassBoons::IsUnendingVolley(unitCaster, m_spellInfo))
+        VioletHoldClassBoons::BeforeUnendingVolleyPlaced(unitCaster);
+
     // only handle at last effect
     for (size_t i = effectInfo->EffectIndex + 1; i < m_spellInfo->GetEffects().size(); ++i)
         if (m_spellInfo->GetEffect(SpellEffIndex(i)).IsEffect(SPELL_EFFECT_PERSISTENT_AREA_AURA))
@@ -1991,6 +1994,8 @@ void Spell::EffectPersistentAA()
     if (Aura* aura = Aura::TryCreate(createInfo))
     {
         _dynObjAura = aura->ToDynObjAura();
+
+        VioletHoldClassBoons::MakeUnendingVolleyPermanent(unitCaster, m_spellInfo, _dynObjAura);
 
         // Channeled persistent area auras must use the same duration as the
         // channel. The channel duration has already had haste and spell mods

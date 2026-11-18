@@ -935,9 +935,8 @@ private:
     std::unordered_map<ObjectGuid, std::unordered_map<ObjectGuid, uint32>> _recentHits;
     // Boon of Inheritance: stacks lent this wave, taken back in CompleteWave.
     std::vector<VioletHoldBoons::InheritedStacks> _inherited;
-    // Boon of the Pack Leader's refresh clock.
-    uint32 _packLeaderTimerMs = 0;
-    // VioletHoldClassBoons::UpdateRun, once a second (Plaguebearer, Spirit Link).
+    // VioletHoldClassBoons::UpdateRun, once a second (party artifacts and
+    // independent per-totem Lightning Rod clocks).
     uint32 _classBoonTimerMs = 0;
     uint32 _classBoonTick = 0;
     // Boon of the Undying: who is Undying, and the milliseconds they have left.

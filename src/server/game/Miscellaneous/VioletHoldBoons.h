@@ -139,7 +139,7 @@ namespace VioletHoldBoons
         PackLeader,     // one per RUN, party only: allies within 30 yd of you take 15% less damage
         Undying,        // one per RUN: a killing blow leaves you immune to everything for 30 sec instead, then you die
 
-        // Class boons, the ARTIFACT tier (2026-11-13): three per class, offered
+        // Class boons, the ARTIFACT tier (2026-11-13 onward): offered
         // only to that class, rolled a little rarer than a legendary weapon
         // (ARTIFACT_ROLL_QUARTERS) and shown on the top card frame. The work is
         // in VioletHoldClassBoons.{h,cpp} and scripts/Custom/violet_hold_class_boons.cpp.
@@ -190,10 +190,22 @@ namespace VioletHoldBoons
         Windlord,       // shaman: Windfury Weapon and Windfury Totem proc 50% of the time
 
         // 2026-11-16.
-        Overflow,       // healers: 25% of overhealing jumps to the lowest-health nearby ally
+        Overflow,       // healers: 100% of overhealing jumps to the lowest-health nearby ally
         SecondOpinion,  // RUN-WIDE, unique: three whole-hand broker rerolls
         Crucible,       // RUN-WIDE, unique: a deathless clear calls a common-only broker
         PrimalEcho,     // druid artifact: shifting leaves the previous form beside you for 12 sec
+
+        // 2026-11-18. Approved class artifacts. These are implemented in
+        // VioletHoldClassBoons; the record auras are 94406-94414 in this order.
+        UnendingVolley, // hunter: Volley is permanent, movable ground control
+        WarBanner,      // warrior: Battle Shout moves a permanent hostile danger zone
+        AspectSavant,   // hunter: every Aspect coexists; Cheetah/Pack never daze
+        MirrorImage,    // mage: cancel a cast -> an image completes it (5 sec)
+        ManaConduit,    // mage, party: Evocation feeds every primary resource
+        Curseweaver,    // warlock: curses coexist and one cast applies them all
+        PatientGrowth,  // druid: HoTs pause while their target is full
+        Cleanse,        // paladin, party: one automatic raid dispel every 6 sec
+        LightningRod,   // shaman: every totem fires a 10-sec Lightning Bolt line
 
         Max
     };
@@ -325,8 +337,8 @@ namespace VioletHoldBoons
         SPELL_BOON_FOCUS_FIRE   = 94324,   // GetPartyDamageBonusPct + BattlegroundVHR::NoteHit
         SPELL_BOON_HERALD       = 94325,   // OpenWaveCell -> SoundHerald
         SPELL_HERALD_CALL       = 94326,   // +30% melee/ranged/cast haste, +100% run speed, 10 sec
-        SPELL_BOON_PACK_LEADER  = 94327,   // PostUpdateImpl -> UpdatePackLeader
-        SPELL_PACK_LEADER_GUARD = 94328,   // 15% less damage taken, 3 sec, refreshed while in range
+        SPELL_BOON_PACK_LEADER  = 94327,   // native 30 yd party area aura
+        SPELL_PACK_LEADER_GUARD = 94328,   // retired refresh helper; kept for DBC/save compatibility
         // Boon of the Undying (record aura, Communion's shape) and the state it
         // puts its holder in: "Undying", Divine Shield's school immunity and
         // bubble without its penalty, cooldown or Forbearance, uncancellable,
@@ -375,6 +387,18 @@ namespace VioletHoldBoons
         SPELL_BOON_SECOND_OPINION = 94403,
         SPELL_BOON_CRUCIBLE       = 94404,
         SPELL_BOON_PRIMAL_ECHO    = 94405,
+
+        SPELL_BOON_CLASS_THIRD_FIRST = 94406,
+        SPELL_BOON_UNENDING_VOLLEY = 94406,
+        SPELL_BOON_WAR_BANNER      = 94407,
+        SPELL_BOON_ASPECT_SAVANT   = 94408,
+        SPELL_BOON_MIRROR_IMAGE    = 94409,
+        SPELL_BOON_MANA_CONDUIT    = 94410,
+        SPELL_BOON_CURSEWEAVER     = 94411,
+        SPELL_BOON_PATIENT_GROWTH  = 94412,
+        SPELL_BOON_CLEANSE         = 94413,
+        SPELL_BOON_LIGHTNING_ROD   = 94414,
+        SPELL_BOON_CLASS_THIRD_LAST = 94414,
 
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
@@ -657,7 +681,7 @@ namespace VioletHoldBoons
     // this just before paying). Idempotent.
     TC_GAME_API void ReturnBorrowedLevels(Player* player);
 
-    // Boon of Overflow: after a heal lands, turn 25% of its overheal into a
+    // Boon of Overflow: after a heal lands, turn 100% of its overheal into a
     // heal on the lowest-health living party member within 40 yd. The helper
     // heal is logged under the boon spell and cannot overflow again.
     TC_GAME_API void ShareOverflow(HealInfo const& healInfo);
@@ -786,11 +810,10 @@ namespace VioletHoldBoons
     // Boon of the Herald: the wave just opened.
     TC_GAME_API void SoundHerald(BattlegroundVHR* run);
 
-    // Boon of the Pack Leader: puts/refreshes the guard on every ally within
-    // PACK_LEADER_RANGE of a living holder. Ticked by the battleground.
+    // Boon of the Pack Leader is a native party area aura in Spell.dbc. The
+    // aura system applies and removes its 15% guard exactly at this radius;
+    // there is no refresh clock or short-lived helper buff.
     constexpr float PACK_LEADER_RANGE = 30.0f;
-    constexpr uint32 PACK_LEADER_TICK_MS = 1000;
-    TC_GAME_API void UpdatePackLeader(BattlegroundVHR* run);
 
     // --- Spec boons and the Mana Surge rune (2026-11-14) ---------------------
 

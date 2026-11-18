@@ -164,7 +164,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // Phoenix's weight; one per run (IsRunUnique). TryUndying, before Phoenix.
     { Boon::Undying,      SPELL_BOON_UNDYING,      1,   1, MASK_ALL,      2, "Boon of the Undying",  "a blow that would kill you leaves you immune to all damage, effects and healing for 30 sec instead - then you die, unless the wave falls first (one per run)", "" },
 
-    // The artifact tier: three per class, unique (one stack), offered to that
+    // The artifact tier: unique (one stack), offered to that
     // class only. Weight is unused - every artifact rolls at
     // ARTIFACT_ROLL_QUARTERS (GetOfferWeight). Spell ids run in table order
     // from SPELL_BOON_CLASS_FIRST.
@@ -214,10 +214,20 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::SpiritLink,    SPELL_BOON_SPIRIT_LINK,  1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Spirit Link",  "every 2 sec the health of you and your allies within 20 yd is evened out", "" },
     { Boon::Windlord,      SPELL_BOON_WINDLORD,     1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Windlord",     "Windfury Weapon and Windfury Totem have a 50% chance to proc", "" },
 
-    { Boon::Overflow,      SPELL_BOON_OVERFLOW,       1, 1, MASK_HEALS,             3, "Boon of Overflow",       "25% of your overhealing jumps to the lowest-health ally within 40 yd (unique)", "" },
+    { Boon::Overflow,      SPELL_BOON_OVERFLOW,       1, 1, MASK_HEALS,             3, "Boon of Overflow",       "100% of your overhealing jumps to the lowest-health ally within 40 yd (unique)", "" },
     { Boon::SecondOpinion, SPELL_BOON_SECOND_OPINION, 1, 1, MASK_ALL,               3, "Boon of Second Opinion", "three times this run, the party may reroll a broker's whole hand (run-wide, unique)", "" },
     { Boon::Crucible,      SPELL_BOON_CRUCIBLE,       1, 1, MASK_ALL,               1, "Boon of the Crucible",   "a deathless wave calls an extra broker for the next wave who offers only common boons (run-wide, unique)", "" },
-    { Boon::PrimalEcho,    SPELL_BOON_PRIMAL_ECHO,    1, 1, ClassBit(CLASS_DRUID),  0, "Boon of the Primal Echo", "shifting leaves the form you left beside you for 12 sec, fighting or healing in your place", "" }
+    { Boon::PrimalEcho,    SPELL_BOON_PRIMAL_ECHO,    1, 1, ClassBit(CLASS_DRUID),  0, "Boon of the Primal Echo", "shifting leaves the form you left beside you for 12 sec, fighting or healing in your place", "" },
+
+    { Boon::UnendingVolley, SPELL_BOON_UNENDING_VOLLEY, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Unending Volley", "Volley never ends; you may act after placing it, and recasting Volley moves it", "" },
+    { Boon::WarBanner,      SPELL_BOON_WAR_BANNER,      1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the War Banner",      "Battle Shout plants a permanent banner; nearby enemies deal 10% more damage and take 10% less, and recasting moves it", "" },
+    { Boon::AspectSavant,   SPELL_BOON_ASPECT_SAVANT,   1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Aspect Savant",   "all of your Aspects can be active at once, and Cheetah and Pack no longer daze", "" },
+    { Boon::MirrorImage,    SPELL_BOON_MIRROR_IMAGE,    1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Mirror Image",    "once every 5 sec, canceling a cast spawns a copy of you that finishes the cast", "" },
+    { Boon::ManaConduit,    SPELL_BOON_MANA_CONDUIT,    1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Mana Conduit",    "each Evocation tick restores 5% of every nearby ally's maximum primary resource, including rage and energy", "" },
+    { Boon::Curseweaver,    SPELL_BOON_CURSEWEAVER,     1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Curseweaver",     "all Curses can coexist; casting one Curse applies every Curse you know", "" },
+    { Boon::PatientGrowth,  SPELL_BOON_PATIENT_GROWTH,  1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Patient Growth",      "your healing-over-time effects pause their ticks and duration while their target is at full health", "" },
+    { Boon::Cleanse,        SPELL_BOON_CLEANSE,         1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Cleanse",             "every 6 sec, automatically remove one Cleanse-eligible harmful effect from an ally, without range or line of sight", "" },
+    { Boon::LightningRod,   SPELL_BOON_LIGHTNING_ROD,   1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Lightning Rod",   "every totem draws a Lightning Bolt from you every 10 sec, striking every enemy in its path", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -837,6 +847,7 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_SECOND_OPINION
         || spellId == SPELL_BOON_CRUCIBLE
         || spellId == SPELL_BOON_PRIMAL_ECHO
+        || (spellId >= SPELL_BOON_CLASS_THIRD_FIRST && spellId <= SPELL_BOON_CLASS_THIRD_LAST)
         || (spellId >= SPELL_BOON_CLASS_FIRST && spellId <= SPELL_BOON_CLASS_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
@@ -846,13 +857,17 @@ bool IsArtifact(Boon boon)
 {
     return (boon >= Boon::Juggernaut && boon <= Boon::Ancestors)
         || (boon >= Boon::FieldMedic && boon <= Boon::Windlord)
-        || boon == Boon::PrimalEcho;
+        || boon == Boon::PrimalEcho
+        || (boon >= Boon::UnendingVolley && boon <= Boon::LightningRod);
 }
 
 // The artifact rows must sit on their spell ids in order: the class boon hooks
 // (VioletHoldClassBoons) name the spells, the table names the boons.
 static_assert(uint8(Boon::Ancestors) - uint8(Boon::Juggernaut) == SPELL_BOON_CLASS_LAST - SPELL_BOON_CLASS_FIRST,
     "the artifact boons and their spell block must be the same length");
+static_assert(uint8(Boon::LightningRod) - uint8(Boon::UnendingVolley)
+    == SPELL_BOON_CLASS_THIRD_LAST - SPELL_BOON_CLASS_THIRD_FIRST,
+    "the third artifact block and its spell block must be the same length");
 
 bool SharesRunes(Player const* player)
 {
@@ -989,7 +1004,7 @@ PickResult CanTake(Player const* player, Offer offer)
         // on allies - no allies, no use.
         if (info.boon == Boon::Communion || info.boon == Boon::Deliverance || info.boon == Boon::Inheritance
             || info.boon == Boon::Kinship || info.boon == Boon::FocusFire || info.boon == Boon::PackLeader
-            || info.boon == Boon::Overflow
+            || info.boon == Boon::Overflow || info.boon == Boon::ManaConduit || info.boon == Boon::Cleanse
             || (info.boon >= Boon::FieldMedic && info.boon <= Boon::Windlord))
         {
             BattlegroundVHR const* run = GetRunOf(player);
@@ -1785,7 +1800,7 @@ void ShareOverflow(HealInfo const& healInfo)
     if (landed <= effective)
         return;
 
-    uint32 const amount = uint32((uint64(landed - effective) * 25u) / 100u);
+    uint32 const amount = landed - effective;
     if (!amount)
         return;
 
@@ -2642,31 +2657,6 @@ void SoundHerald(BattlegroundVHR* run)
             args.SetOriginalCaster(holder->GetGUID());
             member->CastSpell(member, SPELL_HERALD_CALL, args);
         }
-}
-
-void UpdatePackLeader(BattlegroundVHR* run)
-{
-    if (!run)
-        return;
-
-    // A dead holder stops refreshing, and the guard (3 sec) runs out.
-    for (Player* holder : HoldersOf(run, SPELL_BOON_PACK_LEADER))
-    {
-        if (!holder->IsAlive())
-            continue;
-
-        for (Player* ally : PartySide(run, *holder, true, false))
-        {
-            if (ally == holder || !holder->IsWithinDistInMap(ally, PACK_LEADER_RANGE))
-                continue;
-
-            // AddAura, not a cast: no cast visual every second.
-            if (Aura* guard = ally->GetAura(SPELL_PACK_LEADER_GUARD, holder->GetGUID()))
-                guard->RefreshDuration();
-            else
-                holder->AddAura(SPELL_PACK_LEADER_GUARD, ally);
-        }
-    }
 }
 
 // --- Spec boons and the Mana Surge rune (2026-11-14) -------------------------

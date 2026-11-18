@@ -992,7 +992,10 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
         }
     }
 
-    Update(diff, caster);
+    Unit const* unitOwner = owner->ToUnit();
+    bool const patientGrowth = VioletHoldClassBoons::PausesHealingOverTime(this, unitOwner);
+    if (!patientGrowth)
+        Update(diff, caster);
 
     if (m_updateTargetMapInterval <= int32(diff))
     {
@@ -1004,7 +1007,7 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
 
     // update aura effects
     for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
-        if (m_effects[i])
+        if (m_effects[i] && (!patientGrowth || m_effects[i]->GetAuraType() != SPELL_AURA_PERIODIC_HEAL))
         {
             SetAuraCrashBreadcrumb("Aura::UpdateOwner before AuraEffect::Update", this, owner, caster);
             m_effects[i]->Update(diff, caster);
@@ -2478,6 +2481,9 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
     {
         return 0;
     }
+
+    if (VioletHoldClassBoons::PreventsAspectDaze(this))
+        return 0;
 
     // check spell triggering us
     if (Spell const* spell = eventInfo.GetProcSpell())

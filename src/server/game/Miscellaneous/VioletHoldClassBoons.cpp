@@ -14,10 +14,13 @@
 #include "GridNotifiersImpl.h"
 #include "Group.h"
 #include "Log.h"
+#include "Map.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
+#include "Opcodes.h"
 #include "Pet.h"
 #include "Player.h"
+#include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "SpellHistory.h"
@@ -27,19 +30,36 @@
 #include "TotemPackets.h"
 #include "TemporarySummon.h"
 #include "WorldSession.h"
+#include "WorldPacket.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <list>
+#include <map>
+#include <set>
+#include <unordered_map>
 
 namespace VioletHoldClassBoons
 {
 namespace
 {
 constexpr float WINDLORD_PROC_CHANCE = 50.0f;
+
+// World objects and per-summon clocks owned by the new artifacts. They are
+// keyed by full GUIDs, so simultaneous Violet Hold instances never cross.
+std::unordered_map<ObjectGuid, ObjectGuid> WarBanners;
+struct TotemPulse
+{
+    ObjectGuid Owner;
+    uint32 DueMs = 0;
+};
+std::unordered_map<ObjectGuid, TotemPulse> LightningRodPulses;
+
+constexpr std::array<uint32, 6> VolleyRanks = { 1510, 14294, 14295, 27022, 58431, 58434 };
 
 bool Holds(Unit const* unit, uint32 boonSpellId)
 {
@@ -278,6 +298,142 @@ bool InAnySlot(Unit const* owner, ObjectGuid guid)
             return true;
     return false;
 }
+
+uint32 HighestKnown(Player const* player, SpellFamilyNames family, char const* name)
+{
+    uint32 best = 0;
+    uint8 bestRank = 0;
+    if (!player)
+        return 0;
+    for (auto const& [spellId, known] : player->GetSpellMap())
+    {
+        if (known.state == PLAYERSPELL_REMOVED || known.disabled)
+            continue;
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
+        if (!Is(info, family, name) || info->IsPassive())
+            continue;
+        if (!best || info->GetRank() >= bestRank)
+        {
+            best = spellId;
+            bestRank = info->GetRank();
+        }
+    }
+    return best;
+}
+
+void RemoveWarBanner(Player* warrior)
+{
+    if (!warrior)
+        return;
+    auto itr = WarBanners.find(warrior->GetGUID());
+    if (itr == WarBanners.end())
+        return;
+    if (warrior->IsInWorld())
+        if (GameObject* banner = warrior->GetMap()->GetGameObject(itr->second))
+            banner->Delete();
+    WarBanners.erase(itr);
+}
+
+void PlantWarBanner(Player* warrior)
+{
+    RemoveWarBanner(warrior);
+    if (!warrior || !warrior->IsInWorld())
+        return;
+
+    uint32 const entry = warrior->GetTeam() == ALLIANCE ? GO_WAR_BANNER_ALLIANCE : GO_WAR_BANNER_HORDE;
+    QuaternionData const rotation = QuaternionData::fromEulerAnglesZYX(warrior->GetOrientation(), 0.0f, 0.0f);
+    if (GameObject* banner = warrior->SummonGameObject(entry, warrior->GetPosition(), rotation,
+        Seconds(24 * 60 * 60), GO_SUMMON_TIMED_DESPAWN))
+        WarBanners[warrior->GetGUID()] = banner->GetGUID();
+}
+
+bool InEnemyWarBanner(Unit const* unit)
+{
+    if (!unit || !unit->IsInWorld())
+        return false;
+    for (auto itr = WarBanners.begin(); itr != WarBanners.end();)
+    {
+        Player* owner = ObjectAccessor::FindPlayer(itr->first);
+        GameObject* banner = owner && owner->IsInWorld() && owner->GetMap() == unit->GetMap()
+            ? owner->GetMap()->GetGameObject(itr->second) : nullptr;
+        if (!owner || !banner)
+        {
+            itr = WarBanners.erase(itr);
+            continue;
+        }
+        if (owner->IsValidAttackTarget(unit) && banner->IsWithinDistInMap(unit, WAR_BANNER_RADIUS))
+            return true;
+        ++itr;
+    }
+    return false;
+}
+
+bool CleanseOne(Player* paladin)
+{
+    uint32 const mask = SpellInfo::GetDispelMask(DISPEL_MAGIC)
+        | SpellInfo::GetDispelMask(DISPEL_DISEASE)
+        | SpellInfo::GetDispelMask(DISPEL_POISON);
+
+    for (Player* ally : AlliesOf(paladin))
+    {
+        if (!ally->IsAlive())
+            continue;
+        DispelChargesList choices;
+        ally->GetDispellableAuraList(paladin, mask, choices);
+        if (choices.empty())
+            continue;
+
+        Aura* aura = choices.front().GetAura();
+        if (!aura)
+            continue;
+        uint32 const auraId = aura->GetId();
+        ObjectGuid const auraCaster = aura->GetCasterGUID();
+
+        WorldPacket data(SMSG_SPELLDISPELLOG, 8 + 8 + 4 + 1 + 4 + 5);
+        data << ally->GetPackGUID();
+        data << paladin->GetPackGUID();
+        data << uint32(4987); // Cleanse
+        data << uint8(0);
+        data << uint32(1);
+        data << auraId;
+        data << uint8(1);     // cleansed, not offensively dispelled
+        paladin->SendMessageToSet(&data, true);
+
+        ally->RemoveAurasDueToSpellByDispel(auraId, 4987, auraCaster, paladin, 1);
+        return true;
+    }
+    return false;
+}
+
+void FireLightningRods(Player* shaman)
+{
+    uint32 const now = GameTime::GetGameTimeMS();
+    std::set<ObjectGuid> active;
+    for (Totem* totem : TotemsOf(shaman))
+    {
+        if (!totem || !totem->IsAlive() || !totem->IsInMap(shaman))
+            continue;
+        active.insert(totem->GetGUID());
+        auto [itr, inserted] = LightningRodPulses.try_emplace(totem->GetGUID(), TotemPulse{ shaman->GetGUID(), now + LIGHTNING_ROD_PERIOD_MS });
+        if (inserted || int32(now - itr->second.DueMs) < 0)
+            continue;
+        itr->second.DueMs = now + LIGHTNING_ROD_PERIOD_MS;
+
+        uint32 const bolt = HighestKnown(shaman, SPELLFAMILY_SHAMAN, "Lightning Bolt");
+        if (!bolt)
+            continue;
+        float const reach = shaman->GetExactDist(totem) + LIGHTNING_ROD_WIDTH;
+        for (Unit* enemy : EnemiesNear(shaman, shaman, reach))
+            if (enemy->IsInBetween(shaman, totem, LIGHTNING_ROD_WIDTH))
+                shaman->CastSpell(enemy, bolt, TRIGGERED_FULL_MASK);
+    }
+
+    for (auto itr = LightningRodPulses.begin(); itr != LightningRodPulses.end();)
+        if (itr->second.Owner == shaman->GetGUID() && !active.count(itr->first))
+            itr = LightningRodPulses.erase(itr);
+        else
+            ++itr;
+}
 }
 
 // ---- bookkeeping -------------------------------------------------------------
@@ -306,6 +462,19 @@ void OnStripped(Player* player)
     // Day-long totems do not leave the Hold with their shaman.
     if (Holds(player, SPELL_TOTEM_LORD) && player->IsInWorld())
         player->UnsummonAllTotems();
+
+    if (Holds(player, SPELL_UNENDING_VOLLEY))
+        for (uint32 spellId : VolleyRanks)
+            player->RemoveDynObject(spellId);
+
+    if (Holds(player, SPELL_WAR_BANNER))
+        RemoveWarBanner(player);
+
+    for (auto itr = LightningRodPulses.begin(); itr != LightningRodPulses.end();)
+        if (itr->second.Owner == player->GetGUID())
+            itr = LightningRodPulses.erase(itr);
+        else
+            ++itr;
 
     // Serenity's and Second Coming's charges are not boon auras of their own;
     // they go with the boon.
@@ -426,6 +595,10 @@ bool AurasStackFreely(Unit const* caster, SpellInfo const* a, SpellInfo const* b
     // Every seal at once, and every judgement they leave on one target.
     if ((IsSeal(a) && IsSeal(b)) || (sa == SPELL_SPECIFIC_JUDGEMENT && sb == SPELL_SPECIFIC_JUDGEMENT))
         return Holds(caster, SPELL_SEALKEEPER);
+    if (sa == SPELL_SPECIFIC_ASPECT && sb == SPELL_SPECIFIC_ASPECT)
+        return Holds(caster, SPELL_ASPECT_SAVANT);
+    if (sa == SPELL_SPECIFIC_CURSE && sb == SPELL_SPECIFIC_CURSE)
+        return Holds(caster, SPELL_CURSEWEAVER);
     return false;
 }
 
@@ -458,6 +631,27 @@ bool ShootsWhileMoving(Unit const* caster, SpellInfo const* spellInfo)
     // Auto Shot plus every rank of the two aimed casts named by the boon.
     return spellInfo->Id == 75 || Is(spellInfo, SPELLFAMILY_HUNTER, "Aimed Shot")
         || Is(spellInfo, SPELLFAMILY_HUNTER, "Multi-Shot");
+}
+
+bool IsUnendingVolley(Unit const* caster, SpellInfo const* spellInfo)
+{
+    return Is(spellInfo, SPELLFAMILY_HUNTER, "Volley") && Holds(caster, SPELL_UNENDING_VOLLEY);
+}
+
+void BeforeUnendingVolleyPlaced(Unit* caster)
+{
+    if (!caster)
+        return;
+    for (uint32 spellId : VolleyRanks)
+        caster->RemoveDynObject(spellId);
+}
+
+void MakeUnendingVolleyPermanent(Unit const* caster, SpellInfo const* spellInfo, Aura* aura)
+{
+    if (!aura || !IsUnendingVolley(caster, spellInfo))
+        return;
+    aura->SetMaxDuration(-1);
+    aura->SetDuration(-1);
 }
 
 bool ShootsAllies(WorldObject const* caster, SpellInfo const* spellInfo)
@@ -661,6 +855,69 @@ void OnSuccessfulInterrupt(Unit* caster, SpellInfo const* spellInfo, Unit* inter
             if (controlled && controlled != interruptedTarget && controlled->IsInWorld() && controlled->IsAlive()
                 && controlled->GetMap() == mage->GetMap())
                 controlled->GetSpellHistory()->LockSpellSchool(schoolMask, lockoutTime);
+    }
+}
+
+void OnSpellCanceled(Spell const* spell)
+{
+    Player* mage = spell && spell->GetCaster() ? spell->GetCaster()->ToPlayer() : nullptr;
+    SpellInfo const* info = spell ? spell->GetSpellInfo() : nullptr;
+    if (!mage || !info || mage->GetClass() != CLASS_MAGE || !Holds(mage, SPELL_MIRROR_IMAGE)
+        || spell->IsTriggered() || (spell->GetCastTime() <= 0 && !info->IsChanneled())
+        || mage->GetSpellHistory()->HasCooldown(SPELL_MIRROR_IMAGE))
+        return;
+
+    int32 const remaining = std::max<int32>(1, spell->GetRemainingCastTime());
+    Milliseconds const lifetime(std::max<int32>(3000, remaining + 2000));
+    TempSummon* image = mage->SummonCreature(NPC_MIRROR_IMAGE, mage->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, lifetime);
+    if (!image)
+        return;
+
+    mage->GetSpellHistory()->AddCooldown(SPELL_MIRROR_IMAGE, 0, std::chrono::milliseconds(MIRROR_IMAGE_COOLDOWN_MS));
+    image->SetFaction(mage->GetFaction());
+    image->SetLevel(mage->GetLevel());
+    image->SetReactState(REACT_PASSIVE);
+    image->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE);
+    image->SetOwnerGUID(mage->GetGUID());
+    image->CopyAppearanceFromPlayer(mage, false, true, false);
+    // Take over the time left on the interrupted bar instead of restarting a
+    // fresh full cast. UNIT_MOD_CAST_SPEED is a multiplier in this core.
+    int32 const fullCast = std::max<int32>(1, info->IsChanneled() ? info->GetDuration() : spell->GetCastTime());
+    image->SetModCastingSpeed(std::clamp(float(remaining) / float(fullCast), 0.01f, 1.0f));
+
+    TriggerCastFlags const flags = TriggerCastFlags(TRIGGERED_IGNORE_GCD
+        | TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST
+        | TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_IGNORE_COMBO_POINTS
+        | TRIGGERED_IGNORE_SHAPESHIFT | TRIGGERED_IGNORE_CASTER_AURASTATE
+        | TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE | TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT);
+    CastSpellExtraArgs args(flags);
+    args.SetOriginalCaster(mage->GetGUID());
+
+    SpellCastTargets const& original = spell->GetCastTargets();
+    if (original.HasDst())
+        image->CastSpell(CastSpellTargetArg(*original.GetDstPos()), info->Id, args);
+    else if (ObjectGuid const targetGuid = original.GetUnitTargetGUID())
+    {
+        Unit* target = targetGuid == mage->GetGUID() ? mage : ObjectAccessor::GetUnit(*mage, targetGuid);
+        if (target)
+            image->CastSpell(target, info->Id, args);
+    }
+    else
+        image->CastSpell(mage, info->Id, args);
+}
+
+void OnEvocationTick(Unit* caster)
+{
+    if (!caster || !Holds(caster, SPELL_MANA_CONDUIT))
+        return;
+    for (Player* ally : AlliesOf(caster))
+    {
+        if (ally == caster || !ally->IsAlive() || !ally->IsWithinDistInMap(caster, MANA_CONDUIT_RADIUS))
+            continue;
+        Powers const power = ally->GetPowerType();
+        int32 const maximum = ally->GetMaxPower(power);
+        if (maximum > 0)
+            ally->ModifyPower(power, std::max<int32>(1, CalculatePct(maximum, 5)));
     }
 }
 
@@ -883,6 +1140,21 @@ bool IsSecondComingResurrection(Unit const* caster, SpellInfo const* spellInfo)
         && spellInfo->HasEffect(SPELL_EFFECT_RESURRECT_NEW) && caster->HasAura(SPELL_SECOND_COMING_READY);
 }
 
+bool PausesHealingOverTime(Aura const* aura, Unit const* target)
+{
+    if (!aura || !target || aura->GetDuration() <= 0 || !target->IsAlive()
+        || target->GetHealth() < target->GetMaxHealth())
+        return false;
+    Unit const* caster = aura->GetCaster();
+    if (!caster || caster->GetClass() != CLASS_DRUID || !Holds(caster, SPELL_PATIENT_GROWTH)
+        || !aura->GetSpellInfo()->IsPositive())
+        return false;
+    for (SpellEffectInfo const& effect : aura->GetSpellInfo()->GetEffects())
+        if (effect.ApplyAuraName == SPELL_AURA_PERIODIC_HEAL)
+            return true;
+    return false;
+}
+
 // ---- the rest of the second block -------------------------------------------
 
 namespace
@@ -991,13 +1263,55 @@ void EvenOutHealth(Player* shaman)
 }
 }
 
-void OnSpellCast(Unit* caster, SpellInfo const* spellInfo)
+void OnSpellCast(Unit* caster, SpellInfo const* spellInfo, Unit* explicitTarget)
 {
-    if (!caster || !Is(spellInfo, SPELLFAMILY_PALADIN, "Divine Shield") || !Holds(caster, SPELL_AEGIS))
+    if (!caster || !spellInfo)
         return;
-    for (Player* ally : AlliesOf(caster))
-        if (ally != caster && ally->IsAlive() && ally->IsWithinDistInMap(caster, AEGIS_RADIUS))
-            caster->AddAura(SPELL_AEGIS_SHIELD, ally);
+
+    if (Is(spellInfo, SPELLFAMILY_PALADIN, "Divine Shield") && Holds(caster, SPELL_AEGIS))
+        for (Player* ally : AlliesOf(caster))
+            if (ally != caster && ally->IsAlive() && ally->IsWithinDistInMap(caster, AEGIS_RADIUS))
+                caster->AddAura(SPELL_AEGIS_SHIELD, ally);
+
+    if (Is(spellInfo, SPELLFAMILY_WARRIOR, "Battle Shout") && Holds(caster, SPELL_WAR_BANNER))
+        if (Player* warrior = caster->ToPlayer())
+            PlantWarBanner(warrior);
+
+    Player* warlock = caster->ToPlayer();
+    if (!warlock || !explicitTarget || spellInfo->GetSpellSpecific() != SPELL_SPECIFIC_CURSE
+        || !Holds(warlock, SPELL_CURSEWEAVER) || !caster->IsValidAttackTarget(explicitTarget))
+        return;
+
+    // Highest known rank of every curse chain. Triggered copies do not return
+    // through OnSpellCast, so casting one curse applies the set exactly once.
+    std::map<uint32, std::pair<uint8, uint32>> curses;
+    for (auto const& [spellId, known] : warlock->GetSpellMap())
+    {
+        if (known.state == PLAYERSPELL_REMOVED || known.disabled)
+            continue;
+        SpellInfo const* curse = sSpellMgr->GetSpellInfo(spellId);
+        if (!curse || curse->IsPassive() || curse->GetSpellSpecific() != SPELL_SPECIFIC_CURSE)
+            continue;
+        uint32 const chain = sSpellMgr->GetFirstSpellInChain(spellId);
+        auto& best = curses[chain ? chain : spellId];
+        if (!best.second || curse->GetRank() >= best.first)
+            best = { curse->GetRank(), spellId };
+    }
+    uint32 const castChain = sSpellMgr->GetFirstSpellInChain(spellInfo->Id);
+    for (auto const& [chain, rankAndId] : curses)
+        if (chain != (castChain ? castChain : spellInfo->Id))
+            warlock->CastSpell(explicitTarget, rankAndId.second, TRIGGERED_FULL_MASK);
+}
+
+uint32 ModifyWarBannerDamage(Unit* attacker, Unit* victim, uint32 damage)
+{
+    if (!damage)
+        return 0;
+    if (InEnemyWarBanner(attacker))
+        damage += CalculatePct(damage, 10);
+    if (InEnemyWarBanner(victim))
+        damage -= CalculatePct(damage, 10);
+    return damage;
 }
 
 void OnAllyDied(Player* dead)
@@ -1076,6 +1390,12 @@ void UpdateRun(BattlegroundVHR* run, uint32 tick)
 
         if (tick % 2 == 0 && player->GetClass() == CLASS_PRIEST && player->IsAlive() && Holds(player, SPELL_SPIRIT_LINK))
             EvenOutHealth(player);
+
+        if (tick % 6 == 0 && player->GetClass() == CLASS_PALADIN && player->IsAlive() && Holds(player, SPELL_CLEANSE))
+            CleanseOne(player);
+
+        if (player->GetClass() == CLASS_SHAMAN && player->IsAlive() && Holds(player, SPELL_LIGHTNING_ROD))
+            FireLightningRods(player);
     }
 }
 
@@ -1084,6 +1404,14 @@ void UpdateRun(BattlegroundVHR* run, uint32 tick)
 bool DispelsEverything(WorldObject const* caster, SpellInfo const* spellInfo)
 {
     return Is(spellInfo, SPELLFAMILY_SHAMAN, "Purge") && Holds(caster, SPELL_STORMCALLER);
+}
+
+bool PreventsAspectDaze(Aura const* aura)
+{
+    if (!aura || !Holds(aura->GetCaster(), SPELL_ASPECT_SAVANT))
+        return false;
+    return Is(aura->GetSpellInfo(), SPELLFAMILY_HUNTER, "Aspect of the Cheetah")
+        || Is(aura->GetSpellInfo(), SPELLFAMILY_HUNTER, "Aspect of the Pack");
 }
 
 void BeforeTotemSummon(Unit* owner, SpellInfo const* totemSpell, int32& duration)

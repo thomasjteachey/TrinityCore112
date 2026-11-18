@@ -924,6 +924,11 @@ void AuraEffect::SendTickImmune(Unit* target, Unit* caster) const
 
 void AuraEffect::PeriodicTick(AuraApplication* aurApp, Unit* caster) const
 {
+    // Evocation's third effect is its native 2-second tick. Mana Conduit uses
+    // that exact clock, so haste/duration behavior stays identical to Evocation.
+    if (GetId() == 12051 && GetEffIndex() == EFFECT_2)
+        VioletHoldClassBoons::OnEvocationTick(caster);
+
     bool prevented = GetBase()->CallScriptEffectPeriodicHandlers(this, aurApp);
     if (prevented)
         return;

@@ -1,6 +1,6 @@
 -- Violet Hold boon expansion: four permanent record auras.
 --
--- 94402 Overflow       - healer-only; core turns 25% of overhealing into a
+-- 94402 Overflow       - healer-only; core turns 100% of overhealing into a
 --                        second heal, logged under this spell.
 -- 94403 Second Opinion - run-wide record; grants three broker-hand rerolls.
 -- 94404 Crucible       - run-wide record; deathless clears call a common-only
@@ -28,8 +28,8 @@ UPDATE `tmp_vhr_new_boon_lplus` SET
   `ID` = 94402,
   `Name_Lang_enUS` = 'Boon of Overflow',
   `SpellIconID` = 135,
-  `Description_Lang_enUS` = 'Twenty-five percent of your overhealing jumps to the lowest-health ally within 40 yards.',
-  `AuraDescription_Lang_enUS` = '25% of overhealing jumps to the lowest-health nearby ally.';
+  `Description_Lang_enUS` = 'One hundred percent of your overhealing jumps to the lowest-health ally within 40 yards.',
+  `AuraDescription_Lang_enUS` = '100% of overhealing jumps to the lowest-health nearby ally.';
 INSERT INTO `spell_lplus` SELECT * FROM `tmp_vhr_new_boon_lplus`;
 
 UPDATE `tmp_vhr_new_boon_lplus` SET
@@ -66,8 +66,8 @@ UPDATE `tmp_vhr_new_boon_bplus` SET
   `ID` = 94402,
   `Name_Lang_enUS` = 'Boon of Overflow',
   `SpellIconID` = 135,
-  `Description_Lang_enUS` = 'Twenty-five percent of your overhealing jumps to the lowest-health ally within 40 yards.',
-  `AuraDescription_Lang_enUS` = '25% of overhealing jumps to the lowest-health nearby ally.';
+  `Description_Lang_enUS` = 'One hundred percent of your overhealing jumps to the lowest-health ally within 40 yards.',
+  `AuraDescription_Lang_enUS` = '100% of overhealing jumps to the lowest-health nearby ally.';
 INSERT INTO `spell_bplus` SELECT * FROM `tmp_vhr_new_boon_bplus`;
 
 UPDATE `tmp_vhr_new_boon_bplus` SET

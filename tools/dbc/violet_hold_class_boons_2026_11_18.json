@@ -1,0 +1,65 @@
+[
+  {
+    "id": 94406,
+    "name": "Boon of the Unending Volley",
+    "description": "Volley never ends. You can act after placing it, and recasting Volley moves it to the new target area.",
+    "tooltip": "Volley is permanent and movable.",
+    "fields": { "133": 126 }
+  },
+  {
+    "id": 94407,
+    "name": "Boon of the War Banner",
+    "description": "Battle Shout plants a permanent banner. Enemies within 30 yards deal 10% more damage and take 10% less damage. Recasting Battle Shout moves the banner.",
+    "tooltip": "Battle Shout plants a movable permanent danger zone.",
+    "fields": { "133": 456 }
+  },
+  {
+    "id": 94408,
+    "name": "Boon of the Aspect Savant",
+    "description": "All of your Aspects can be active at once. Aspect of the Cheetah and Aspect of the Pack no longer daze their targets.",
+    "tooltip": "All Aspects coexist; Cheetah and Pack cannot daze.",
+    "fields": { "133": 1181 }
+  },
+  {
+    "id": 94409,
+    "name": "Boon of the Mirror Image",
+    "description": "Once every 5 seconds, canceling a cast summons a copy of you that finishes the cast.",
+    "tooltip": "Canceled casts are finished by a Mirror Image, once every 5 sec.",
+    "fields": { "133": 331 }
+  },
+  {
+    "id": 94410,
+    "name": "Boon of the Mana Conduit",
+    "description": "Each tick of Evocation restores 5% of every ally's maximum primary resource within 40 yards, including rage and energy.",
+    "tooltip": "Evocation restores nearby allies' primary resources.",
+    "fields": { "133": 47 }
+  },
+  {
+    "id": 94411,
+    "name": "Boon of the Curseweaver",
+    "description": "All Curses can coexist. Casting one Curse applies the highest rank you know of every Curse.",
+    "tooltip": "Your Curses coexist and are cast together.",
+    "fields": { "133": 544 }
+  },
+  {
+    "id": 94412,
+    "name": "Boon of Patient Growth",
+    "description": "Your healing-over-time effects pause their ticks and duration while their target is at full health, resuming when the target is injured.",
+    "tooltip": "Healing-over-time pauses on targets at full health.",
+    "fields": { "133": 64 }
+  },
+  {
+    "id": 94413,
+    "name": "Boon of Cleanse",
+    "description": "Every 6 seconds, automatically remove one harmful Magic, Disease, or Poison effect from an ally. This has no range or line-of-sight requirement and triggers no global cooldown.",
+    "tooltip": "Automatically Cleanse one ally every 6 sec.",
+    "fields": { "133": 321 }
+  },
+  {
+    "id": 94414,
+    "name": "Boon of the Lightning Rod",
+    "description": "Every active totem draws a Lightning Bolt from you every 10 seconds. Every enemy in the path between you and that totem is struck.",
+    "tooltip": "Every totem draws a piercing Lightning Bolt every 10 sec.",
+    "fields": { "133": 62 }
+  }
+]

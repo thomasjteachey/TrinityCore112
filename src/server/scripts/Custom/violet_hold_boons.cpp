@@ -1419,7 +1419,9 @@ public:
         if (!damage)
             return damage;
         int32 const pct = GetPartyDamageBonusPct(attacker, target);
-        return pct > 0 ? damage + CalculatePct(damage, pct) : damage;
+        if (pct > 0)
+            damage += CalculatePct(damage, pct);
+        return VioletHoldClassBoons::ModifyWarBannerDamage(attacker, target, damage);
     }
 
     void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override

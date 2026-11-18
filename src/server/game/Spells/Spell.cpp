@@ -3721,6 +3721,8 @@ void Spell::cancel()
         return;
 
     uint32 oldState = m_spellState;
+    if ((oldState == SPELL_STATE_PREPARING || oldState == SPELL_STATE_CASTING) && m_timer > 0)
+        VioletHoldClassBoons::OnSpellCanceled(this);
     m_spellState = SPELL_STATE_FINISHED;
 
     m_autoRepeat = false;
@@ -3978,7 +3980,7 @@ void Spell::_cast(bool skipCheck)
     {
         // Class boons hung off a chosen cast (Aegis: Divine Shield).
         if (!IsTriggered())
-            VioletHoldClassBoons::OnSpellCast(unitCaster, m_spellInfo);
+            VioletHoldClassBoons::OnSpellCast(unitCaster, m_spellInfo, m_targets.GetUnitTarget());
 
         if (VioletHoldBoons::OnSpellCast(unitCaster, m_spellInfo, IsTriggered(), m_triggeredByAuraSpell != nullptr))
         {
@@ -4150,6 +4152,10 @@ void Spell::handle_immediate()
     if (m_spellInfo->IsChanneled())
     {
         int32 duration = m_spellInfo->GetDuration();
+        // The ground aura is permanent and the hunter is released as soon as
+        // it is placed. EffectPersistentAA handles replacing the old Volley.
+        if (VioletHoldClassBoons::IsUnendingVolley(m_caster->ToUnit(), m_spellInfo))
+            duration = 0;
         if (duration > 0)
         {
             // First mod_duration then haste - see Missile Barrage

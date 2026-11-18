@@ -342,7 +342,6 @@ void BattlegroundVHR::Reset()
     _undying.clear();
     _recentHits.clear();
     _inherited.clear();
-    _packLeaderTimerMs = 0;
     _menagerie.clear();
     _waveCloneSources.clear();
     _championGuid.Clear();
@@ -2411,13 +2410,6 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
 
     if (!_undying.empty())
         UpdateUndying(diff);
-
-    _packLeaderTimerMs += diff;
-    if (_packLeaderTimerMs >= VioletHoldBoons::PACK_LEADER_TICK_MS)
-    {
-        _packLeaderTimerMs = 0;
-        VioletHoldBoons::UpdatePackLeader(this);
-    }
 
     _classBoonTimerMs += diff;
     if (_classBoonTimerMs >= 1000)
