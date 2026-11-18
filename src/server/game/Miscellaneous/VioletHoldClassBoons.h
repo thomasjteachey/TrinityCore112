@@ -249,8 +249,10 @@ namespace VioletHoldClassBoons
     TC_GAME_API int32 GetDurationMultiplier(WorldObject const* caster, SpellInfo const* spellInfo);
 
     // ---- priest ------------------------------------------------------------
-    // Dread: the scream's fear ignores damage (AuraEffect::HandleBreakableCCAuraProc).
-    TC_GAME_API bool FearHoldsThroughDamage(Unit const* caster, SpellInfo const* fear);
+    // Dread: Psychic Scream ignores damage, dispels, and diminishing returns.
+    // The same predicate is used at all three core hooks so every rank behaves
+    // consistently without teaching those systems about the boon spell id.
+    TC_GAME_API bool DreadEmpowersPsychicScream(Unit const* caster, SpellInfo const* fear);
 
     // ---- mage --------------------------------------------------------------
     // Transmutation: how many targets the caster may keep this single-target
@@ -348,7 +350,7 @@ namespace VioletHoldClassBoons
     TC_GAME_API bool PreventsAspectDaze(Aura const* aura);
 
     // ---- warlock -----------------------------------------------------------
-    // Indelible: Aura::CalcDispelChance -> 0.
+    // Indelible and Dread: Aura::CalcDispelChance -> 0.
     TC_GAME_API bool IsUndispellable(Aura const* aura, Unit const* auraTarget);
     // Curseweaver is dispatched from OnSpellCast; this declaration documents
     // that its other half is AurasStackFreely above.

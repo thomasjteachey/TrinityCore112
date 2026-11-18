@@ -757,7 +757,7 @@ int32 GetDurationMultiplier(WorldObject const* caster, SpellInfo const* spellInf
 
 // ---- priest ------------------------------------------------------------------
 
-bool FearHoldsThroughDamage(Unit const* caster, SpellInfo const* fear)
+bool DreadEmpowersPsychicScream(Unit const* caster, SpellInfo const* fear)
 {
     return Is(fear, SPELLFAMILY_PRIEST, "Psychic Scream") && Holds(caster, SPELL_DREAD);
 }
@@ -949,6 +949,8 @@ bool IsUndispellable(Aura const* aura, Unit const* auraTarget)
     if (auraTarget && aura->GetCasterGUID() == auraTarget->GetGUID())
         return false;
     Unit const* caster = aura->GetCaster();
+    if (DreadEmpowersPsychicScream(caster, aura->GetSpellInfo()))
+        return true;
     return caster && caster->GetClass() == CLASS_WARLOCK && Holds(caster, SPELL_INDELIBLE);
 }
 

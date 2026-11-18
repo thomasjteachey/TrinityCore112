@@ -5967,7 +5967,7 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
         && (auraInfo->SpellFamilyFlags & FrostNovaFamilyMask);
 
     // Violet Hold Dread: the holder's Psychic Scream does not break on damage.
-    if (GetAuraType() == SPELL_AURA_MOD_FEAR && VioletHoldClassBoons::FearHoldsThroughDamage(GetCaster(), auraInfo))
+    if (GetAuraType() == SPELL_AURA_MOD_FEAR && VioletHoldClassBoons::DreadEmpowersPsychicScream(GetCaster(), auraInfo))
         return;
 
     if (isEntanglingRootsAura)

@@ -180,7 +180,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Assassin,      94349, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Assassin",      "Backstab works from the front and is never dodged, parried or blocked; Sinister Strike also hits a second enemy; Hemorrhage gives 1 extra combo point", "" },
     { Boon::Unseen,        94350, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Unseen",        "damage and hostile effects no longer break your Stealth", "" },
     { Boon::Crippler,      94351, 1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Crippler",      "Kidney Shot lasts three times as long", "" },
-    { Boon::Dread,         94352, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of Dread",             "damage no longer breaks your Psychic Scream", "" },
+    { Boon::Dread,         94352, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of Dread",             "your Psychic Scream is undispellable, ignores diminishing returns, and no longer breaks from damage", "" },
     { Boon::ShatteredWard, 94353, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Shattered Ward", "your Power Word: Shield explodes when it breaks or expires, dealing what it absorbed to enemies within 10 yd", "" },
     { Boon::Agony,         94354, 1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of Agony",             "Shadow Word: Pain deals all of its damage at once", "" },
     { Boon::Frostwalker,   94355, 1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Frostwalker",   "Blink casts Frost Nova where you leave and where you land", "" },

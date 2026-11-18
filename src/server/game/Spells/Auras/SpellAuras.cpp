@@ -1413,7 +1413,7 @@ int32 Aura::CalcDispelChance(Unit const* auraTarget, bool offensive) const
     // need formula for level difference based chance
     int32 resistChance = 0;
 
-    // Violet Hold Indelible: a holder's harmful effects never come off.
+    // Violet Hold Indelible and Dread: protected harmful effects never come off.
     if (VioletHoldClassBoons::IsUndispellable(this, auraTarget))
         return 0;
 

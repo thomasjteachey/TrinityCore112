@@ -3265,7 +3265,8 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
 
         // Get Data Needed for Diminishing Returns, some effects may have multiple auras, so this must be done on spell hit, not aura add
         bool triggered = (m_triggeredByAuraSpell != nullptr);
-        hitInfo.DRGroup = m_spellInfo->GetDiminishingReturnsGroupForSpell(triggered);
+        bool const ignoreDiminishing = VioletHoldClassBoons::DreadEmpowersPsychicScream(origCaster->ToUnit(), hitInfo.AuraSpellInfo);
+        hitInfo.DRGroup = ignoreDiminishing ? DIMINISHING_NONE : m_spellInfo->GetDiminishingReturnsGroupForSpell(triggered);
 
         DiminishingLevels diminishLevel = DIMINISHING_LEVEL_0;
         if (hitInfo.DRGroup)
@@ -3298,7 +3299,7 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
         hitInfo.AuraDuration = Aura::CalcMaxDuration(hitInfo.AuraSpellInfo, origCaster);
 
         // unit is immune to aura if it was diminished to 0 duration
-        if (!hitInfo.Positive && !unit->ApplyDiminishingToDuration(hitInfo.AuraSpellInfo, triggered, hitInfo.AuraDuration, origCaster, diminishLevel))
+        if (!hitInfo.Positive && !ignoreDiminishing && !unit->ApplyDiminishingToDuration(hitInfo.AuraSpellInfo, triggered, hitInfo.AuraDuration, origCaster, diminishLevel))
             if (std::all_of(std::begin(hitInfo.AuraSpellInfo->GetEffects()), std::end(hitInfo.AuraSpellInfo->GetEffects()), [](SpellEffectInfo const& effInfo) { return !effInfo.IsEffect() || effInfo.Effect == SPELL_EFFECT_APPLY_AURA; }))
                 return SPELL_MISS_IMMUNE;
     }
