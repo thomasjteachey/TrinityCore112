@@ -2824,6 +2824,11 @@ void Spell::EffectDistract()
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
         return;
 
+    // Violet Hold Diversion: every enemy in the area is stunned instead -
+    // fighting or not, so this comes before the "already engaged" bail-out.
+    if (VioletHoldClassBoons::DivertsIntoStun(GetUnitCasterForEffectHandlers(), unitTarget))
+        return;
+
     constexpr uint32 DistractDisableStopAura = 82669;
     ObjectGuid casterGuid;
     bool hasDistractOverride = false;

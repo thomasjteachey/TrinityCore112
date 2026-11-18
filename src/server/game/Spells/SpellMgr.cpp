@@ -3061,6 +3061,11 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
     // dismissed or stabled pet.
     if (SpellInfo* spellInfo = _GetSpellInfo(90287))
         spellInfo->AttributesCu |= SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED;
+    // The same for Boon of the Alpha's pet blessing (94428), and Domination's
+    // mark (94431), whose faction swap lives only in the running server.
+    for (uint32 boonAura : { 94428u, 94431u })
+        if (SpellInfo* spellInfo = _GetSpellInfo(boonAura))
+            spellInfo->AttributesCu |= SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED;
 
     // Violet Hold "Undying" (94330) only means anything while the run's own
     // clock is counting it down; saved, it would come back on a relog as 31

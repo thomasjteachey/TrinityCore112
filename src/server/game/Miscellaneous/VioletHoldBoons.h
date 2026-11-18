@@ -207,6 +207,21 @@ namespace VioletHoldBoons
         Cleanse,        // paladin, party: one automatic raid dispel every 6 sec
         LightningRod,   // shaman: every totem fires a 10-sec Lightning Bolt line
 
+        // 2026-11-18, the owner's fourth artifact block. Record auras 94415-94426
+        // in this order; keep contiguous (IsArtifact, static_assert).
+        Unstoppable,    // warrior: Heroic Strike makes you immune to crowd control for 30 sec
+        Cyclone,        // warrior: Whirlwind's radius doubled (record-aura spellmod)
+        Unburdened,     // paladin: no Forbearance on you or from you; Lay on Hands fills your mana
+        SwiftLight,     // paladin: Flash of Light instant, on its own global cooldown
+        Sacrifice,      // paladin, party: Hand of Sacrifice undispellable, 3 min
+        Alpha,          // hunter: pet +500% speed, +50% damage, crowd-control immune
+        Butcher,        // rogue: finishing moves spend only 1 combo point
+        LongReach,      // rogue: melee and melee abilities reach 10 yd farther
+        Diversion,      // rogue: Distract stuns every enemy in its area for 6 sec
+        Shadowstalker,  // rogue: a killing blow restealths you, 3 sec total immunity
+        Domination,     // priest: Mind Control = 10 sec autonomous ally, 50% faster cast, 10 sec cd
+        PrimalReserves, // druid: double maximum mana, rage and energy
+
         Max
     };
 
@@ -400,6 +415,22 @@ namespace VioletHoldBoons
         SPELL_BOON_LIGHTNING_ROD   = 94414,
         SPELL_BOON_CLASS_THIRD_LAST = 94414,
 
+        // The fourth artifact block (2026-11-18), in Boon order.
+        SPELL_BOON_CLASS_FOURTH_FIRST = 94415,
+        SPELL_BOON_UNSTOPPABLE     = 94415,
+        SPELL_BOON_CYCLONE         = 94416,
+        SPELL_BOON_UNBURDENED      = 94417,
+        SPELL_BOON_SWIFT_LIGHT     = 94418,
+        SPELL_BOON_SACRIFICE       = 94419,
+        SPELL_BOON_ALPHA           = 94420,
+        SPELL_BOON_BUTCHER         = 94421,
+        SPELL_BOON_LONG_REACH      = 94422,
+        SPELL_BOON_DIVERSION       = 94423,
+        SPELL_BOON_SHADOWSTALKER   = 94424,
+        SPELL_BOON_DOMINATION      = 94425,
+        SPELL_BOON_PRIMAL_RESERVES = 94426,
+        SPELL_BOON_CLASS_FOURTH_LAST = 94426,
+
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
 
@@ -519,8 +550,14 @@ namespace VioletHoldBoons
         Kind kind = Kind::Boon;
         uint8 index = 0;   // enum Boon value, or index into the class-spell / item table
 
-        // Packed for gossip actions and back. Codes are < 300.
-        uint32 Encode() const { return kind == Kind::Boon ? index : kind == Kind::ClassSpell ? 100 + index : 200 + index; }
+        // Packed for gossip actions and back (never stored). Boons take 0..199,
+        // class spells 200.., items 300..; codes stay < 400 so the broker's pick
+        // actions (ACTION_PICK_BASE + code) stay below ACTION_REROLL. Class
+        // spells sat at 100.. until 2026-11-18, which the boon enum outgrew
+        // (Boon::Max passed 100 and a class-spell card decoded as a boon).
+        static constexpr uint32 CODE_CLASS_SPELL_BASE = 200;
+        static constexpr uint32 CODE_ITEM_BASE = 300;
+        uint32 Encode() const { return kind == Kind::Boon ? index : kind == Kind::ClassSpell ? CODE_CLASS_SPELL_BASE + index : CODE_ITEM_BASE + index; }
         static bool Decode(uint32 code, Offer& out);
 
         bool operator==(Offer const& other) const { return kind == other.kind && index == other.index; }

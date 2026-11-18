@@ -204,7 +204,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
 
     // The second artifact block: a fourth class boon per class.
     { Boon::FieldMedic,    SPELL_BOON_FIELD_MEDIC, 1, 1, ClassBit(CLASS_HUNTER), 0, "Boon of the Field Medic", "your shots, Auto Shot included, can target allies and heal them for what they would have hit for", "" },
-    { Boon::Slipstream,    SPELL_BOON_SLIPSTREAM,  1, 1, ClassBit(CLASS_MAGE),   0, "Boon of the Slipstream",  "Blink takes every ally within 15 yd with you, and frees them from stuns and roots", "" },
+    { Boon::Slipstream,    SPELL_BOON_SLIPSTREAM,  1, 1, ClassBit(CLASS_MAGE),   0, "Boon of the Slipstream",  "Blink takes every ally within 15 yd with you, and frees them from all crowd control", "" },
     { Boon::SecondComing,  SPELL_BOON_SECOND_COMING, 1, 1, ClassBit(CLASS_PRIEST), 0, "Boon of the Second Coming", "once per wave, Resurrection is instant, can be cast in combat and brings the ally back at full health", "" },
     { Boon::Aegis,         SPELL_BOON_AEGIS,        1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Aegis",        "Divine Shield also shields every ally within 20 yd from all damage and effects for 4 sec", "" },
     { Boon::Vengeance,     SPELL_BOON_VENGEANCE,    1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of Vengeance",        "when an ally dies, you go berserk for 12 sec: +50% damage, immune to crowd control, and every kill heals you for 10%", "" },
@@ -220,14 +220,28 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::PrimalEcho,    SPELL_BOON_PRIMAL_ECHO,    1, 1, ClassBit(CLASS_DRUID),  0, "Boon of the Primal Echo", "shifting leaves the form you left beside you for 12 sec, fighting or healing in your place", "" },
 
     { Boon::UnendingVolley, SPELL_BOON_UNENDING_VOLLEY, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Unending Volley", "Volley never ends; you may act after placing it, and recasting Volley moves it", "" },
-    { Boon::WarBanner,      SPELL_BOON_WAR_BANNER,      1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the War Banner",      "Battle Shout plants a permanent banner; nearby enemies deal 10% more damage and take 10% less, and recasting moves it", "" },
+    { Boon::WarBanner,      SPELL_BOON_WAR_BANNER,      1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the War Banner",      "Battle Shout plants a permanent banner; you and your allies within 30 yd deal 10% more damage and take 10% less, and recasting moves it", "" },
     { Boon::AspectSavant,   SPELL_BOON_ASPECT_SAVANT,   1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Aspect Savant",   "all of your Aspects can be active at once, and Cheetah and Pack no longer daze", "" },
     { Boon::MirrorImage,    SPELL_BOON_MIRROR_IMAGE,    1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Mirror Image",    "once every 5 sec, canceling a cast spawns a copy of you that finishes the cast", "" },
     { Boon::ManaConduit,    SPELL_BOON_MANA_CONDUIT,    1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Mana Conduit",    "each Evocation tick restores 5% of every nearby ally's maximum primary resource, including rage and energy", "" },
     { Boon::Curseweaver,    SPELL_BOON_CURSEWEAVER,     1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Curseweaver",     "all Curses can coexist; casting one Curse applies every Curse you know", "" },
     { Boon::PatientGrowth,  SPELL_BOON_PATIENT_GROWTH,  1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Patient Growth",      "your healing-over-time effects pause their ticks and duration while their target is at full health", "" },
     { Boon::Cleanse,        SPELL_BOON_CLEANSE,         1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Cleanse",             "every 6 sec, automatically remove one Cleanse-eligible harmful effect from an ally, without range or line of sight", "" },
-    { Boon::LightningRod,   SPELL_BOON_LIGHTNING_ROD,   1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Lightning Rod",   "every totem draws a Lightning Bolt from you every 10 sec, striking every enemy in its path", "" }
+    { Boon::LightningRod,   SPELL_BOON_LIGHTNING_ROD,   1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Lightning Rod",   "every totem draws a Lightning Bolt from you every 10 sec, striking every enemy in its path", "" },
+
+    // The fourth artifact block (2026-11-18), spells 94415-94426 in this order.
+    { Boon::Unstoppable,    SPELL_BOON_UNSTOPPABLE,     1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Unstoppable",  "Heroic Strike makes you immune to crowd control for 30 sec", "" },
+    { Boon::Cyclone,        SPELL_BOON_CYCLONE,         1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Cyclone",      "Whirlwind's range is doubled", "" },
+    { Boon::Unburdened,     SPELL_BOON_UNBURDENED,      1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Unburdened",   "you are never affected by Forbearance and never apply it, and Lay on Hands completely restores your mana", "" },
+    { Boon::SwiftLight,     SPELL_BOON_SWIFT_LIGHT,     1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Swift Light",      "Flash of Light is instant and has its own global cooldown", "" },
+    { Boon::Sacrifice,      SPELL_BOON_SACRIFICE,       1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Sacrifice",        "your Hand of Sacrifice cannot be dispelled and lasts 3 min", "" },
+    { Boon::Alpha,          SPELL_BOON_ALPHA,           1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Alpha",        "your pet moves 500% faster, deals 50% more damage and cannot be crowd controlled", "" },
+    { Boon::Butcher,        SPELL_BOON_BUTCHER,         1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Butcher",      "your finishing moves spend only 1 combo point, however many you have", "" },
+    { Boon::LongReach,      SPELL_BOON_LONG_REACH,      1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Long Reach",   "your melee attacks and melee abilities reach 10 yd farther", "" },
+    { Boon::Diversion,      SPELL_BOON_DIVERSION,       1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of Diversion",        "Distract stuns every enemy in its area for 6 sec", "" },
+    { Boon::Shadowstalker,  SPELL_BOON_SHADOWSTALKER,   1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Shadowstalker", "any killing blow puts you back in Stealth and makes you immune to all damage and effects for 3 sec", "" },
+    { Boon::Domination,     SPELL_BOON_DOMINATION,      1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of Domination",       "Mind Control makes the victim fight for you on its own for 10 sec while you act freely; its cast is 50% faster and it has a 10 sec cooldown", "" },
+    { Boon::PrimalReserves, SPELL_BOON_PRIMAL_RESERVES, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Primal Reserves",  "your maximum mana, rage and energy are doubled", "" }
 };
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
@@ -848,6 +862,7 @@ bool IsBoonSpell(uint32 spellId)
         || spellId == SPELL_BOON_CRUCIBLE
         || spellId == SPELL_BOON_PRIMAL_ECHO
         || (spellId >= SPELL_BOON_CLASS_THIRD_FIRST && spellId <= SPELL_BOON_CLASS_THIRD_LAST)
+        || (spellId >= SPELL_BOON_CLASS_FOURTH_FIRST && spellId <= SPELL_BOON_CLASS_FOURTH_LAST)
         || (spellId >= SPELL_BOON_CLASS_FIRST && spellId <= SPELL_BOON_CLASS_LAST)
         || spellId == SPELL_KNOWLEDGE_MARKER
         || spellId == SPELL_BOON_EXTRA_ATTACK_SWING;
@@ -858,7 +873,8 @@ bool IsArtifact(Boon boon)
     return (boon >= Boon::Juggernaut && boon <= Boon::Ancestors)
         || (boon >= Boon::FieldMedic && boon <= Boon::Windlord)
         || boon == Boon::PrimalEcho
-        || (boon >= Boon::UnendingVolley && boon <= Boon::LightningRod);
+        || (boon >= Boon::UnendingVolley && boon <= Boon::LightningRod)
+        || (boon >= Boon::Unstoppable && boon <= Boon::PrimalReserves);
 }
 
 // The artifact rows must sit on their spell ids in order: the class boon hooks
@@ -868,6 +884,9 @@ static_assert(uint8(Boon::Ancestors) - uint8(Boon::Juggernaut) == SPELL_BOON_CLA
 static_assert(uint8(Boon::LightningRod) - uint8(Boon::UnendingVolley)
     == SPELL_BOON_CLASS_THIRD_LAST - SPELL_BOON_CLASS_THIRD_FIRST,
     "the third artifact block and its spell block must be the same length");
+static_assert(uint8(Boon::PrimalReserves) - uint8(Boon::Unstoppable)
+    == SPELL_BOON_CLASS_FOURTH_LAST - SPELL_BOON_CLASS_FOURTH_FIRST,
+    "the fourth artifact block and its spell block must be the same length");
 
 bool SharesRunes(Player const* player)
 {
@@ -885,6 +904,10 @@ bool CallsMultitudes(Player const* player)
     return player && player->HasAura(SPELL_BOON_MULTITUDES);
 }
 
+static_assert(uint32(Boon::Max) <= Offer::CODE_CLASS_SPELL_BASE, "boon codes would run into the class-spell codes");
+static_assert(Offer::CODE_CLASS_SPELL_BASE + CLASS_SPELL_COUNT <= Offer::CODE_ITEM_BASE, "class-spell codes would run into the item codes");
+static_assert(Offer::CODE_ITEM_BASE + ITEM_GRANT_COUNT < 400, "broker pick actions must stay below ACTION_REROLL");
+
 bool Offer::Decode(uint32 code, Offer& out)
 {
     if (code < uint8(Boon::Max))
@@ -893,16 +916,16 @@ bool Offer::Decode(uint32 code, Offer& out)
         out.index = uint8(code);
         return true;
     }
-    if (code >= 100 && code < 100 + CLASS_SPELL_COUNT)
+    if (code >= CODE_CLASS_SPELL_BASE && code < CODE_CLASS_SPELL_BASE + CLASS_SPELL_COUNT)
     {
         out.kind = Kind::ClassSpell;
-        out.index = uint8(code - 100);
+        out.index = uint8(code - CODE_CLASS_SPELL_BASE);
         return true;
     }
-    if (code >= 200 && code < 200 + ITEM_GRANT_COUNT)
+    if (code >= CODE_ITEM_BASE && code < CODE_ITEM_BASE + ITEM_GRANT_COUNT)
     {
         out.kind = Kind::Item;
-        out.index = uint8(code - 200);
+        out.index = uint8(code - CODE_ITEM_BASE);
         return true;
     }
     return false;
@@ -1005,6 +1028,10 @@ PickResult CanTake(Player const* player, Offer offer)
         if (info.boon == Boon::Communion || info.boon == Boon::Deliverance || info.boon == Boon::Inheritance
             || info.boon == Boon::Kinship || info.boon == Boon::FocusFire || info.boon == Boon::PackLeader
             || info.boon == Boon::Overflow || info.boon == Boon::ManaConduit || info.boon == Boon::Cleanse
+            // Every party-column class boon (owner 2026-11-18: "all party
+            // boons should need a party, including spellbreaker").
+            || info.boon == Boon::Sacrifice || info.boon == Boon::Spellbreaker
+            || info.boon == Boon::Wellspring || info.boon == Boon::WarBanner
             || (info.boon >= Boon::FieldMedic && info.boon <= Boon::Windlord))
         {
             BattlegroundVHR const* run = GetRunOf(player);
@@ -2313,6 +2340,8 @@ void OnMinionAdded(Unit* owner, Unit* minion)
     // Unconditional: with no stacks this scrubs a stale blessing off a pet
     // that somehow arrived carrying one.
     ApplyBeastmasterBlessing(player, minion, GetStacks(player, Boon::Beastmaster));
+    // Boon of the Alpha's pet blessing, the same way.
+    VioletHoldClassBoons::OnMinionAdded(player, minion);
 }
 
 void RefreshBeastmaster(Player* player)

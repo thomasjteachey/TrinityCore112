@@ -702,20 +702,27 @@ bool SpellHistory::IsSchoolLocked(SpellSchoolMask schoolMask) const
     return false;
 }
 
+// The GCD category a spell starts and is held by: its DBC StartRecoveryCategory,
+// except Violet Hold Swift Light's Flash of Light, which has one of its own.
+uint32 SpellHistory::GetGlobalCooldownCategory(SpellInfo const* spellInfo) const
+{
+    return VioletHoldClassBoons::GetGlobalCooldownCategory(_owner, spellInfo);
+}
+
 bool SpellHistory::HasGlobalCooldown(SpellInfo const* spellInfo) const
 {
-    auto itr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    auto itr = _globalCooldowns.find(GetGlobalCooldownCategory(spellInfo));
     return itr != _globalCooldowns.end() && itr->second > GameTime::GetSystemTime();
 }
 
 void SpellHistory::AddGlobalCooldown(SpellInfo const* spellInfo, uint32 duration)
 {
-    _globalCooldowns[spellInfo->StartRecoveryCategory] = GameTime::GetSystemTime() + std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(duration));
+    _globalCooldowns[GetGlobalCooldownCategory(spellInfo)] = GameTime::GetSystemTime() + std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(duration));
 }
 
 void SpellHistory::CancelGlobalCooldown(SpellInfo const* spellInfo)
 {
-    _globalCooldowns[spellInfo->StartRecoveryCategory] = Clock::time_point(Clock::duration(0));
+    _globalCooldowns[GetGlobalCooldownCategory(spellInfo)] = Clock::time_point(Clock::duration(0));
 }
 
 uint32 SpellHistory::GetRemainingGlobalCooldown(SpellInfo const* spellInfo) const
@@ -723,7 +730,7 @@ uint32 SpellHistory::GetRemainingGlobalCooldown(SpellInfo const* spellInfo) cons
     if (!spellInfo || !spellInfo->StartRecoveryCategory)
         return 0;
 
-    auto itr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    auto itr = _globalCooldowns.find(GetGlobalCooldownCategory(spellInfo));
     if (itr == _globalCooldowns.end())
         return 0;
 
@@ -743,7 +750,7 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (!remainingMs)
         return;
 
-    auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    auto gcdItr = _globalCooldowns.find(GetGlobalCooldownCategory(spellInfo));
     if (gcdItr == _globalCooldowns.end())
         return;
 
@@ -839,7 +846,7 @@ void SpellHistory::ClampGlobalCooldown(SpellInfo const* spellInfo, std::chrono::
     if (!spellInfo || !spellInfo->StartRecoveryCategory || duration.count() <= 0)
         return;
 
-    auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    auto gcdItr = _globalCooldowns.find(GetGlobalCooldownCategory(spellInfo));
     if (gcdItr == _globalCooldowns.end())
         return;
 

@@ -164,6 +164,7 @@ public:
     uint32 ClearSchoolLockouts();
 
     // Global cooldown
+    uint32 GetGlobalCooldownCategory(SpellInfo const* spellInfo) const;
     bool HasGlobalCooldown(SpellInfo const* spellInfo) const;
     void AddGlobalCooldown(SpellInfo const* spellInfo, uint32 duration);
     void CancelGlobalCooldown(SpellInfo const* spellInfo);

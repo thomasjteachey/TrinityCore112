@@ -12,6 +12,8 @@
  *   spell_vhr_frostwalker     1953                                      Blink (Frostwalker + Slipstream)
  *   spell_vhr_second_coming   2006, 2010, 10880, 10881, 20770, 25435, 48171  Resurrection
  *   spell_vhr_serenity        740, 8918, 9862, 9863                     Tranquility
+ *   spell_vhr_domination      605, 10911, 10912                         Mind Control (Domination)
+ *   spell_vhr_dominated       94431                                     Domination's mark on the victim
  */
 
 #include "CellImpl.h"
@@ -739,8 +741,58 @@ public:
     }
 };
 
+// Boon of Domination: a holder's Mind Control applies none of its own auras -
+// no possess on the victim, no channel aura on the priest - so the channel
+// finds nothing to hold and ends on its next update (Serenity's shape), and
+// the priest is free at once. The victim changes sides instead
+// (VioletHoldClassBoons::Dominate) and fights on with its own brain for the
+// 10 sec of SPELL_DOMINATED. The 10 sec cooldown is set in OnSpellCast; the
+// 50% shorter cast is a spellmod on the boon's record aura.
+class spell_vhr_domination : public SpellScript
+{
+    PrepareSpellScript(spell_vhr_domination);
+
+    void Turn(SpellEffIndex effIndex)
+    {
+        Unit* priest = GetCaster();
+        if (!IsDomination(priest, GetSpellInfo()))
+            return;
+        PreventHitAura();
+        PreventHitDefaultEffect(effIndex);
+        Unit* victim = GetHitUnit();
+        if (effIndex == EFFECT_0 && victim && victim != priest)
+            Dominate(priest, victim);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_domination::Turn, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_domination::Turn, EFFECT_1, SPELL_EFFECT_APPLY_AURA);
+        OnEffectHitTarget += SpellEffectFn(spell_vhr_domination::Turn, EFFECT_2, SPELL_EFFECT_APPLY_AURA);
+    }
+};
+
+// Domination's mark: whenever it comes off (10 sec, death, dispel, leaving
+// the map) the victim goes back to its own side.
+class spell_vhr_dominated : public AuraScript
+{
+    PrepareAuraScript(spell_vhr_dominated);
+
+    void GiveBack(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        EndDomination(GetTarget());
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_vhr_dominated::GiveBack, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 void AddSC_violet_hold_class_boons()
 {
+    RegisterSpellScript(spell_vhr_domination);
+    RegisterSpellScript(spell_vhr_dominated);
     RegisterSpellScript(spell_vhr_juggernaut);
     RegisterSpellScript(spell_vhr_sinister_strike);
     RegisterSpellScript(spell_vhr_shattered_ward);

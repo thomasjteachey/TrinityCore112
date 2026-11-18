@@ -4393,7 +4393,8 @@ void Spell::_handle_finish_phase()
         // Take for real after all targets are processed
         if (m_needComboPoints)
         {
-            unitCaster->ClearComboPoints();
+            // Violet Hold Butcher: one point spent, not all of them.
+            VioletHoldClassBoons::SpendComboPoints(unitCaster);
             // Violet Hold Relentless: Overpower's point comes straight back.
             VioletHoldClassBoons::RefreshReactives(unitCaster);
         }
@@ -9371,8 +9372,9 @@ void Spell::TriggerGlobalCooldown()
     if (Player* modOwner = m_caster->GetSpellModOwner())
         modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_GLOBAL_COOLDOWN, gcd, this);
 
-    // Apply haste rating
-    if (m_spellInfo->StartRecoveryCategory == 133 && m_spellInfo->StartRecoveryTime == 1500 &&
+    // Apply haste rating (not to Violet Hold Swift Light's own Flash of Light
+    // GCD, which the client does not haste either: it is not category 133)
+    if (VioletHoldClassBoons::GetGlobalCooldownCategory(m_caster->ToUnit(), m_spellInfo) == 133 && m_spellInfo->StartRecoveryTime == 1500 &&
         m_spellInfo->DmgClass != SPELL_DAMAGE_CLASS_MELEE && m_spellInfo->DmgClass != SPELL_DAMAGE_CLASS_RANGED &&
         !m_spellInfo->HasAttribute(SPELL_ATTR0_REQ_AMMO) && !m_spellInfo->HasAttribute(SPELL_ATTR0_ABILITY))
     {

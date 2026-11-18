@@ -873,6 +873,9 @@ float Unit::GetMeleeRange(Unit const* target) const
     if (AuraEffect const* auraEffect = GetAuraEffect(89773, EFFECT_0))
         range += auraEffect->GetAmount();
 
+    // Violet Hold Long Reach (+10 yd for a holder rogue).
+    range += VioletHoldClassBoons::GetExtraMeleeReach(this);
+
     return range;
 }
 

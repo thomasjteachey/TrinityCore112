@@ -61,6 +61,18 @@ std::unordered_map<ObjectGuid, TotemPulse> LightningRodPulses;
 
 constexpr std::array<uint32, 6> VolleyRanks = { 1510, 14294, 14295, 27022, 58431, 58434 };
 
+// Every crowd-control mechanic (Vengeance's and Unstoppable's immunity masks
+// carry the same value, 1226210982, in their aura 147); Slipstream breaks
+// whatever of it is on an ally.
+constexpr uint32 CROWD_CONTROL_MASK =
+      (1 << MECHANIC_CHARM) | (1 << MECHANIC_DISORIENTED) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_ROOT)
+    | (1 << MECHANIC_SILENCE) | (1 << MECHANIC_SLEEP) | (1 << MECHANIC_SNARE) | (1 << MECHANIC_STUN)
+    | (1 << MECHANIC_FREEZE) | (1 << MECHANIC_KNOCKOUT) | (1 << MECHANIC_POLYMORPH) | (1 << MECHANIC_BANISH)
+    | (1 << MECHANIC_SHACKLE) | (1 << MECHANIC_HORROR) | (1 << MECHANIC_DAZE) | (1 << MECHANIC_SAPPED);
+
+// Domination: the faction each dominated unit had before, to give back.
+std::unordered_map<ObjectGuid, uint32> DominatedFactions;
+
 bool Holds(Unit const* unit, uint32 boonSpellId)
 {
     return unit && unit->HasAura(boonSpellId);
@@ -347,7 +359,9 @@ void PlantWarBanner(Player* warrior)
         WarBanners[warrior->GetGUID()] = banner->GetGUID();
 }
 
-bool InEnemyWarBanner(Unit const* unit)
+// Whether `unit` stands within WAR_BANNER_RADIUS of a banner planted by its
+// own side (the warrior included).
+bool InFriendlyWarBanner(Unit const* unit)
 {
     if (!unit || !unit->IsInWorld())
         return false;
@@ -361,7 +375,7 @@ bool InEnemyWarBanner(Unit const* unit)
             itr = WarBanners.erase(itr);
             continue;
         }
-        if (owner->IsValidAttackTarget(unit) && banner->IsWithinDistInMap(unit, WAR_BANNER_RADIUS))
+        if ((unit == owner || owner->IsValidAssistTarget(unit)) && banner->IsWithinDistInMap(unit, WAR_BANNER_RADIUS))
             return true;
         ++itr;
     }
@@ -444,6 +458,10 @@ void OnTaken(Player* player)
     // Serenity's first charge comes with the boon; each wave that falls
     // brings the next (OnWaveRestored).
     OnWaveRestored(player);
+    // Alpha: the pet already out gets it now, later ones on summon.
+    if (player)
+        if (Pet* pet = player->GetPet())
+            OnMinionAdded(player, pet);
 }
 
 void OnStripped(Player* player)
@@ -481,6 +499,13 @@ void OnStripped(Player* player)
     player->RemoveAurasDueToSpell(SPELL_SERENITY_READY);
     player->RemoveAurasDueToSpell(SPELL_SECOND_COMING_READY);
     player->RemoveAurasDueToSpell(SPELL_PLAGUE_BURDEN);
+    player->RemoveAurasDueToSpell(SPELL_UNSTOPPABLE_BUFF);
+    player->RemoveAurasDueToSpell(SPELL_SHADOWSTALKER_VEIL);
+
+    // Alpha rides on the pet, which may be dead or dismissed: the blessing is
+    // death-persistent like Beastmaster's.
+    if (Pet* pet = player->GetPet())
+        pet->RemoveAurasDueToSpell(SPELL_ALPHA_PET);
 }
 
 // ---- warrior -----------------------------------------------------------------
@@ -764,13 +789,18 @@ bool DreadEmpowersPsychicScream(Unit const* caster, SpellInfo const* fear)
 
 // ---- mage --------------------------------------------------------------------
 
-void FreeFromStunAndRoot(Unit* unit)
+void FreeFromCrowdControl(Unit* unit)
 {
     if (!unit)
         return;
-    unit->RemoveAurasWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_ROOT), AURA_REMOVE_BY_DEFAULT, 0);
-    unit->RemoveAurasByType(SPELL_AURA_MOD_STUN, ObjectGuid::Empty, nullptr, true, false);
-    unit->RemoveAurasByType(SPELL_AURA_MOD_ROOT, ObjectGuid::Empty, nullptr, true, false);
+    unit->RemoveAurasWithMechanic(CROWD_CONTROL_MASK, AURA_REMOVE_BY_DEFAULT, 0);
+    // By aura type too: plenty of crowd control carries no mechanic of its own.
+    // Hostile auras only - a druid's own root-breaking form or a friendly
+    // shapeshift is not crowd control.
+    for (AuraType type : { SPELL_AURA_MOD_STUN, SPELL_AURA_MOD_ROOT, SPELL_AURA_MOD_FEAR, SPELL_AURA_MOD_CONFUSE,
+                           SPELL_AURA_MOD_CHARM, SPELL_AURA_MOD_POSSESS, SPELL_AURA_TRANSFORM, SPELL_AURA_MOD_SILENCE,
+                           SPELL_AURA_MOD_PACIFY_SILENCE, SPELL_AURA_MOD_DECREASE_SPEED, SPELL_AURA_MOD_PACIFY })
+        unit->RemoveAurasByType(type, ObjectGuid::Empty, nullptr, true, false);
 }
 
 std::vector<ObjectGuid> SlipstreamPassengers(Unit* mage)
@@ -789,13 +819,13 @@ void SlipstreamArrive(Unit* mage, std::vector<ObjectGuid> const& passengers)
 {
     if (!mage || !mage->IsInWorld())
         return;
-    FreeFromStunAndRoot(mage);
+    FreeFromCrowdControl(mage);
     for (ObjectGuid guid : passengers)
     {
         Player* ally = ObjectAccessor::GetPlayer(*mage, guid);
         if (!ally || !ally->IsInWorld() || !ally->IsAlive() || !ally->IsInMap(mage) || ally->IsBeingTeleported())
             continue;
-        FreeFromStunAndRoot(ally);
+        FreeFromCrowdControl(ally);
         ally->NearTeleportTo(mage->GetPositionX(), mage->GetPositionY(), mage->GetPositionZ(), ally->GetOrientation());
     }
 }
@@ -944,7 +974,12 @@ void OnEvocationTick(Unit* caster)
 
 bool IsUndispellable(Aura const* aura, Unit const* auraTarget)
 {
-    if (!aura || aura->GetSpellInfo()->IsPositive())
+    if (!aura)
+        return false;
+    // Sacrifice: a holder's Hand of Sacrifice stays on through every dispel.
+    if (Is(aura->GetSpellInfo(), SPELLFAMILY_PALADIN, "Hand of Sacrifice"))
+        return Holds(aura->GetCaster(), SPELL_SACRIFICE);
+    if (aura->GetSpellInfo()->IsPositive())
         return false;
     if (auraTarget && aura->GetCasterGUID() == auraTarget->GetGUID())
         return false;
@@ -968,6 +1003,20 @@ void OnUnitDying(Unit* victim, Unit* attacker)
 
     if (Pet* pet = victim->ToPet())
         ReturnTheDemon(pet);
+
+    // Shadowstalker: the rogue's own killing blow (not a pet's) puts them
+    // straight back in Stealth, under 3 sec of total immunity so the fight
+    // around them cannot knock it off at once. Triggered: in combat, off
+    // Stealth's cooldown, and starting none.
+    Player* rogue = attacker ? attacker->ToPlayer() : nullptr;
+    if (rogue && rogue != victim && rogue->IsAlive() && rogue->GetClass() == CLASS_ROGUE
+        && Holds(rogue, SPELL_SHADOWSTALKER))
+    {
+        rogue->CastSpell(rogue, SPELL_SHADOWSTALKER_VEIL, TRIGGERED_FULL_MASK);
+        if (!rogue->HasStealthAura())
+            if (uint32 stealth = HighestKnown(rogue, SPELLFAMILY_ROGUE, "Stealth"))
+                rogue->CastSpell(rogue, stealth, TRIGGERED_FULL_MASK);
+    }
 }
 
 // ---- druid -------------------------------------------------------------------
@@ -1204,11 +1253,7 @@ namespace
 {
 // Vengeance's crowd-control immunity (the fury's aura 147 carries the same
 // mask); what is already on the warrior is broken too.
-constexpr uint32 VENGEANCE_CC_MASK =
-      (1 << MECHANIC_CHARM) | (1 << MECHANIC_DISORIENTED) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_ROOT)
-    | (1 << MECHANIC_SILENCE) | (1 << MECHANIC_SLEEP) | (1 << MECHANIC_SNARE) | (1 << MECHANIC_STUN)
-    | (1 << MECHANIC_FREEZE) | (1 << MECHANIC_KNOCKOUT) | (1 << MECHANIC_POLYMORPH) | (1 << MECHANIC_BANISH)
-    | (1 << MECHANIC_SHACKLE) | (1 << MECHANIC_HORROR) | (1 << MECHANIC_DAZE) | (1 << MECHANIC_SAPPED);
+constexpr uint32 VENGEANCE_CC_MASK = CROWD_CONTROL_MASK;
 
 // A harmful effect Plaguebearer can take or counts: cast on `bearer` by an
 // enemy, timed, not passive and not one that outlives death.
@@ -1320,6 +1365,39 @@ void OnSpellCast(Unit* caster, SpellInfo const* spellInfo, Unit* explicitTarget)
         if (Player* warrior = caster->ToPlayer())
             PlantWarBanner(warrior);
 
+    // Unstoppable: every Heroic Strike (it lands on the next swing, which is
+    // when this runs) renews the 30 sec immunity and breaks what is on now.
+    if (Is(spellInfo, SPELLFAMILY_WARRIOR, "Heroic Strike") && Holds(caster, SPELL_UNSTOPPABLE))
+    {
+        caster->RemoveAurasWithMechanic(CROWD_CONTROL_MASK, AURA_REMOVE_BY_DEFAULT, 0);
+        caster->CastSpell(caster, SPELL_UNSTOPPABLE_BUFF, TRIGGERED_FULL_MASK);
+    }
+
+    // Unburdened: Lay on Hands leaves the paladin full instead of empty.
+    if (Is(spellInfo, SPELLFAMILY_PALADIN, "Lay on Hands") && caster->GetClass() == CLASS_PALADIN
+        && Holds(caster, SPELL_UNBURDENED))
+        caster->SetPower(POWER_MANA, caster->GetMaxPower(POWER_MANA));
+
+    // Domination: Mind Control's 10 sec cooldown, on every rank the priest
+    // knows (the DBC gives it none, so the client is told explicitly).
+    if (IsDomination(caster, spellInfo))
+        if (Player* priest = caster->ToPlayer())
+        {
+            std::vector<uint32> ranks;
+            for (auto const& [id, known] : priest->GetSpellMap())
+            {
+                if (known.state == PLAYERSPELL_REMOVED || known.disabled)
+                    continue;
+                if (SameSpell(sSpellMgr->GetSpellInfo(id), spellInfo))
+                    ranks.push_back(id);
+            }
+            if (std::find(ranks.begin(), ranks.end(), spellInfo->Id) == ranks.end())
+                ranks.push_back(spellInfo->Id);
+            for (uint32 id : ranks)
+                priest->GetSpellHistory()->AddCooldown(id, 0, std::chrono::milliseconds(DOMINATION_COOLDOWN_MS));
+            priest->GetSpellHistory()->SendCooldowns(ranks);
+        }
+
     Player* warlock = caster->ToPlayer();
     if (!warlock || !explicitTarget || spellInfo->GetSpellSpecific() != SPELL_SPECIFIC_CURSE
         || !Holds(warlock, SPELL_CURSEWEAVER) || !caster->IsValidAttackTarget(explicitTarget))
@@ -1350,9 +1428,9 @@ uint32 ModifyWarBannerDamage(Unit* attacker, Unit* victim, uint32 damage)
 {
     if (!damage)
         return 0;
-    if (InEnemyWarBanner(attacker))
+    if (InFriendlyWarBanner(attacker))
         damage += CalculatePct(damage, 10);
-    if (InEnemyWarBanner(victim))
+    if (InFriendlyWarBanner(victim))
         damage -= CalculatePct(damage, 10);
     return damage;
 }
@@ -1574,5 +1652,127 @@ void CompleteAncestors(Unit* victim)
     player->CastSpell(player, SPELL_ANCESTORS_VISUAL, TRIGGERED_FULL_MASK);
     if (WorldSession* session = player->GetSession())
         session->SendNotification("The ancestors return you to the fight!");
+}
+
+// ---- the fourth block (2026-11-18) -------------------------------------------
+
+bool IgnoresForbearance(Unit const* caster, Unit const* target)
+{
+    return (caster && caster->GetClass() == CLASS_PALADIN && Holds(caster, SPELL_UNBURDENED))
+        || Holds(target, SPELL_UNBURDENED);
+}
+
+uint32 GetGlobalCooldownCategory(Unit const* owner, SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return 0;
+    // Asked on every cast and GCD check: the class and family flag first,
+    // the aura last. Flash of Light is paladin family flag 0x40000000.
+    if (spellInfo->StartRecoveryCategory && owner && owner->GetClass() == CLASS_PALADIN
+        && spellInfo->SpellFamilyName == SPELLFAMILY_PALADIN && (spellInfo->SpellFamilyFlags[0] & 0x40000000)
+        && NameIs(spellInfo, "Flash of Light") && Holds(owner, SPELL_SWIFT_LIGHT))
+        return SPELL_SWIFT_LIGHT;
+    return spellInfo->StartRecoveryCategory;
+}
+
+void OnMinionAdded(Player* owner, Unit* minion)
+{
+    if (!owner || !minion)
+        return;
+    Pet* pet = minion->ToPet();
+    bool const blessed = pet && pet->getPetType() == HUNTER_PET && owner->GetClass() == CLASS_HUNTER
+        && Holds(owner, SPELL_ALPHA);
+    if (blessed == minion->HasAura(SPELL_ALPHA_PET))
+        return;
+    if (!blessed)
+    {
+        minion->RemoveAurasDueToSpell(SPELL_ALPHA_PET);
+        return;
+    }
+    // AddAura, as Beastmaster does: SetMinion runs before the pet is in its map.
+    owner->AddAura(SPELL_ALPHA_PET, minion);
+    if (minion->IsInWorld() && !minion->CanModifyStats())
+        minion->UpdateAllStats();
+}
+
+void SpendComboPoints(Unit* caster)
+{
+    if (!caster)
+        return;
+    if (caster->GetClass() == CLASS_ROGUE && caster->GetComboPoints() > 1 && Holds(caster, SPELL_BUTCHER))
+        caster->AddComboPoints(-1);
+    else
+        caster->ClearComboPoints();
+}
+
+float GetExtraMeleeReach(Unit const* unit)
+{
+    // Every melee check on the server comes through here: players only, then
+    // the class, then the aura.
+    if (!unit || unit->GetTypeId() != TYPEID_PLAYER || unit->GetClass() != CLASS_ROGUE)
+        return 0.0f;
+    return Holds(unit, SPELL_LONG_REACH) ? LONG_REACH_YARDS : 0.0f;
+}
+
+bool DivertsIntoStun(Unit* caster, Unit* target)
+{
+    if (!caster || !target || caster == target || !target->IsAlive() || caster->GetClass() != CLASS_ROGUE
+        || !Holds(caster, SPELL_DIVERSION) || !caster->IsValidAttackTarget(target))
+        return false;
+    caster->CastSpell(target, SPELL_DIVERSION_STUN, TRIGGERED_FULL_MASK);
+    return true;
+}
+
+bool IsDomination(Unit const* caster, SpellInfo const* spellInfo)
+{
+    return caster && caster->GetClass() == CLASS_PRIEST && Is(spellInfo, SPELLFAMILY_PRIEST, "Mind Control")
+        && Holds(caster, SPELL_DOMINATION);
+}
+
+void Dominate(Unit* priest, Unit* victim)
+{
+    if (!priest || !victim || priest == victim || !victim->IsAlive() || victim->HasAura(SPELL_DOMINATED))
+        return;
+
+    // The victim keeps its own brain - a wave clone goes on running its
+    // playerbot logic, a creature its own AI (the owner: "use our custom
+    // playerbot logic, not the pet logic of wow"). It only changes sides:
+    // the bot picks fights by faction (IsValidAttackTarget), so taking the
+    // priest's faction turns its old side into its enemies. Its battleground
+    // team is left alone, so the wave still counts it as one of its own.
+    DominatedFactions[victim->GetGUID()] = victim->GetFaction();
+    victim->SetFaction(priest->GetFaction());
+    for (Unit* controlled : victim->m_Controlled)
+        if (controlled && controlled->GetOwnerGUID() == victim->GetGUID())
+            controlled->SetFaction(priest->GetFaction());
+
+    // Whatever it was hitting is now a friend, and whoever was hitting it
+    // must find somebody else.
+    victim->AttackStop();
+    victim->CombatStop(true);
+    if (Player* bot = victim->ToPlayer())
+        bot->SetSelection(ObjectGuid::Empty);
+
+    priest->AddAura(SPELL_DOMINATED, victim);
+}
+
+void EndDomination(Unit* victim)
+{
+    if (!victim)
+        return;
+    auto itr = DominatedFactions.find(victim->GetGUID());
+    if (itr == DominatedFactions.end())
+        return;
+    uint32 const faction = itr->second;
+    DominatedFactions.erase(itr);
+
+    victim->SetFaction(faction);
+    for (Unit* controlled : victim->m_Controlled)
+        if (controlled && controlled->GetOwnerGUID() == victim->GetGUID())
+            controlled->SetFaction(faction);
+    victim->AttackStop();
+    victim->CombatStop(true);
+    if (Player* bot = victim->ToPlayer())
+        bot->SetSelection(ObjectGuid::Empty);
 }
 }

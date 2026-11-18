@@ -136,6 +136,30 @@ namespace VioletHoldClassBoons
         SPELL_CLEANSE           = 94413,   // paladin, party
         SPELL_LIGHTNING_ROD     = 94414,   // shaman
 
+        // The fourth artifact block (2026-11-18). Cyclone, Swift Light's
+        // instant cast, Sacrifice's 3 min, Long Reach's ability range,
+        // Domination's cast time and Primal Reserves are spellmods / power
+        // auras carried by the record aura itself, so the client agrees.
+        SPELL_UNSTOPPABLE       = 94415,   // warrior
+        SPELL_CYCLONE           = 94416,   // warrior (data only: Whirlwind radius +100%)
+        SPELL_UNBURDENED        = 94417,   // paladin
+        SPELL_SWIFT_LIGHT       = 94418,   // paladin; its id is also Flash of Light's private GCD category
+        SPELL_SACRIFICE         = 94419,   // paladin, party
+        SPELL_ALPHA             = 94420,   // hunter
+        SPELL_BUTCHER           = 94421,   // rogue
+        SPELL_LONG_REACH        = 94422,   // rogue
+        SPELL_DIVERSION         = 94423,   // rogue
+        SPELL_SHADOWSTALKER     = 94424,   // rogue
+        SPELL_DOMINATION        = 94425,   // priest (Mind Control's 10 sec cooldown sits on its own ranks)
+        SPELL_PRIMAL_RESERVES   = 94426,   // druid (data only: +100% max mana, rage, energy)
+
+        // What those hooks apply.
+        SPELL_UNSTOPPABLE_BUFF  = 94427,   // 30 sec: crowd-control and knockback immunity
+        SPELL_ALPHA_PET         = 94428,   // on the hunter's pet: +500% speed, +50% damage, CC immune
+        SPELL_DIVERSION_STUN    = 94429,   // 6 sec stun
+        SPELL_SHADOWSTALKER_VEIL = 94430,  // 3 sec: immune to all damage and harmful effects
+        SPELL_DOMINATED         = 94431,   // 10 sec on the victim; spell_vhr_dominated gives the faction back
+
         SPELL_WINDFURY_WEAPON_PASSIVE = 33757,
         SPELL_ROGUE_EVASION     = 5277,
 
@@ -267,8 +291,10 @@ namespace VioletHoldClassBoons
     // ... are put where the mage landed and freed of every stun and root
     // (once the mage's own near teleport has gone through).
     TC_GAME_API void SlipstreamArrive(Unit* mage, std::vector<ObjectGuid> const& passengers);
-    // Stun and root auras off `unit` (hostile ones), Slipstream's freeing.
-    TC_GAME_API void FreeFromStunAndRoot(Unit* unit);
+    // Every hostile crowd-control effect off `unit` - stuns, roots, fears,
+    // charms, polymorphs, snares, silences, disorients - Slipstream's freeing
+    // (all of it since 2026-11-18; it was stuns and roots only).
+    TC_GAME_API void FreeFromCrowdControl(Unit* unit);
     // Frostwalker: the Frost Nova rank this mage knows (0 if none).
     TC_GAME_API uint32 GetFrostNovaRank(Unit const* caster);
     // Spellbreaker: Spell::EffectInterruptCast, after something was interrupted.
@@ -314,8 +340,9 @@ namespace VioletHoldClassBoons
     // Spell::_cast, a cast the caster chose (not triggered): Aegis spreads
     // Divine Shield's bubble.
     TC_GAME_API void OnSpellCast(Unit* caster, SpellInfo const* spellInfo, Unit* explicitTarget);
-    // The banner's deliberately hostile zone: nearby enemies deal 110% and
-    // take 90%. Called from the same UnitScript hooks as party damage boons.
+    // The banner rallies its own side (owner 2026-11-18: "apply to ALLIES"):
+    // the warrior and every ally within WAR_BANNER_RADIUS deal 110% and take
+    // 90%. Called from the same UnitScript hooks as party damage boons.
     TC_GAME_API uint32 ModifyWarBannerDamage(Unit* attacker, Unit* victim, uint32 damage);
     // BattlegroundVHR::HandleKillPlayer, a member of the party fell:
     // every Vengeance holder in the run goes berserk, wherever they stand.
@@ -399,6 +426,39 @@ namespace VioletHoldClassBoons
     // ... which then lands, once the damage has: Reincarnation's health and
     // mana (20%, raised by Improved Reincarnation's ALL_EFFECTS modifier).
     TC_GAME_API void CompleteAncestors(Unit* victim);
+
+    // ---- the fourth block (2026-11-18) -------------------------------------
+    constexpr float LONG_REACH_YARDS          = 10.0f;
+    constexpr uint32 DOMINATION_COOLDOWN_MS   = 10000;
+
+    // Unburdened: a holder paladin's Divine Shield / Protection / Hand of
+    // Protection / Lay on Hands never leave Forbearance or its two markers,
+    // and no paladin's leave them on a holder (spell_paladin.cpp).
+    TC_GAME_API bool IgnoresForbearance(Unit const* caster, Unit const* target);
+    // Swift Light: the GCD category a spell starts and is held by - Flash of
+    // Light gets its own (SPELL_SWIFT_LIGHT) for a holder, everything else its
+    // DBC StartRecoveryCategory (SpellHistory, Spell::TriggerGlobalCooldown).
+    // The client half is the client-tweaks rule `swiftlight`.
+    TC_GAME_API uint32 GetGlobalCooldownCategory(Unit const* owner, SpellInfo const* spellInfo);
+    // Sacrifice is in IsUndispellable above.
+    // Alpha: Unit::SetMinion (via VioletHoldBoons::OnMinionAdded) - a holder's
+    // hunter pet gets SPELL_ALPHA_PET, anything else loses it.
+    TC_GAME_API void OnMinionAdded(Player* owner, Unit* minion);
+    // Butcher: Spell::_handle_finish_phase, a finishing move is done - one
+    // combo point goes instead of all of them.
+    TC_GAME_API void SpendComboPoints(Unit* caster);
+    // Long Reach: Unit::GetMeleeRange (auto attack and the server's melee
+    // spell range). The record aura's +10 yd SPELLMOD_RANGE tells the client.
+    TC_GAME_API float GetExtraMeleeReach(Unit const* unit);
+    // Diversion: Spell::EffectDistract, before its "already fighting" bail-out
+    // - true when the target was stunned instead of distracted.
+    TC_GAME_API bool DivertsIntoStun(Unit* caster, Unit* target);
+    // Domination: a holder's Mind Control (spell_vhr_domination) applies
+    // nothing of its own; the victim takes the priest's side instead ...
+    TC_GAME_API bool IsDomination(Unit const* caster, SpellInfo const* spellInfo);
+    TC_GAME_API void Dominate(Unit* priest, Unit* victim);
+    // ... until SPELL_DOMINATED comes off it (spell_vhr_dominated).
+    TC_GAME_API void EndDomination(Unit* victim);
 }
 
 #endif // TRINITYCORE_VIOLET_HOLD_CLASS_BOONS_H
