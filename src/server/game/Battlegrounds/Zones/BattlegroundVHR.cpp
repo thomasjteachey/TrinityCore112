@@ -181,6 +181,7 @@ BattlegroundVHR::BattlegroundVHR()
     _partySize = 0;
     _waveNumber = 0;
     _highestWaveCleared = 0;
+    _lastPartyWave = 0;
     _waveState = WaveState::NotStarted;
     _prepTimerMs = 0;
     _runesOut = false;
@@ -300,6 +301,7 @@ void BattlegroundVHR::Reset()
     _partySize = 0;
     _waveNumber = 0;
     _highestWaveCleared = 0;
+    _lastPartyWave = 0;
     _waveState = WaveState::NotStarted;
     _prepTimerMs = 0;
     _runesOut = false;
@@ -613,14 +615,22 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
 
     // Party-mirror waves are the seasoning, not the meal: most waves are
     // drawn from the playerbot population, with the party flavours rolled
-    // first so they keep their exact advertised odds.
+    // first so they keep their advertised odds whenever the anti-clumping
+    // cooldown says another party wave is eligible.
     VhrWaveComposition composition = VhrWaveComposition::BotSourced;
-    if (urand(0, 999) < BG_VHR_MONO_WAVE_CHANCE_PERMILLE)
-        composition = VhrWaveComposition::SingleSource;
-    else if (urand(0, 999) < BG_VHR_ROSTER_WAVE_CHANCE_PERMILLE)
-        composition = VhrWaveComposition::FullRoster;
-    else if (urand(0, 99) < sWorld->getIntConfig(CONFIG_CENTURION_VHR_PARTY_WAVE_CHANCE))
-        composition = VhrWaveComposition::RandomPerSlot;
+    bool const partyWaveEligible = !_lastPartyWave || _waveNumber - _lastPartyWave > BG_VHR_PARTY_WAVE_COOLDOWN;
+    if (partyWaveEligible)
+    {
+        if (urand(0, 999) < BG_VHR_MONO_WAVE_CHANCE_PERMILLE)
+            composition = VhrWaveComposition::SingleSource;
+        else if (urand(0, 999) < BG_VHR_ROSTER_WAVE_CHANCE_PERMILLE)
+            composition = VhrWaveComposition::FullRoster;
+        else if (urand(0, 99) < sWorld->getIntConfig(CONFIG_CENTURION_VHR_PARTY_WAVE_CHANCE))
+            composition = VhrWaveComposition::RandomPerSlot;
+
+        if (composition != VhrWaveComposition::BotSourced)
+            _lastPartyWave = _waveNumber;
+    }
 
     _pendingRequest.composition = composition;
     _pendingRequest.sourceGuids.reserve(enemyCount);

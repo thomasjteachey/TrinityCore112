@@ -62,18 +62,7 @@ struct OfflineWaveBot
 {
     uint32 lowGuid = 0;
     uint8 level = 0;
-    bool pvpOnly = false;
 };
-
-// The same split the battleground fill makes (PlayerbotBgFillDriver.cpp): a
-// bracket that reaches the level cap draws only from the PvP-only accounts, and
-// every lower bracket only from the random population.
-constexpr uint32 kPvpOnlyPoolBracketLevel = 60;
-
-bool DrawsFromPvpOnlyPool(Battleground const* bg)
-{
-    return bg && bg->GetMaxLevel() >= kPvpOnlyPoolBracketLevel;
-}
 
 constexpr uint32 kOfflineBotPoolRefreshMs = 60 * IN_MILLISECONDS;
 std::vector<OfflineWaveBot> g_OfflineWaveBots;
@@ -138,7 +127,7 @@ void RefreshOfflineWaveBotsIfStale()
 
     // Obcc names are the legacy on-disk Obsidian Colosseum clones, not characters.
     QueryResult result = CharacterDatabase.PQuery(
-        "SELECT guid, level, at_login, account FROM characters WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%'",
+        "SELECT guid, level, at_login FROM characters WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%'",
         accountList);
     if (!result)
         return;
@@ -154,13 +143,15 @@ void RefreshOfflineWaveBotsIfStale()
         OfflineWaveBot bot;
         bot.lowGuid = fields[0].GetUInt32();
         bot.level = fields[1].GetUInt8();
-        bot.pvpOnly = std::binary_search(pvpOnlyAccounts.begin(), pvpOnlyAccounts.end(), fields[3].GetUInt32());
         g_OfflineWaveBots.push_back(bot);
     } while (result->NextRow());
 }
 
-// The bot population a BotSourced wave draws from: managed random bots, logged
-// in or not, whose level is close enough to the party's to be a fair fight.
+// The bot population a BotSourced wave draws from: managed random bots and the
+// PvP-only clone roster, logged in or not, whose level is close enough to the
+// party's to be a fair fight. Unlike battleground filling, Violet Hold is only
+// borrowing appearances/loadouts, so excluding one pool buys nothing and can
+// turn every ordinary wave into the same party fallback.
 //
 // Widening RINGS rather than one strict band and then anybody. The old
 // fallback took every online bot the moment the strict band came up empty,
@@ -177,14 +168,10 @@ void RefreshOfflineWaveBotsIfStale()
 // party itself, which is level-appropriate by definition - a better answer
 // than a mismatched stranger, and the wave still cannot stall.
 //
-// pvpOnlyPool (DrawsFromPvpOnlyPool): the bracket reaches the level cap, so the
-// PvP-only characters are the whole population and nobody else is offered.
-//
 // exactRange: a custom game's host chose the levels. Only bots inside
-// [partyMinLevel, partyMaxLevel] count - no widening rings - and both pools are
-// offered, since the host's range need not match the bracket's pool.
+// [partyMinLevel, partyMaxLevel] count - no widening rings.
 std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 partyMaxLevel, bool includeOffline,
-    bool pvpOnlyPool, bool exactRange = false)
+    bool exactRange = false)
 {
     // Disjoint rings: a bot lands in the tightest one that contains it, so
     // returning the first non-empty ring returns the closest match available.
@@ -217,9 +204,6 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
             if (!playerbot::IsManagedRandomBot(candidate))
                 continue;
 
-            if (!exactRange && pvpOnlyPool != playerbot::PveManager::IsPvpOnlyBot(candidate))
-                continue;
-
             // A bot already inside a battleground or arena is mid-match somewhere;
             // cloning it works, but its double walking out of a cell while the
             // original fights elsewhere reads as a bug to anyone who knows it.
@@ -238,9 +222,6 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
         RefreshOfflineWaveBotsIfStale();
         for (OfflineWaveBot const& bot : g_OfflineWaveBots)
         {
-            if (!exactRange && pvpOnlyPool != bot.pvpOnly)
-                continue;
-
             size_t const ring = ringOf(bot.level);
             if (ring >= kBands.size())
                 continue;
@@ -259,16 +240,19 @@ std::vector<ObjectGuid> CollectBotWaveSources(uint32 partyMinLevel, uint32 party
         if (onlineRings[ring].empty() && offlineRings[ring].empty())
             continue;
 
+        // An online source is immediately cloneable and cannot time out into
+        // a Dark-party fallback. Use the closest online ring by itself when
+        // it exists; offline loads are the fallback for an empty online ring.
+        if (!onlineRings[ring].empty())
+            return std::move(onlineRings[ring]);
+
         std::vector<ObjectGuid>& offline = offlineRings[ring];
         if (offline.size() > kMaxOfflineSourcesPerWave)
         {
             Trinity::Containers::RandomShuffle(offline);
             offline.resize(kMaxOfflineSourcesPerWave);
         }
-
-        std::vector<ObjectGuid> sources = std::move(onlineRings[ring]);
-        sources.insert(sources.end(), offline.begin(), offline.end());
-        return sources;
+        return std::move(offline);
     }
 
     return {};
@@ -410,7 +394,7 @@ void FulfilAllyRequests(BattlegroundVHR* bg)
         }
 
         std::vector<ObjectGuid> bots = CollectBotWaveSources(request.partyMinLevel, request.partyMaxLevel,
-            loadSession != nullptr, DrawsFromPvpOnlyPool(bg));
+            loadSession != nullptr);
         Player* source = nullptr;
         ObjectGuid offlineSource;
         while (!bots.empty() && !source && !offlineSource)
@@ -734,9 +718,9 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
         bool const hostRange = request->hostBotMinLevel != 0;
         std::vector<ObjectGuid> bots = hostRange
             ? CollectBotWaveSources(request->hostBotMinLevel, request->hostBotMaxLevel, loadSession != nullptr,
-                false, true)
+                true)
             : CollectBotWaveSources(request->partyMinLevel, request->partyMaxLevel,
-                loadSession != nullptr, DrawsFromPvpOnlyPool(bg));
+                loadSession != nullptr);
         if (!bots.empty())
         {
             // Shuffle and deal without repeats until the pool runs dry, so a

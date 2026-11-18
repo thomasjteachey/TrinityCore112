@@ -220,6 +220,11 @@ enum BG_VHR_Constants
     BG_VHR_MONO_WAVE_CHANCE_PERMILLE   = 25,
     BG_VHR_ROSTER_WAVE_CHANCE_PERMILLE = 25,
 
+    // Deliberately party-mirrored waves are seasoning. After one appears,
+    // deal at least this many bot-sourced waves before another party mirror
+    // may roll, so independent RNG cannot clump the same solo reflection.
+    BG_VHR_PARTY_WAVE_COOLDOWN = 3,
+
     // How close a player has to be to a cell's release point to be pushed off
     // it when that cell is chosen. Checked once, as the wave is composed.
     BG_VHR_SPAWN_CLEAR_RADIUS = 15,
@@ -857,6 +862,7 @@ private:
 
     uint32 _waveNumber;
     uint32 _highestWaveCleared;
+    uint32 _lastPartyWave;
     WaveState _waveState;
     uint32 _prepTimerMs;
     // Last whole second announced during the prep window, so the countdown
