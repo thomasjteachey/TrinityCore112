@@ -1238,6 +1238,14 @@ void Spell::SelectImplicitChannelTargets(SpellEffectInfo const& spellEffectInfo,
     Spell* channeledSpell = m_originalCaster->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
     if (!channeledSpell)
     {
+        // Violet Hold Unending Volley: the channel ended when the area was
+        // placed, so a tick of its damage lands on the hunter's Volley area.
+        if (targetType.GetTarget() == TARGET_DEST_CHANNEL_TARGET)
+            if (WorldObject* volley = VioletHoldClassBoons::GetUnendingVolleyArea(m_originalCaster, m_spellInfo))
+            {
+                m_targets.SetDst(*volley);
+                return;
+            }
         TC_LOG_DEBUG("spells", "Spell::SelectImplicitChannelTargets: cannot find channel spell for spell ID {}, effect {}", m_spellInfo->Id, uint32(spellEffectInfo.EffectIndex));
         return;
     }

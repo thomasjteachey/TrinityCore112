@@ -8,6 +8,7 @@
 #include "BattlegroundVHR.h"
 #include "CellImpl.h"
 #include "DBCStores.h"
+#include "DynamicObject.h"
 #include "GameObject.h"
 #include "GameTime.h"
 #include "GridNotifiers.h"
@@ -491,7 +492,10 @@ void OnStripped(Player* player)
 
     if (Holds(player, SPELL_UNENDING_VOLLEY))
         for (uint32 spellId : VolleyRanks)
+        {
             player->RemoveDynObject(spellId);
+            player->RemoveAurasDueToSpell(spellId, player->GetGUID());
+        }
 
     if (Holds(player, SPELL_WAR_BANNER))
         RemoveWarBanner(player);
@@ -696,8 +700,13 @@ void BeforeUnendingVolleyPlaced(Unit* caster)
 {
     if (!caster)
         return;
+    // The old area and its firing aura on the hunter (the new cast's aura
+    // lands after this, from the same cast's target phase).
     for (uint32 spellId : VolleyRanks)
+    {
         caster->RemoveDynObject(spellId);
+        caster->RemoveAurasDueToSpell(spellId, caster->GetGUID());
+    }
 }
 
 void MakeUnendingVolleyPermanent(Unit const* caster, SpellInfo const* spellInfo, Aura* aura)
@@ -706,6 +715,18 @@ void MakeUnendingVolleyPermanent(Unit const* caster, SpellInfo const* spellInfo,
         return;
     aura->SetMaxDuration(-1);
     aura->SetDuration(-1);
+}
+
+WorldObject* GetUnendingVolleyArea(Unit const* caster, SpellInfo const* spellInfo)
+{
+    // The rank's damage spell ("Volley", hunter family), fired by the hunter's
+    // own periodic aura after the channel ended at placement.
+    if (!caster || !spellInfo || !spellInfo->HasEffect(SPELL_EFFECT_SCHOOL_DAMAGE) || !IsUnendingVolley(caster, spellInfo))
+        return nullptr;
+    for (uint32 spellId : VolleyRanks)
+        if (DynamicObject* area = caster->GetDynObject(spellId))
+            return area;
+    return nullptr;
 }
 
 bool ShootsAllies(WorldObject const* caster, SpellInfo const* spellInfo)
@@ -2204,7 +2225,12 @@ bool AbsorbsEverySchool(AuraEffect const* absorb)
 
 bool MakesAuraEndless(Unit const* caster, SpellInfo const* spellInfo)
 {
-    if (!caster || !spellInfo || caster->GetClass() != CLASS_DRUID || spellInfo->SpellFamilyName != SPELLFAMILY_DRUID)
+    if (!caster || !spellInfo)
+        return false;
+    // Unending Volley: the hunter's own firing aura lasts as long as the area.
+    if (IsUnendingVolley(caster, spellInfo))
+        return true;
+    if (caster->GetClass() != CLASS_DRUID || spellInfo->SpellFamilyName != SPELLFAMILY_DRUID)
         return false;
     return (NameIs(spellInfo, "Rip") || NameIs(spellInfo, "Rejuvenation") || NameIs(spellInfo, "Moonfire"))
         && Holds(caster, SPELL_ENDLESS_CYCLE);

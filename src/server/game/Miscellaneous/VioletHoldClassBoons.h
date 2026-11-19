@@ -293,9 +293,15 @@ namespace VioletHoldClassBoons
     TC_GAME_API bool BarrageAvoidsTarget(Unit const* caster, SpellInfo const* spellInfo, Unit const* target);
     // Unending Volley: the channel becomes a placed permanent dynamic aura.
     // A new Volley removes every older rank first, so recasting moves it.
+    // The damage is not the ground aura (a dummy) but the hunter's own
+    // periodic aura, which fires the rank's damage spell every second at the
+    // CHANNEL destination. With no channel left, MakesAuraEndless keeps that
+    // aura up and Spell::SelectImplicitChannelTargets asks
+    // GetUnendingVolleyArea where to land it: the hunter's Volley area.
     TC_GAME_API bool IsUnendingVolley(Unit const* caster, SpellInfo const* spellInfo);
     TC_GAME_API void BeforeUnendingVolleyPlaced(Unit* caster);
     TC_GAME_API void MakeUnendingVolleyPermanent(Unit const* caster, SpellInfo const* spellInfo, Aura* aura);
+    TC_GAME_API WorldObject* GetUnendingVolleyArea(Unit const* caster, SpellInfo const* spellInfo);
     // Trapper (as well as the trap rules above): a holder's Freezing Trap does not break on damage
     // (Unit::RemoveAurasWithInterruptFlags, AURA_INTERRUPT_FLAG_TAKE_DAMAGE).
     // Woolen Prison: nor does a holder's Polymorph.
