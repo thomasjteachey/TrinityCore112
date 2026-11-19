@@ -318,11 +318,12 @@ class spell_vhr_second_coming : public SpellScript
     }
 };
 
-// Boon of Serenity: once per wave, Tranquility heals everything its whole
-// channel would have, at once, to every party member in its radius - then the
-// channel ends. The charge for it is SPELL_SERENITY_READY, which also made the
-// cast free (its -100% cost spellmod, read when the cast began); this spends
-// it. Without the charge Tranquility is the ordinary channel.
+// Boon of Serenity: Tranquility heals everything its whole channel would
+// have, at once, to every party member in its radius - then the channel ends.
+// The charge for it is SPELL_SERENITY_READY, which also makes the cast free
+// (its -100% cost spellmod, read when the cast began). Since 2026-11-19 the
+// cast no longer spends it: every Tranquility does this. Without the charge
+// (boon gone) Tranquility is the ordinary channel.
 class spell_vhr_serenity : public SpellScript
 {
     PrepareSpellScript(spell_vhr_serenity);
@@ -335,7 +336,6 @@ class spell_vhr_serenity : public SpellScript
         if (!caster || GetHitUnit() != caster || !aura || !caster->HasAura(SPELL_SERENITY)
             || !caster->HasAura(SPELL_SERENITY_READY))
             return;
-        caster->RemoveAurasDueToSpell(SPELL_SERENITY_READY);
 
         AuraEffect const* heal = nullptr;
         for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)

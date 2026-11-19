@@ -167,7 +167,7 @@ namespace VioletHoldBoons
         EternalPact,    // warlock: the demon returns at once when it dies (20 sec)
         Untamed,        // druid: shapeshift out of stun / fear
         Wellspring,     // druid: below 50% mana -> 5 sec party Innervate (once per wave)
-        Serenity,       // druid: once per wave Tranquility is free and lands all at once
+        Serenity,       // druid: Tranquility is free and lands all at once
         Stormcaller,    // shaman: Purge removes every magic buff
         TotemLord,      // shaman: totems follow, never expire, no shared slots
         Ancestors,      // shaman: once per wave a killing blow Reincarnates you on the spot (Phoenix-style)

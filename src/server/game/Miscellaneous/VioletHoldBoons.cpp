@@ -56,6 +56,9 @@ constexpr uint32 MASK_MELEE = MASK_ALL & ~(ClassBit(CLASS_PRIEST) | ClassBit(CLA
 // Flurry's proc only answers melee swings (ProcTypeMask 0x14), so hunters,
 // whose crit and haste boons do reach their shots, get nothing from it.
 constexpr uint32 MASK_SWING = MASK_MELEE & ~ClassBit(CLASS_HUNTER);
+// Classes a disarm actually takes something from: the melee classes but the
+// druid (forms, no weapon to lose) and the hunter (fights with the bow).
+constexpr uint32 MASK_ARMED = MASK_MELEE & ~(ClassBit(CLASS_DRUID) | ClassBit(CLASS_HUNTER));
 
 // Classes with real spellcasting: cast time, spell crit and doublecast. Hunters
 // are out - their shots are ranged-class and scale off ranged haste/crit.
@@ -136,7 +139,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Clearcasting, SPELL_BOON_CLEARCASTING, 5,  40, MASK_ALL,      5, "Boon of Clearcasting", "chance on damage or healing that your next spell or ability costs nothing", "%" },
     { Boon::Viper,        SPELL_BOON_VIPER,        5,  25, MASK_MANA,     6, "Boon of the Viper",    "of damage dealt returned to you as mana", "%" },
     { Boon::Protector,    SPELL_BOON_PROTECTOR,   10, 100, MASK_ALL,      8, "Boon of the Protector", "armor",                                  "%" },
-    { Boon::Weaponmaster, SPELL_BOON_WEAPONMASTER, 10, 90, MASK_MELEE,    4, "Boon of the Weaponmaster", "shorter disarms on you",              "%" },
+    { Boon::Weaponmaster, SPELL_BOON_WEAPONMASTER, 10, 90, MASK_ARMED,    4, "Boon of the Weaponmaster", "shorter disarms on you",              "%" },
     { Boon::Aggression,   SPELL_BOON_AGGRESSION,   5,  50, MASK_ALL,      6, "Boon of Aggression",   "less healing received by whatever you hit (10 sec)", "%" },
     { Boon::Healthstone,  SPELL_BOON_HEALTHSTONE,  1,   1, MASK_ALL,      4, "Boon of the Healthstone", "never used up, lasts the run (unique)", "" },
 
@@ -191,7 +194,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::EternalPact,   94360, 1, 1, ClassBit(CLASS_WARLOCK), 0, "Boon of the Eternal Pact",  "your demon comes back at once when it dies - no cast, no Soul Shard (once every 20 sec)", "" },
     { Boon::Untamed,       94361, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Untamed",       "you can shapeshift while stunned or feared, and the shift breaks it", "" },
     { Boon::Wellspring,    94362, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Wellspring",    "falling below 50% mana gives you and your party a 5 sec Innervate (once per wave)", "" },
-    { Boon::Serenity,      94363, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Serenity",          "once per wave, Tranquility costs no mana and heals its full amount at once, with no channel", "" },
+    { Boon::Serenity,      94363, 1, 1, ClassBit(CLASS_DRUID),   0, "Boon of Serenity",          "Tranquility costs no mana and heals its full amount at once, with no channel", "" },
     { Boon::Stormcaller,   94364, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Stormcaller",   "Purge steals every magic buff on the target", "" },
     { Boon::TotemLord,     94365, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Totem Lord",    "your totems slowly follow you, never expire and no longer share a slot by element", "" },
     { Boon::Ancestors,     94366, 1, 1, ClassBit(CLASS_SHAMAN),  0, "Boon of the Ancestors",     "once per wave a killing blow Reincarnates you on the spot instead (no cooldown, no Ankh; Improved Reincarnation adds to it)", "" },
@@ -1344,7 +1347,7 @@ bool SuitsSpec(Player const* player, Offer const& offer)
     // and energy are the druid's cat and bear forms, so they go with melee.
     // Mana stays for everyone: a Feral druid still shifts on it.
     uint32 const mask = kBoons[offer.index].classMask;
-    bool const meleeBoon = mask == MASK_MELEE || mask == MASK_SWING || mask == MASK_RAGE || mask == MASK_ENERGY;
+    bool const meleeBoon = mask == MASK_MELEE || mask == MASK_SWING || mask == MASK_ARMED || mask == MASK_RAGE || mask == MASK_ENERGY;
     if (!meleeBoon && mask != MASK_CASTER && mask != MASK_GALE)
         return true;
 

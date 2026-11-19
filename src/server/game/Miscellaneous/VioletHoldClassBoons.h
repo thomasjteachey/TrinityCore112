@@ -98,10 +98,11 @@ namespace VioletHoldClassBoons
         SPELL_SERENITY_HEAL     = 94370,   // Tranquility, all at once
         SPELL_WELLSPRING_MANA   = 94371,   // the 5 sec Innervate
 
-        // Serenity's once-per-wave charge: while it is up Tranquility costs
-        // nothing (its own -100% cost spellmod, so the client agrees) and lands
-        // all at once; the cast spends it. Given on taking the boon and as
-        // every wave falls (OnWaveRestored).
+        // Serenity's charge: while it is up Tranquility costs nothing (its own
+        // -100% cost spellmod, so the client agrees) and lands all at once.
+        // Given on taking the boon (and topped up as every wave falls,
+        // OnWaveRestored); since 2026-11-19 no cast spends it, so it works on
+        // every Tranquility. Death-persistent; OnStripped takes it away.
         SPELL_SERENITY_READY    = 94382,
 
         // The second artifact block (the first party-oriented additions).
