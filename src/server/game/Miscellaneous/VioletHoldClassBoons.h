@@ -498,8 +498,10 @@ namespace VioletHoldClassBoons
     // Alpha: Unit::SetMinion (via VioletHoldBoons::OnMinionAdded) - a holder's
     // hunter pet gets SPELL_ALPHA_PET, anything else loses it.
     TC_GAME_API void OnMinionAdded(Player* owner, Unit* minion);
-    // Butcher: Spell::_handle_finish_phase, a finishing move is done - one
-    // combo point goes instead of all of them.
+    // Butcher: Spell::_handle_finish_phase, a finishing move is done - at
+    // most BUTCHER_COMBO_POINTS go instead of all of them (the finisher itself
+    // already counted every point).
+    constexpr int8 BUTCHER_COMBO_POINTS = 2;
     TC_GAME_API void SpendComboPoints(Unit* caster);
     // Long Reach: Unit::GetMeleeRange (auto attack and the server's melee
     // spell range). The record aura's +10 yd SPELLMOD_RANGE tells the client.

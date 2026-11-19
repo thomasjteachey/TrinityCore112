@@ -236,7 +236,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::SwiftLight,     SPELL_BOON_SWIFT_LIGHT,     1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Swift Light",      "Flash of Light is instant and has its own global cooldown", "" },
     { Boon::Sacrifice,      SPELL_BOON_SACRIFICE,       1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Sacrifice",        "your Hand of Sacrifice cannot be dispelled and lasts 3 min", "" },
     { Boon::Alpha,          SPELL_BOON_ALPHA,           1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Alpha",        "your pet moves 500% faster, deals 50% more damage and cannot be crowd controlled", "" },
-    { Boon::Butcher,        SPELL_BOON_BUTCHER,         1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Butcher",      "your finishing moves spend only 1 combo point, however many you have", "" },
+    { Boon::Butcher,        SPELL_BOON_BUTCHER,         1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Butcher",      "your finishing moves spend at most 2 combo points, however many you have", "" },
     { Boon::LongReach,      SPELL_BOON_LONG_REACH,      1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Long Reach",   "your melee attacks and melee abilities reach 10 yd farther", "" },
     { Boon::Diversion,      SPELL_BOON_DIVERSION,       1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of Diversion",        "Distract stuns every enemy in its area for 6 sec", "" },
     { Boon::Shadowstalker,  SPELL_BOON_SHADOWSTALKER,   1, 1, ClassBit(CLASS_ROGUE),   0, "Boon of the Shadowstalker", "any killing blow puts you back in Stealth and makes you immune to all damage and effects for 3 sec", "" },

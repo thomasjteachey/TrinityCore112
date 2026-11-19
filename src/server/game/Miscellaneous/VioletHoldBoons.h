@@ -215,7 +215,7 @@ namespace VioletHoldBoons
         SwiftLight,     // paladin: Flash of Light instant, on its own global cooldown
         Sacrifice,      // paladin, party: Hand of Sacrifice undispellable, 3 min
         Alpha,          // hunter: pet +500% speed, +50% damage, crowd-control immune
-        Butcher,        // rogue: finishing moves spend only 1 combo point
+        Butcher,        // rogue: finishing moves spend at most 2 combo points
         LongReach,      // rogue: melee and melee abilities reach 10 yd farther
         Diversion,      // rogue: Distract stuns every enemy in its area for 6 sec
         Shadowstalker,  // rogue: a killing blow restealths you, 3 sec total immunity

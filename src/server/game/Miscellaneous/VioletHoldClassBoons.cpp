@@ -1928,8 +1928,8 @@ void SpendComboPoints(Unit* caster)
 {
     if (!caster)
         return;
-    if (caster->GetClass() == CLASS_ROGUE && caster->GetComboPoints() > 1 && Holds(caster, SPELL_BUTCHER))
-        caster->AddComboPoints(-1);
+    if (caster->GetClass() == CLASS_ROGUE && caster->GetComboPoints() > BUTCHER_COMBO_POINTS && Holds(caster, SPELL_BUTCHER))
+        caster->AddComboPoints(-BUTCHER_COMBO_POINTS);
     else
         caster->ClearComboPoints();
 }
