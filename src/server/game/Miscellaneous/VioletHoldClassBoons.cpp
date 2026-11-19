@@ -1062,6 +1062,12 @@ void OnUnitDying(Unit* victim, Unit* attacker)
     if (Unit* shaman = SpellMirrorOwner(victim))
         ResetGroundingTotem(shaman);
 
+    // Unending Volley stops with its hunter: death takes the firing aura, so
+    // the area goes too rather than raining for nothing until the next cast.
+    if (victim->GetClass() == CLASS_HUNTER && Holds(victim, SPELL_UNENDING_VOLLEY))
+        for (uint32 spellId : VolleyRanks)
+            victim->RemoveDynObject(spellId);
+
     // Vengeance: every kill while berserk heals the warrior (a pet's kill counts).
     if (Unit* killer = attacker ? attacker->GetCharmerOrOwnerOrSelf() : nullptr)
         if (killer != victim && killer->IsAlive() && killer->HasAura(SPELL_VENGEANCE_FURY))
