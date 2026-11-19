@@ -266,7 +266,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // The eighth block, spells 94454-94456 in this order.
     { Boon::InnerLight,     SPELL_BOON_INNER_LIGHT,     1, 1, ClassBit(CLASS_PRIEST),  0, "Boon of the Inner Light",  "Inner Fire can be cast on an ally: cast it with a friendly player targeted and it goes to them", "" },
     { Boon::ElementalWard,  SPELL_BOON_ELEMENTAL_WARD,  1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Elemental Ward", "Fire Ward and Frost Ward absorb every school and five times as much", "" },
-    { Boon::EndlessCycle,   SPELL_BOON_ENDLESS_CYCLE,   1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Endless Cycle", "Rip, Rejuvenation and Moonfire's burn never end", "" },
+    { Boon::EndlessCycle,   SPELL_BOON_ENDLESS_CYCLE,   1, 1, ClassBit(CLASS_DRUID),   0, "Boon of the Endless Cycle", "Rip and Moonfire's burn never end, and none of your effects can be dispelled", "" },
 
     // The ninth block, spells 94457-94459 in this order.
     { Boon::WoolenPrison,   SPELL_BOON_WOOLEN_PRISON,   1, 1, ClassBit(CLASS_MAGE),    0, "Boon of the Woolen Prison", "Polymorph no longer breaks from damage and no longer regenerates the target's health", "" },

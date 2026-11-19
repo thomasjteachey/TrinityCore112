@@ -247,7 +247,7 @@ namespace VioletHoldBoons
         // Eighth block (records 94454-94456, in this order; keep contiguous).
         InnerLight,      // priest, party: Inner Fire can be cast on an ally
         ElementalWard,   // mage: Fire Ward and Frost Ward absorb every school, five times as much
-        EndlessCycle,    // druid: Rip, Rejuvenation and Moonfire never end
+        EndlessCycle,    // druid: Rip and Moonfire never end; nothing the druid casts can be dispelled
 
         // Ninth block (records 94457-94459, in this order; keep contiguous).
         WoolenPrison,    // mage: Polymorph holds through damage and stops health regeneration

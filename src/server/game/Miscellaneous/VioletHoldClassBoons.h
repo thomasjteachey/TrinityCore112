@@ -586,7 +586,8 @@ namespace VioletHoldClassBoons
     // absorbs whatever school hits.
     TC_GAME_API bool AbsorbsEverySchool(AuraEffect const* absorb);
     // Endless Cycle: Spell::DoSpellEffectHit (PreprocessSpellHitTarget's aura
-    // duration) - a holder's Rip, Rejuvenation and Moonfire land permanent.
+    // duration) - a holder's Rip and Moonfire land permanent. (Its other half,
+    // nothing the druid casts can be dispelled, is in IsUndispellable.)
     TC_GAME_API bool MakesAuraEndless(Unit const* caster, SpellInfo const* spellInfo);
 
     // ---- the ninth block (2026-11-18) --------------------------------------

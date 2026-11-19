@@ -1019,7 +1019,13 @@ bool IsUndispellable(Aura const* aura, Unit const* auraTarget)
         return Holds(aura->GetCaster(), SPELL_SACRIFICE);
     // Wild Kinship: and a holder's Mark (or Gift) of the Wild.
     if (Is(aura->GetSpellInfo(), SPELLFAMILY_DRUID, "Mark of the Wild") || Is(aura->GetSpellInfo(), SPELLFAMILY_DRUID, "Gift of the Wild"))
-        return Holds(aura->GetCaster(), SPELL_WILD_KINSHIP);
+        if (Holds(aura->GetCaster(), SPELL_WILD_KINSHIP))
+            return true;
+    // Endless Cycle: nothing a holder druid casts comes off by dispel, purge
+    // or steal - helpful or harmful.
+    if (Unit const* druid = aura->GetCaster())
+        if (druid->GetClass() == CLASS_DRUID && Holds(druid, SPELL_ENDLESS_CYCLE))
+            return true;
     if (aura->GetSpellInfo()->IsPositive())
         return false;
     if (auraTarget && aura->GetCasterGUID() == auraTarget->GetGUID())
@@ -2238,8 +2244,7 @@ bool MakesAuraEndless(Unit const* caster, SpellInfo const* spellInfo)
         return true;
     if (caster->GetClass() != CLASS_DRUID || spellInfo->SpellFamilyName != SPELLFAMILY_DRUID)
         return false;
-    return (NameIs(spellInfo, "Rip") || NameIs(spellInfo, "Rejuvenation") || NameIs(spellInfo, "Moonfire"))
-        && Holds(caster, SPELL_ENDLESS_CYCLE);
+    return (NameIs(spellInfo, "Rip") || NameIs(spellInfo, "Moonfire")) && Holds(caster, SPELL_ENDLESS_CYCLE);
 }
 
 // ---- the ninth block (2026-11-18) ----------------------------------------
