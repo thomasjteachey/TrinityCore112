@@ -4119,8 +4119,40 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         else
             playerbot::LockedErase(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
 
-        if (!flag->IsAtInteractDistance(player))
+        // A flag behind a lock is taken the way the client takes it for a
+        // player: by casting the lock's spell, not by clicking. Eye of the
+        // Storm's centre flag carries Lock 1479, which a player opens with the
+        // 10-second, interruptible Opening (21651); GameObject::Use skips the
+        // cast and handed bots that flag on the spot. A flag with no lock -
+        // every dropped flag, and every other stand bots go for - is a click.
+        SpellInfo const* const lockSpell = flag->GetSpellForLock(player);
+        bool const inReach = lockSpell ? flag->IsAtInteractDistance(player, lockSpell) : flag->IsAtInteractDistance(player);
+        if (!inReach)
             return IssueMovePointThrottled(player, flag->GetPosition(), 6.0f, 500) || player->isMoving();
+
+        if (lockSpell)
+        {
+            // Recasting would restart the cast from zero; hold until it lands
+            // or the spell system interrupts it.
+            if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
+                return true;
+
+            // GameObject::Use strips these for a click; a cast has to be
+            // allowed to start (a mount refuses it outright).
+            if (player->IsMounted())
+                ForcePlayerbotDismount(player);
+            if (player->GetShapeshiftForm() != FORM_NONE &&
+                lockSpell->CheckShapeshift(player->GetShapeshiftForm()) != SPELL_CAST_OK)
+                player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+
+            StopVirtualPlayerbotMovement(player);
+            player->AttackStop();
+            SpellCastResult const castResult = player->CastSpell(flag, lockSpell->Id, false);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP flag pickup cast: guid={} flag_guid={} spell={} result={}.",
+                player->GetGUID().ToString(), pickupGuid.ToString(), lockSpell->Id, static_cast<uint32>(castResult));
+            return true;
+        }
 
         // Use the object through the normal interaction path so flag-drop
         // cleanup, form/stealth handling, and battleground eligibility checks
