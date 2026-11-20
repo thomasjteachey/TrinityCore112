@@ -231,15 +231,17 @@ local SHOPCARDS = {
 	[27] = { line = "^27^B^3^0^0^S90291^Boon of the Vampire^+3%^of damage dealt returned as health^0^3^30^%^0", base = 8 },
 	[4] = { line = "^4^B^2^0^0^S90243^Boon of Haste^+6%^attack speed^0^6^255^%^0", base = 5 },
 };
--- list: { { code, waves discounted }, ... }
-local function shopDeal(shards, list)
+-- list: { { code, waves discounted [, locked by, locked by me (1/0)] }, ... }
+-- extra: "^<reroll cost>^<free rerolls>^<locks used>^<locks>^<interest>" (default: 2 shards, nothing held)
+local function shopDeal(shards, list, extra)
 	fire("VHBOON:DEAL:" .. SHOPTAG .. "^9^25^0^0^0^0^0^Baku^4^Kaelen^7");
-	fire("VHBOON:SHOP:" .. SHOPTAG .. "^" .. shards .. "^4^1^50^25");
+	fire("VHBOON:SHOP:" .. SHOPTAG .. "^" .. shards .. "^4^1^50^25" .. (extra or "^2^0^0^0^0"));
 	for _, entry in ipairs(list) do
 		local def = SHOPCARDS[entry[1]];
 		local price = math.max(1, math.floor(def.base * 0.75 ^ entry[2] + 0.5));
 		fire("VHBOON:CARD:" .. SHOPTAG .. def.line);
-		fire("VHBOON:PRICE:" .. SHOPTAG .. "^" .. entry[1] .. "^" .. price .. "^" .. def.base .. "^" .. entry[2]);
+		fire("VHBOON:PRICE:" .. SHOPTAG .. "^" .. entry[1] .. "^" .. price .. "^" .. def.base .. "^" .. entry[2]
+			.. "^" .. (entry[3] or "") .. "^" .. (entry[4] or 0));
 	end
 	fire("VHBOON:SHOW:" .. SHOPTAG);
 end
@@ -307,6 +309,33 @@ check(frame.shown and #cards() == 5, "/vhdraft shop shows five cards (got " .. #
 check(flagOf(27) == "CHEAPER" and flagOf(208) == "NEW", "the demo shows both tags");
 take.scripts.OnClick(take);
 check(frame.shown and #sent == before and heard("LOOTWINDOWCOINSOUND"), "the shop demo buys locally and never talks to the server");
+frame:Hide();
+
+-- Reroll and locks (Boon of Safekeeping, Boon of the Gambler)
+shopDeal(10, { { 302, 0, "Baku", 1 }, { 4, 0 }, { 27, 2, "Kaelen", 0 } }, "^2^0^1^3^1");
+local rerollButton = button("Reroll");
+check(rerollButton and rerollButton.shown and rerollButton.enabled and rerollButton.text == "Reroll  ·  2 shards",
+	"Reroll shows its price (got " .. tostring(rerollButton and rerollButton.text) .. ")");
+local myLock, theirLock, freeLock = card(302).col.lock, card(27).col.lock, card(4).col.lock;
+check(myLock.shown and myLock.clickable, "your lock shows and can be taken off");
+check(theirLock.shown and not theirLock.clickable, "a party member's lock shows and cannot be touched");
+check(freeLock.shown and freeLock.clickable, "with a lock to spare, an open card can be locked");
+check(string.find(theirLock.tip or "", "Kaelen", 1, true), "the lock says whose it is");
+myLock.scripts.OnClick(myLock);
+check(lastSent() == "VHBOON:LOCK:" .. SHOPTAG .. ":302", "clicking your lock sends LOCK (got " .. tostring(lastSent()) .. ")");
+card(27).scripts.OnClick(card(27));
+rerollButton.scripts.OnClick(rerollButton);
+check(lastSent() == "VHBOON:REROLL:" .. SHOPTAG .. ":0", "Reroll sends REROLL (got " .. tostring(lastSent()) .. ")");
+check(not rerollButton.enabled and rerollButton.text == "Rerolling...", "Reroll waits for the new board");
+now = now + 3;
+frame.scripts.OnUpdate(frame);
+check(rerollButton.enabled, "a reroll nobody answers stops waiting");
+
+shopDeal(1, { { 302, 0 }, { 4, 0 } });
+check(not rerollButton.enabled, "Reroll is off when you cannot pay for it");
+check(not card(302).col.lock.shown and not card(4).col.lock.shown, "no padlocks without Boon of Safekeeping");
+shopDeal(0, { { 302, 0 }, { 4, 0 } }, "^0^1^0^0^0");
+check(rerollButton.enabled and rerollButton.text == "Reroll (free)", "a Gambler reroll is free, shards or not (got " .. tostring(rerollButton.text) .. ")");
 frame:Hide();
 
 -- a broker after the shop: back to the plain hand

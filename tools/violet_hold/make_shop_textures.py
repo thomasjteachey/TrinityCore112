@@ -60,6 +60,15 @@ def main(out):
     write_tga(os.path.join(out, 'tagcap.tga'), 16, 32,
               coverage(lambda px, py: px >= abs(py - 16) * (16.0 / 16.0)))
 
+    # Padlock, 32x32: Boon of Safekeeping's lock on a shop card.
+    def padlock(px, py):
+        body = 7.0 <= px <= 25.0 and 15.0 <= py <= 29.0
+        d = math.hypot(px - 16.0, py - 14.0)
+        shackle = py <= 14.0 and 5.0 <= d <= 8.5
+        legs = 14.0 < py <= 16.0 and (8.0 <= px <= 11.0 or 21.0 <= px <= 24.0)
+        return body or shackle or legs
+    write_tga(os.path.join(out, 'lock.tga'), 32, 32, coverage(padlock))
+
     # Soft glow, 128x128: a flat core (hidden behind whatever it haloes),
     # then a falloff over the outer 55% so the light shows past that thing's edge.
     def glow(x, y):

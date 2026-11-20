@@ -262,6 +262,17 @@ namespace VioletHoldBoons
         SpellMirror,     // shaman: Grounding Totem reflects what it catches and dies; dying resets its cooldown
         GuardianFlame,   // shaman, party: Searing Totem hits cut the target's damage 5% for good, up to 75%
 
+        // Shop boons (2026-11-20): sold only in a shop run (BattlegroundVHR::
+        // UsesShop), never by a broker. Records 94464-94470, in this order.
+        Gambler,         // one free shop reroll every wave, per stack
+        Safekeeping,     // lock up to SAFEKEEPING_LOCKS shop cards: they never reroll, and still get cheaper
+        Tithes,          // +1 shard per stack for every cleared wave
+        Bazaar,          // RUN-WIDE: one more card in the shop for the whole party
+        Usurer,          // every cleared wave, +1 shard per USURER_SHARDS_PER held (up to USURER_MAX)
+        Bounties,        // +1 shard per stack for every killing blow
+        Haggler,         // every shop price is 1 shard less per stack, never under 1
+        Fortune,         // party-wide: rare-and-better shop cards come up FORTUNE_PCT_PER_STACK% more per stack
+
         Max
     };
 
@@ -521,6 +532,19 @@ namespace VioletHoldBoons
         SPELL_BOON_GUARDIAN_FLAME  = 94462,
         SPELL_BOON_CLASS_TENTH_LAST = 94462,
 
+        // Shop boons, Boon::Gambler .. Boon::Haggler in order. Bookkeeping
+        // records: hidden from the buff bar (Attributes 0x80).
+        SPELL_BOON_SHOP_FIRST      = 94464,
+        SPELL_BOON_GAMBLER         = 94464,
+        SPELL_BOON_SAFEKEEPING     = 94465,
+        SPELL_BOON_TITHES          = 94466,
+        SPELL_BOON_BAZAAR          = 94467,
+        SPELL_BOON_USURER          = 94468,
+        SPELL_BOON_BOUNTIES        = 94469,
+        SPELL_BOON_HAGGLER         = 94470,
+        SPELL_BOON_FORTUNE         = 94471,
+        SPELL_BOON_SHOP_LAST       = 94471,
+
         // Stock "Resurrection Impact Visual", played on a Phoenix rescue.
         SPELL_PHOENIX_VISUAL    = 24171,
 
@@ -720,6 +744,15 @@ namespace VioletHoldBoons
     // mean nothing in a run that has the shop instead (BattlegroundVHR::UsesShop).
     TC_GAME_API bool IsBrokerOnlyBoon(Boon boon);
 
+    // The shop boons (Boon::Gambler .. Boon::Fortune): offered only in a shop
+    // run, and refused anywhere else.
+    TC_GAME_API bool IsShopOnlyBoon(Boon boon);
+    // Boon of Safekeeping: how many shop cards its holder may keep locked.
+    constexpr uint32 SAFEKEEPING_LOCKS = 3;
+    // Boon of the Usurer: one shard per this many held, at most USURER_MAX.
+    constexpr uint32 USURER_SHARDS_PER = 10;
+    constexpr uint32 USURER_MAX = 5;
+
     // The card's frame colour, read off the roll weight so a card that looks
     // rare is rare in the pool: 1 common, 2 uncommon, 3 rare, 4 class spell,
     // 5 legendary (and the very-rare weight-0 boons), 6 artifact. The shop
@@ -874,12 +907,17 @@ namespace VioletHoldBoons
 
     // How much one stack reads as on cards and in the deck: Tempo's 125 ms,
     // Devastation's 15%, and 1 for every other boon.
+    // Boon of Fortune: each stack anyone in the party holds makes the shop's
+    // rare-and-better cards (card tier 3+) this much more likely.
+    constexpr uint32 FORTUNE_PCT_PER_STACK = 50;
+
     inline uint32 DisplayPerStack(Boon boon)
     {
         switch (boon)
         {
             case Boon::Tempo:       return uint32(TEMPO_MS_PER_STACK);
             case Boon::Devastation: return DEVASTATION_PCT_PER_STACK;
+            case Boon::Fortune:     return FORTUNE_PCT_PER_STACK;
             default:                return 1;
         }
     }

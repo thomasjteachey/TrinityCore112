@@ -128,16 +128,18 @@ BattlegroundVHR* RunOfPlayer(Player const* player)
 //   VHBOON:REROLLED:<broker>^<name>                       its fixed hand was replaced
 // The shop keeper (a run with Centurion.VioletHold.Shop.Enable) sends the same
 // DEAL ... SHOW block, plus, right after DEAL and after each CARD:
-//   VHBOON:SHOP:<keeper>^<your shards>^<shards per wave>^<shards per killing blow>^<reroll %>^<discount %>
-//   VHBOON:PRICE:<keeper>^<code>^<price now>^<full price>^<waves discounted>
+//   VHBOON:SHOP:<keeper>^<your shards>^<your shards per wave>^<your shards per killing blow>^<reroll %>^<discount %>
+//               ^<your reroll cost>^<your free rerolls left>^<your locks in use>^<your locks>^<your interest next wave>
+//   VHBOON:PRICE:<keeper>^<code>^<your price now>^<full price>^<waves discounted>^<locked by>^<locked by you 1|0>
 // and sends the whole block again to everyone with the window open whenever
 // the board or the wallets change. A shop sends no TAKEN: buying a card keeps
 // the window open on the restocked board.
 // Addon -> server, CCGAMEREQ whispers to self:
 //   VHBOON:PICK:<broker>:<code>      (at the shop keeper, the same as BUY)
 //   VHBOON:BUY:<keeper>:<code>
+//   VHBOON:LOCK:<keeper>:<code>      (Boon of Safekeeping: lock, or unlock your own)
 //   VHBOON:LOOK:<broker>:<code>
-//   VHBOON:REROLL:<broker>:0
+//   VHBOON:REROLL:<broker>:0         (at the shop keeper: reroll the unlocked cards)
 // Codes are Offer::Encode(); CODE_NONE is "looking at nothing" - at the shop
 // keeper, also "the window is closed".
 constexpr uint32 CODE_NONE = 999;
@@ -174,7 +176,7 @@ bool IsRunWideBoon(Boon boon, Player const* viewer = nullptr)
         if (boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::SecondOpinion || boon == Boon::Crucible)
             return false;
     return boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::Fellowship || boon == Boon::Abundance
-        || boon == Boon::SecondOpinion || boon == Boon::Crucible;
+        || boon == Boon::SecondOpinion || boon == Boon::Crucible || boon == Boon::Bazaar;
 }
 
 // The card's frame colour, read off the roll weight so a card that looks rare
@@ -193,15 +195,26 @@ char const* OfferName(Offer offer)
          : GetItemGrant(offer.index).name;
 }
 
-// "8 shards", "6 shards, was 8", "free" - what a shop card costs, for the gossip line.
-std::string PriceText(VioletHoldShop::Slot const& slot)
+// "8 shards", "6 shards, was 8", "free" - what a shop card costs this viewer,
+// for the gossip line.
+std::string PriceText(VioletHoldShop::Slot const& slot, Player const* viewer)
 {
-    uint32 const price = VioletHoldShop::GetPrice(slot);
+    uint32 const price = VioletHoldShop::GetPriceFor(slot, viewer);
     if (!price)
         return "free";
     if (price < slot.basePrice)
         return Trinity::StringFormat("{} shards, was {}", price, slot.basePrice);
     return Trinity::StringFormat("{} shard{}", price, price == 1 ? "" : "s");
+}
+
+// Who holds a shop card's lock, by name ("" when nobody, or when they left).
+std::string LockerName(VioletHoldShop::Slot const& slot)
+{
+    if (!slot.lockedBy)
+        return "";
+    if (Player const* locker = ObjectAccessor::FindPlayer(slot.lockedBy))
+        return locker->GetName();
+    return "";
 }
 
 // "Boon of the Vampire" -> "Vampire", for the deck strip.
@@ -502,7 +515,9 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         if (BattlegroundVHR* run = GetRun(me); run && run->IsShopKeeper(me->GetGUID()))
         {
             Offer offer;
-            if (action >= ACTION_PICK_BASE && action < ACTION_REROLL && Offer::Decode(action - ACTION_PICK_BASE, offer))
+            if (action == ACTION_REROLL)
+                ShopReroll(player, run);
+            else if (action >= ACTION_PICK_BASE && action < ACTION_REROLL && Offer::Decode(action - ACTION_PICK_BASE, offer))
                 Buy(player, offer);
             // Back to the counter, whichever line it was.
             OnGossipHello(player);
@@ -541,6 +556,11 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
     bool Reroll(Player* player)
     {
         BattlegroundVHR* run = GetRun(me);
+        if (run && run->IsShopKeeper(me->GetGUID()))
+        {
+            ShopReroll(player, run);
+            return false;   // the board went out to every viewer already
+        }
         if (_testOwner || !MayTradeWith(player, run) || _consumed || !_rolled
             || !player->GetNPCIfCanInteractWith(me->GetGUID(), UNIT_NPC_FLAG_GOSSIP)
             || !run->SpendSecondOpinion(player))
@@ -674,7 +694,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
             return;
         }
 
-        uint32 const price = VioletHoldShop::GetPrice(shop.GetSlots()[size_t(index)]);
+        uint32 const price = VioletHoldShop::GetPriceFor(shop.GetSlots()[size_t(index)], player);
         uint32 const shards = shop.GetShards(player->GetGUID());
         // A refusal still sends the board back, so the card addon's Buy
         // button stops waiting on an answer.
@@ -713,6 +733,75 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         SendShopToViewers(run);
     }
 
+    // The board's Reroll: every card nobody has locked is drawn again, for
+    // Shop.RerollCost shards or one of the payer's free Gambler rerolls.
+    void ShopReroll(Player* player, BattlegroundVHR* run)
+    {
+        if (!run->IsShopKeeper(me->GetGUID()) || !MayTradeWith(player, run))
+            return;
+        WorldSession* session = player->GetSession();
+        if (!player->GetNPCIfCanInteractWith(me->GetGUID(), UNIT_NPC_FLAG_GOSSIP))
+        {
+            if (session)
+                session->SendNotification("You are too far away from the broker.");
+            SendShopBoard(player, run);
+            return;
+        }
+
+        VioletHoldShop& shop = run->GetShop();
+        uint32 const cost = shop.GetRerollCostFor(player);
+        std::vector<Player const*> roster;
+        CollectRoster(run, roster);
+        if (!shop.Reroll(player, roster))
+        {
+            if (session)
+                session->SendNotification("You need %u more shards to reroll.", cost - std::min(cost, shop.GetShards(player->GetGUID())));
+            SendShopBoard(player, run);
+            return;
+        }
+
+        if (roster.size() > 1)
+            for (Player const* member : roster)
+                if (member && member != player && member->GetSession())
+                    ChatHandler(member->GetSession()).SendSysMessage(
+                        Trinity::StringFormat("{} rerolled the shop.", player->GetName()).c_str());
+        shop.AddViewer(player->GetGUID());
+        SendShopToViewers(run);
+    }
+
+    // Boon of Safekeeping: lock a card on the board, or take your lock off it.
+    void ToggleLock(Player* player, Offer offer)
+    {
+        BattlegroundVHR* run = GetRun(me);
+        if (!run || !run->IsShopKeeper(me->GetGUID()) || !MayTradeWith(player, run))
+            return;
+
+        VioletHoldShop& shop = run->GetShop();
+        WorldSession* session = player->GetSession();
+        switch (shop.ToggleLock(player, offer))
+        {
+            case VioletHoldShop::LockResult::Locked:
+            case VioletHoldShop::LockResult::Unlocked:
+                SendShopToViewers(run);
+                return;
+            case VioletHoldShop::LockResult::NoLocks:
+                if (session)
+                    session->SendNotification("Locking a card takes the Boon of Safekeeping.");
+                break;
+            case VioletHoldShop::LockResult::AllInUse:
+                if (session)
+                    session->SendNotification("All %u of your locks are in use.", SAFEKEEPING_LOCKS);
+                break;
+            case VioletHoldShop::LockResult::NotYours:
+                if (session)
+                    session->SendNotification("Somebody else has locked that card.");
+                break;
+            default:
+                break;
+        }
+        SendShopBoard(player, run);
+    }
+
 private:
     // The shop keeper's counter: the board as cards (for the addon), then the
     // same board as a gossip list with prices (for everyone without it).
@@ -731,13 +820,23 @@ private:
         ClearGossipMenuFor(player);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG,
             Trinity::StringFormat("You have {} shards. A cleared wave pays {}, a killing blow {}.",
-                shop.GetShards(player->GetGUID()), VioletHoldShop::GetShardsPerWave(), VioletHoldShop::GetShardsPerKillingBlow()),
+                shop.GetShards(player->GetGUID()), shop.GetWavePayFor(player), shop.GetKillPayFor(player)),
             GOSSIP_SENDER_MAIN, ACTION_SHOP_WALLET);
         for (VioletHoldShop::Slot const& slot : shop.GetSlots())
-            if (slot.filled)
-                AddGossipItemFor(player, GOSSIP_ICON_VENDOR,
-                    Trinity::StringFormat("[{}] {}", PriceText(slot), DescribeOffer(player, slot.offer)),
-                    GOSSIP_SENDER_MAIN, ACTION_PICK_BASE + slot.offer.Encode());
+        {
+            if (!slot.filled)
+                continue;
+            std::string const locker = LockerName(slot);
+            AddGossipItemFor(player, GOSSIP_ICON_VENDOR,
+                Trinity::StringFormat("[{}] {}{}", PriceText(slot, player), DescribeOffer(player, slot.offer),
+                    locker.empty() ? "" : " - locked by " + locker),
+                GOSSIP_SENDER_MAIN, ACTION_PICK_BASE + slot.offer.Encode());
+        }
+        uint32 const rerollCost = shop.GetRerollCostFor(player);
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+            rerollCost ? Trinity::StringFormat("Reroll the unlocked cards ({} shards)", rerollCost)
+                       : std::string("Reroll the unlocked cards (free)"),
+            GOSSIP_SENDER_MAIN, ACTION_REROLL);
 
         SendGossipMenuFor(player, NPC_TEXT_BOON_BROKER, me->GetGUID());
         return true;
@@ -758,17 +857,21 @@ private:
             if (member && deal.size() < MAX_LINE - 20)
                 deal += Trinity::StringFormat("^{}^{}", Field(member->GetName()), uint32(member->GetClass()));
         Battleground::SendSquadFeedLine(viewer, deal);
-        Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:SHOP:{}^{}^{}^{}^{}^{}", tag,
-            shop.GetShards(viewer->GetGUID()), VioletHoldShop::GetShardsPerWave(), VioletHoldShop::GetShardsPerKillingBlow(),
-            VioletHoldShop::GetRerollChancePercent(), VioletHoldShop::GetDiscountPercent()));
+        uint32 const interest = shop.GetInterestFor(viewer);
+        Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:SHOP:{}^{}^{}^{}^{}^{}^{}^{}^{}^{}^{}", tag,
+            shop.GetShards(viewer->GetGUID()), shop.GetWavePayFor(viewer) - interest, shop.GetKillPayFor(viewer),
+            VioletHoldShop::GetRerollChancePercent(), VioletHoldShop::GetDiscountPercent(),
+            shop.GetRerollCostFor(viewer), shop.GetFreeRerollsLeft(viewer),
+            shop.GetLocksUsed(viewer->GetGUID()), shop.GetLocksMax(viewer), interest));
 
         for (VioletHoldShop::Slot const& slot : shop.GetSlots())
         {
             if (!slot.filled)
                 continue;
             Battleground::SendSquadFeedLine(viewer, CardLine(viewer, tag, slot.offer, false, roster));
-            Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:PRICE:{}^{}^{}^{}^{}", tag,
-                slot.offer.Encode(), VioletHoldShop::GetPrice(slot), slot.basePrice, uint32(slot.discounts)));
+            Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:PRICE:{}^{}^{}^{}^{}^{}^{}", tag,
+                slot.offer.Encode(), VioletHoldShop::GetPriceFor(slot, viewer), slot.basePrice, uint32(slot.discounts),
+                Field(LockerName(slot)), slot.lockedBy == viewer->GetGUID() ? 1 : 0));
         }
 
         SendDeck(viewer, tag);
@@ -1002,6 +1105,14 @@ void HandleBoonRequest(Player* sender, std::string_view argument)
         return;
     }
 
+    if (parts[0] == "LOCK")
+    {
+        Offer offer;
+        if (Offer::Decode(*code, offer))
+            ai->ToggleLock(sender, offer);
+        return;
+    }
+
     if (parts[0] != "PICK" && !buying)
         return;
 
@@ -1058,6 +1169,8 @@ public:
         {
             { "broker", HandleBroker, rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "shop",   shopTable },
+            { "event",  HandleEvent,  rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            { "next",   HandleNext,   rbac::RBAC_PERM_COMMAND_GM, Console::No },
         };
         static ChatCommandTable commandTable =
         {
@@ -1137,6 +1250,50 @@ public:
         return run;
     }
 
+    // `.vhr next`: start the next wave now (BattlegroundVHR::SkipToNextWave).
+    static bool HandleNext(ChatHandler* handler)
+    {
+        BattlegroundVHR* run = ShopRun(handler, false);
+        if (!run)
+            return false;
+        handler->SendSysMessage(run->SkipToNextWave());
+        return true;
+    }
+
+    // `.vhr event <name>`: the next wave of the run you are in gets this wave
+    // event, whatever the roll would have said (bloodmoon, quicksilver,
+    // giants, swarm, goldrush, bounty, mirror).
+    static bool HandleEvent(ChatHandler* handler, std::string name)
+    {
+        BattlegroundVHR* run = ShopRun(handler, false);
+        if (!run)
+            return false;
+
+        std::string key;
+        for (char c : name)
+            if (c != ' ' && c != '_' && c != '-')
+                key += char(std::tolower(static_cast<unsigned char>(c)));
+
+        static std::pair<char const*, VhrWaveEvent> const kNames[] =
+        {
+            { "bloodmoon", VhrWaveEvent::BloodMoon }, { "quicksilver", VhrWaveEvent::Quicksilver },
+            { "giants", VhrWaveEvent::Giants }, { "swarm", VhrWaveEvent::Swarm },
+            { "goldrush", VhrWaveEvent::GoldRush }, { "bounty", VhrWaveEvent::Bounty },
+            { "mirror", VhrWaveEvent::MirrorMatch }, { "mirrormatch", VhrWaveEvent::MirrorMatch },
+        };
+        for (auto const& [label, event] : kNames)
+            if (key == label)
+            {
+                run->ForceNextWaveEvent(event);
+                handler->PSendSysMessage("The next wave will be %s.", BattlegroundVHR::GetWaveEventName(event));
+                return true;
+            }
+
+        handler->SendSysMessage("Events: bloodmoon, quicksilver, giants, swarm, goldrush, bounty, mirror.");
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
     // `.vhr shop start`: this run becomes a shop run now, even with
     // Centurion.VioletHold.Shop.Enable off - so the shop can be tried on a
     // realm without turning it on for everybody.
@@ -1192,10 +1349,15 @@ public:
         run->CollectHumanPlayers(roster);
 
         std::vector<VioletHoldShop::Slot> const before = shop.GetSlots();
-        uint32 const perWave = VioletHoldShop::GetShardsPerWave();
+        uint32 interest = 0;
+        uint32 paidMe = 0;
         for (Player const* member : roster)
             if (member)
-                shop.AddShards(member->GetGUID(), perWave);
+            {
+                uint32 const paid = shop.PayWave(member, interest);
+                if (member == handler->GetSession()->GetPlayer())
+                    paidMe = paid;
+            }
         shop.AgeBoard(roster);
 
         uint32 rerolled = 0, cheaper = 0;
@@ -1210,8 +1372,8 @@ public:
                 ++cheaper;
         }
 
-        handler->PSendSysMessage("Shop wave: everyone got %u shards; %u card(s) rerolled, %u got %u%% cheaper.",
-            perWave, rerolled, cheaper, VioletHoldShop::GetDiscountPercent());
+        handler->PSendSysMessage("Shop wave: everyone was paid a wave (you got %u shards); %u card(s) rerolled, %u got %u%% cheaper.",
+            paidMe, rerolled, cheaper, VioletHoldShop::GetDiscountPercent());
         run->NotifyShopChanged();
         return true;
     }
@@ -1255,8 +1417,10 @@ public:
                 handler->PSendSysMessage("  %u. (empty)", index);
                 continue;
             }
-            handler->PSendSysMessage("  %u. %s - %u shards (full %u, %u wave(s) discounted)", index, OfferName(slot.offer),
-                VioletHoldShop::GetPrice(slot), slot.basePrice, uint32(slot.discounts));
+            std::string const locker = LockerName(slot);
+            handler->PSendSysMessage("  %u. %s - %u shards (full %u, %u wave(s) discounted)%s", index, OfferName(slot.offer),
+                VioletHoldShop::GetPrice(slot), slot.basePrice, uint32(slot.discounts),
+                locker.empty() ? "" : (" - locked by " + locker).c_str());
         }
 
         std::vector<Player const*> roster;

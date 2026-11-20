@@ -182,6 +182,39 @@ enum BG_VHR_Creatures
 // so whoever has the shop window open is sent it again.
 constexpr int32 BG_VHR_ACTION_SHOP_CHANGED = 1;
 
+// Random wave events (owner 2026-11-20: "roguelikey wacky events that may or
+// may not spawn"). Rolled as each wave is composed - at
+// Centurion.VioletHold.EventChancePercent, from BG_VHR_EVENT_FIRST_WAVE on,
+// never on the champion or the final wave, never the same one twice running -
+// announced with the wave, live from its gates until it falls.
+enum class VhrWaveEvent : uint8
+{
+    None = 0,
+    BloodMoon,     // everyone in the Hold deals 50% more damage
+    Quicksilver,   // everyone 50% faster, attacking and casting 20% faster
+    Giants,        // a third fewer clones, twice the size, 50% more health
+    Swarm,         // twice the clones, each at half strength
+    GoldRush,      // killing blows pay triple shards / one more broker after the wave
+    Bounty,        // one marked clone: its death pays everyone shards / one more broker
+    MirrorMatch,   // the whole wave is reflections of the party
+    Max
+};
+
+enum BG_VHR_EventConstants
+{
+    BG_VHR_EVENT_FIRST_WAVE      = 3,
+    // The event auras (Spell.dbc rows; visible, so players see what is on).
+    BG_VHR_SPELL_BLOOD_MOON      = 94472,
+    BG_VHR_SPELL_QUICKSILVER     = 94473,
+    BG_VHR_SPELL_GIANT           = 94474,
+    BG_VHR_SPELL_BOUNTY          = 94475,
+    BG_VHR_SWARM_DIMINISHED      = 50,
+    BG_VHR_GOLD_RUSH_MULTIPLIER  = 3,
+    BG_VHR_BOUNTY_SHARDS         = 10,
+    // Raid target icon on the bounty: the skull.
+    BG_VHR_BOUNTY_RAID_ICON      = 7
+};
+
 enum BG_VHR_Constants
 {
     // The final wave's clone count, for every party size, and the most any
@@ -205,6 +238,11 @@ enum BG_VHR_Constants
     // How long after the gates open the timed half of the held-back clones
     // comes out, all together.
     BG_VHR_TIMED_RESERVE_DELAY_MS = 30 * IN_MILLISECONDS,
+
+    // Of that timed group, half (rounded up) comes out together at the
+    // delay - the event - and the rest one every this often after it
+    // (owner 2026-11-20: "about half should be staggered out").
+    BG_VHR_STAGGER_RELEASE_INTERVAL_MS = 3 * IN_MILLISECONDS,
 
     // Defaults for the gates-closed preparation window and the second the
     // per-second countdown starts at; the live values are
@@ -652,6 +690,23 @@ public:
     // Centurion.VioletHold.Shop.Enable says - before the gates or mid-run.
     // Brokers already standing stay; no more come. False if it already is.
     bool StartShop();
+    // Boon of the Bazaar: one more card on the board, for everybody.
+    bool AddShopSlot();
+
+    // --- wave events -------------------------------------------------------
+    VhrWaveEvent GetWaveEvent() const { return _waveEvent; }
+    // An event aura a character must not keep outside the Hold (StripAll and
+    // the login sweep).
+    static bool HasWaveEventAura(Player const* player);
+    static void RemoveWaveEventAuras(Player* player);
+    // GM test (.vhr event <name>): the next wave gets this event.
+    void ForceNextWaveEvent(VhrWaveEvent event) { _forcedWaveEvent = event; }
+    // GM test (.vhr next): get the next wave going now. Mid-fight the wave's
+    // clones die (it clears and pays as usual) and the next one skips its
+    // preparation window; in the countdown the gates open at once. Returns
+    // what it did, for the GM.
+    char const* SkipToNextWave();
+    static char const* GetWaveEventName(VhrWaveEvent event);
 
     // The mode is fixed at the first gate opening. A broker without an owner
     // is one of the legacy shared brokers.
@@ -732,7 +787,12 @@ private:
     uint32 GetPrepWindowMs() const;
     // One clone into, or out of, the state the cells keep it in: preparation
     // aura and flag, fresh powers, and untouchable from outside.
-    void HoldWaveClone(Player* enemy);
+    // `hidden`: also out of sight (a held-back clone once the gates are open).
+    void HoldWaveClone(Player* enemy, bool hidden = false);
+    // The timed half's moment: half of it comes out at once, the rest is
+    // staggered (_staggerReleaseMs).
+    void ReleaseTimedBurst();
+    uint32 CountHeldClones(VhrCloneRelease release) const;
     void FreeWaveClone(Player* enemy);
     void CheckRunState();
 
@@ -871,6 +931,17 @@ private:
     // and final-wave warnings in a shop run, which have no brokers to count.
     void SendTextToAll(std::string const& text);
 
+    // Wave events, in the order they happen to a wave: rolled before it is
+    // composed (and resizing it), announced, set on its clones as they are
+    // seated, set on everyone as the gates open, and ended as it falls.
+    void RollWaveEvent(uint32 wave);
+    uint32 AdjustEnemyCountForEvent(uint32 count) const;
+    void AnnounceWaveEvent();
+    void ApplyWaveEventToClones();
+    void ApplyWaveEventAtGates();
+    void OnWaveEventKill(Player* victim);
+    void EndWaveEvent();
+
     uint32 GetHonorRewardForRun() const;
     void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;
     uint32 GetMoneyRewardForRun() const;
@@ -922,6 +993,9 @@ private:
     // Counts down from the gates to the AfterDelay release; 0 when there is
     // nothing waiting on it.
     uint32 _timedReleaseMs;
+    // After the timed burst: until the next staggered clone comes out; 0 when
+    // none are left.
+    uint32 _staggerReleaseMs = 0;
     // Clones belonging to the current wave, in spawn order.
     std::vector<ObjectGuid> _waveEnemies;
     // Everyone eliminated so far. Counting survivors from the roster minus this
@@ -943,6 +1017,16 @@ private:
     bool _personalBrokerMode = false;
     bool _shopMode = false;
     VioletHoldShop _shop;
+    // The current wave's event, the last wave's (never twice running), a
+    // GM's pick for the next one, the marked clone, and the brokers the
+    // event has earned for the coming reward drop.
+    VhrWaveEvent _waveEvent = VhrWaveEvent::None;
+    VhrWaveEvent _lastWaveEvent = VhrWaveEvent::None;
+    VhrWaveEvent _forcedWaveEvent = VhrWaveEvent::None;
+    ObjectGuid _bountyGuid;
+    uint32 _eventBonusBrokers = 0;
+    // .vhr next: the coming wave opens as soon as it is seated.
+    bool _skipNextPrep = false;
     std::unordered_map<ObjectGuid, ObjectGuid> _brokerOwners;
     std::unordered_map<ObjectGuid, uint32> _personalBrokerPhases;
     std::unordered_map<ObjectGuid, uint8> _personalSecondOpinionCharges;

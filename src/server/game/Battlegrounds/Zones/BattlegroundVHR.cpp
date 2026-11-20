@@ -4,7 +4,10 @@
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "CombatManager.h"
+#include "Config.h"
+#include "Containers.h"
 #include "CreatureAI.h"
+#include "Group.h"
 #include "DatabaseEnv.h"
 #include "Creature.h"
 #include "DBCStores.h"
@@ -197,6 +200,7 @@ BattlegroundVHR::BattlegroundVHR()
     _stateCheckTimerMs = 0;
     _floorCheckTimerMs = 0;
     _timedReleaseMs = 0;
+    _staggerReleaseMs = 0;
     _hasPendingRequest = false;
     _brokerBonusOffers = 0;
     _bonusBrokersPerWave = 0;
@@ -317,6 +321,7 @@ void BattlegroundVHR::Reset()
     _stateCheckTimerMs = 0;
     _floorCheckTimerMs = 0;
     _timedReleaseMs = 0;
+    _staggerReleaseMs = 0;
     _waveCells.clear();
     _waveSlots.clear();
     _waveSeatedSlots.clear();
@@ -335,6 +340,12 @@ void BattlegroundVHR::Reset()
     _personalBrokerMode = false;
     _shopMode = false;
     _shop.Reset();
+    _waveEvent = VhrWaveEvent::None;
+    _lastWaveEvent = VhrWaveEvent::None;
+    _forcedWaveEvent = VhrWaveEvent::None;
+    _bountyGuid.Clear();
+    _eventBonusBrokers = 0;
+    _skipNextPrep = false;
     _brokerOwners.clear();
     _personalBrokerPhases.clear();
     _personalSecondOpinionCharges.clear();
@@ -556,7 +567,7 @@ uint32 BattlegroundVHR::GetOpeningCountForWave(uint32 wave) const
 void BattlegroundVHR::BeginWave()
 {
     uint32 const nextWave = _waveNumber + 1;
-    uint32 const enemyCount = GetEnemyCountForWave(nextWave);
+    uint32 enemyCount = GetEnemyCountForWave(nextWave);
 
     // Clearing BG_VHR_FINAL_WAVE is the win condition. The cap test is only a
     // guard: the curve lands on exactly BG_VHR_MAX_ENEMIES at the final wave.
@@ -566,6 +577,10 @@ void BattlegroundVHR::BeginWave()
         return;
     }
 
+    // A wave event, if one comes up, may resize the wave (Giants, Swarm).
+    RollWaveEvent(nextWave);
+    enemyCount = AdjustEnemyCountForEvent(enemyCount);
+
     _waveNumber = nextWave;
     _humanDiedThisWave = false;
     _waveEnemies.clear();
@@ -574,8 +589,15 @@ void BattlegroundVHR::BeginWave()
     _waveSeatedSlots.clear();
     _heldClones.clear();
     _timedReleaseMs = 0;
+    _staggerReleaseMs = 0;
 
     ComposeWave(enemyCount);
+
+    // A swarm is twice the clones at no more than half strength each.
+    if (_waveEvent == VhrWaveEvent::Swarm)
+        for (uint8& stacks : _pendingRequest.diminishedStacks)
+            stacks = std::max<uint8>(stacks, uint8(BG_VHR_SWARM_DIMINISHED));
+    AnnounceWaveEvent();
 
     _waveState = WaveState::AwaitingSpawn;
     _prepTimerMs = GetPrepWindowMs();
@@ -645,6 +667,13 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
 
         if (composition != VhrWaveComposition::BotSourced)
             _lastPartyWave = _waveNumber;
+    }
+
+    // The Mirror Match event: every clone is one of the party.
+    if (_waveEvent == VhrWaveEvent::MirrorMatch)
+    {
+        composition = VhrWaveComposition::FullRoster;
+        _lastPartyWave = _waveNumber;
     }
 
     _pendingRequest.composition = composition;
@@ -724,15 +753,41 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
     // The cells are taken in a run starting from a different one each wave so
     // consecutive waves do not pour out of the same door; the static_assert in
     // the header guarantees the run never wraps onto itself.
+    //
+    // Cells nobody needs go to the held-back groups - the timed half first,
+    // then the ones that wait on deaths - one more door each in turn, so a big
+    // wave pours out of every door in the room (owner 2026-11-20).
+    std::array<uint32, std::size(groups)> cellsFor = { };
+    uint32 cellsUsed = 0;
+    for (size_t g = 0; g < std::size(groups); ++g)
+    {
+        cellsFor[g] = (groups[g].count + BG_VHR_CLONES_PER_CELL - 1) / BG_VHR_CLONES_PER_CELL;
+        cellsUsed += cellsFor[g];
+    }
+    for (uint32 spare = cellsUsed < BG_VHR_OBJECT_CELL_MAX ? BG_VHR_OBJECT_CELL_MAX - cellsUsed : 0; spare;)
+    {
+        bool gave = false;
+        for (size_t g : { size_t(2), size_t(1) })
+            if (spare && cellsFor[g] && cellsFor[g] < groups[g].count)
+            {
+                ++cellsFor[g];
+                --spare;
+                gave = true;
+            }
+        if (!gave)
+            break;
+    }
+
     _waveCells.clear();
     _waveSlots.reserve(enemyCount);
-    for (ReleaseGroup const& group : groups)
+    for (size_t g = 0; g < std::size(groups); ++g)
     {
+        ReleaseGroup const& group = groups[g];
         if (!group.count)
             continue;
 
         uint32 const firstCell = uint32(_waveCells.size());
-        uint32 const cellsNeeded = (group.count + BG_VHR_CLONES_PER_CELL - 1) / BG_VHR_CLONES_PER_CELL;
+        uint32 const cellsNeeded = cellsFor[g];
         for (uint32 i = 0; i < cellsNeeded; ++i)
             _waveCells.push_back((_waveNumber - 1 + firstCell + i) % BG_VHR_OBJECT_CELL_MAX);
 
@@ -856,6 +911,9 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
                 }
     _waveSeatedSlots.clear();
 
+    // Giants grow in their seats.
+    ApplyWaveEventToClones();
+
     if (_waveNumber == 1)
     {
         // The match countdown was the first wave's warning; making the party
@@ -869,7 +927,9 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
     {
         ApplyPreparationToWave();
         _waveState = WaveState::Preparing;
-        _prepTimerMs = GetPrepWindowMs();
+        // A GM's .vhr next: the gates open on the next update.
+        _prepTimerMs = _skipNextPrep ? 1 : GetPrepWindowMs();
+        _skipNextPrep = false;
         // Seed above the first tick so the countdown announces the full
         // window itself rather than needing a separate opening message.
         _lastCountdownSecond = (_prepTimerMs / IN_MILLISECONDS) + 1;
@@ -1128,15 +1188,22 @@ void BattlegroundVHR::ReleaseWaveFromPreparation()
             continue;
         }
 
-        // Staying in its cell. It already has the hold if the wave had a
-        // preparation window; the first wave opens without one.
-        if (!enemy->HasUnitFlag(UNIT_FLAG_PREPARATION))
-            HoldWaveClone(enemy);
+        // Staying in its cell - and from now on out of sight too. Several
+        // held-back clones share a cell, and the first one let out opens its
+        // door on the rest: still held, immune and untouchable, they used to
+        // stand there in plain view (owner 2026-11-20). Hidden, the open cell
+        // just looks empty until each of them comes out.
+        HoldWaveClone(enemy, true);
     }
 }
 
-void BattlegroundVHR::HoldWaveClone(Player* enemy)
+void BattlegroundVHR::HoldWaveClone(Player* enemy, bool hidden)
 {
+    // A held-back clone behind open gates: Arena Preparation's invisibility
+    // hides it from the party until it is let out (FreeWaveClone takes it off).
+    if (hidden)
+        enemy->AddAura(SPELL_ARENA_PREPARATION, enemy);
+
     // AddAura, not CastSpell, and SPELL_PREPARATION rather than the arena
     // one: BOTH preparation spells are location-gated in SpellInfo::
     // CheckLocation to a battleground/arena at STATUS_WAIT_JOIN, and a
@@ -1232,6 +1299,21 @@ void BattlegroundVHR::ReleaseHeldClones(VhrCloneRelease release)
         releasedOne = ReleaseNextHeldClone(release);
 }
 
+uint32 BattlegroundVHR::CountHeldClones(VhrCloneRelease release) const
+{
+    return uint32(std::count_if(_heldClones.begin(), _heldClones.end(),
+        [release](VhrHeldClone const& held) { return held.release == release; }));
+}
+
+void BattlegroundVHR::ReleaseTimedBurst()
+{
+    uint32 const waiting = CountHeldClones(VhrCloneRelease::AfterDelay);
+    for (uint32 i = 0; i < (waiting + 1) / 2; ++i)
+        if (!ReleaseNextHeldClone(VhrCloneRelease::AfterDelay))
+            break;
+    _staggerReleaseMs = CountHeldClones(VhrCloneRelease::AfterDelay) ? uint32(BG_VHR_STAGGER_RELEASE_INTERVAL_MS) : 0;
+}
+
 void BattlegroundVHR::NotifyCloneSource(ObjectGuid cloneGuid, ObjectGuid sourceGuid)
 {
     if (!cloneGuid || !sourceGuid)
@@ -1317,6 +1399,10 @@ void BattlegroundVHR::OpenWaveCell()
             DoorOpen(slot.cell);
 
     ReleaseWaveFromPreparation();
+
+    // The wave event takes hold with the gates (the held-back clones are
+    // known by now, so a bounty goes on one that walks out).
+    ApplyWaveEventAtGates();
 
     // The clock on the timed half starts with the gates.
     bool const anyTimed = std::any_of(_heldClones.begin(), _heldClones.end(),
@@ -1415,6 +1501,9 @@ void BattlegroundVHR::CompleteWave()
         PSendMessageToAll(BG_VHR_STRING_FINAL_NEXT, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, brokers);
         PSendMessageToAll(BG_VHR_STRING_FINAL_NEXT, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, brokers);
     }
+
+    // The event's rewards are in the drop above; now it is over.
+    EndWaveEvent();
 
     BeginWave();
 }
@@ -1712,7 +1801,8 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
         _bigPartyBrokerCarry -= float(bigPartyBrokers);
     }
 
-    uint32 brokersWanted = wanted + _bonusBrokersPerWave + shortHandedBrokers + bigPartyBrokers;
+    // Plus whatever a wave event earned (Gold Rush, a claimed Bounty).
+    uint32 brokersWanted = wanted + _bonusBrokersPerWave + shortHandedBrokers + bigPartyBrokers + _eventBonusBrokers;
 
     // Before the champion, a few more; before the final wave, ten at least.
     uint32 const nextWave = _waveNumber + 1;
@@ -1737,7 +1827,7 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
             std::vector<Position> ownerPlaced = placed;
             uint32 const secondBrokerWave = sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_SECOND_BROKER_WAVE);
             uint32 const base = _waveNumber >= secondBrokerWave ? 2u : 1u;
-            uint32 const ordinary = base + GetBonusBrokersPerWave(owner);
+            uint32 const ordinary = base + GetBonusBrokersPerWave(owner) + _eventBonusBrokers;
             uint32 const common = HasCrucible(owner) && !_humanDiedThisWave ? 1u : 0u;
             for (uint32 i = 0; i < ordinary + common && brokerSlot < BG_VHR_CREATURE_BOON_BROKER_MAX; ++i)
             {
@@ -2115,6 +2205,47 @@ bool BattlegroundVHR::StartShop()
     return true;
 }
 
+char const* BattlegroundVHR::SkipToNextWave()
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return "The run has not started (or is over).";
+
+    switch (_waveState)
+    {
+        case WaveState::Preparing:
+            _prepTimerMs = 1;
+            return "The gates open now.";
+        case WaveState::AwaitingSpawn:
+            _skipNextPrep = true;
+            return "The wave is still being seated; its gates open the moment it is.";
+        case WaveState::Fighting:
+        {
+            _skipNextPrep = true;
+            // Copied first: every death edits the held-back list, and the
+            // last one clears the wave.
+            std::vector<ObjectGuid> const enemies = _waveEnemies;
+            for (ObjectGuid guid : enemies)
+                if (Player* enemy = ObjectAccessor::FindPlayer(guid))
+                    if (enemy->IsInWorld() && enemy->IsAlive())
+                        enemy->KillSelf();
+            return "The wave falls; the next one opens as soon as it is seated.";
+        }
+        default:
+            return "Nothing to skip yet.";
+    }
+}
+
+bool BattlegroundVHR::AddShopSlot()
+{
+    if (!_shopMode)
+        return false;
+    std::vector<Player const*> roster;
+    CollectHumanPlayers(roster);
+    bool const added = _shop.AddSlot(roster);
+    NotifyShopChanged();
+    return added;
+}
+
 void BattlegroundVHR::NotifyShopChanged()
 {
     if (!_shopMode)
@@ -2130,17 +2261,19 @@ void BattlegroundVHR::PayWaveShards()
     std::vector<Player const*> roster;
     CollectHumanPlayers(roster);
 
-    uint32 const perWave = VioletHoldShop::GetShardsPerWave();
     for (Player const* member : roster)
     {
         if (!member)
             continue;
         uint32 const fromKills = _shop.TakeKillingBlowShards(member->GetGUID());
-        _shop.AddShards(member->GetGUID(), perWave);
+        uint32 interest = 0;
+        uint32 const paid = _shop.PayWave(member, interest);
         if (!member->GetSession())
             continue;
 
-        std::string line = Trinity::StringFormat("Wave {} cleared: +{} shards", _waveNumber, perWave);
+        std::string line = Trinity::StringFormat("Wave {} cleared: +{} shards", _waveNumber, paid);
+        if (interest)
+            line += Trinity::StringFormat(" ({} of it interest)", interest);
         if (fromKills)
             line += Trinity::StringFormat(", +{} from killing blows", fromKills);
         line += Trinity::StringFormat(". You have {} shards to spend at the broker.", _shop.GetShards(member->GetGUID()));
@@ -2159,6 +2292,206 @@ void BattlegroundVHR::SendTextToAll(std::string const& text)
         ChatHandler::BuildChatPacket(data, type, LANG_UNIVERSAL, ObjectGuid::Empty, ObjectGuid::Empty, text, 0);
         SendPacketToAll(&data);
     }
+}
+
+// --- wave events ------------------------------------------------------------
+
+namespace
+{
+struct WaveEventInfo
+{
+    VhrWaveEvent event;
+    char const* name;
+    // What the event does, as announced; brokerText (when set) replaces it in
+    // a run without the shop.
+    char const* text;
+    char const* brokerText;
+};
+
+WaveEventInfo const kWaveEvents[] =
+{
+    { VhrWaveEvent::BloodMoon,   "BLOOD MOON",   "everyone in the Hold deals 50% more damage", nullptr },
+    { VhrWaveEvent::Quicksilver, "QUICKSILVER",  "everyone moves 50% faster and attacks and casts 20% faster", nullptr },
+    { VhrWaveEvent::Giants,      "GIANTS",       "fewer clones, but twice the size and half again as tough", nullptr },
+    { VhrWaveEvent::Swarm,       "SWARM",        "twice the clones, each at half strength", nullptr },
+    { VhrWaveEvent::GoldRush,    "GOLD RUSH",    "killing blows pay triple shards", "an extra boon broker comes when this wave falls" },
+    { VhrWaveEvent::Bounty,      "BOUNTY",       "one clone is marked with a skull, and its death pays everyone 10 shards",
+                                                 "one clone is marked with a skull, and its death calls an extra boon broker" },
+    { VhrWaveEvent::MirrorMatch, "MIRROR MATCH", "the whole wave is your own reflections", nullptr },
+};
+
+WaveEventInfo const* FindWaveEvent(VhrWaveEvent event)
+{
+    for (WaveEventInfo const& info : kWaveEvents)
+        if (info.event == event)
+            return &info;
+    return nullptr;
+}
+
+constexpr uint32 kWaveEventAuras[] = { BG_VHR_SPELL_BLOOD_MOON, BG_VHR_SPELL_QUICKSILVER, BG_VHR_SPELL_GIANT, BG_VHR_SPELL_BOUNTY };
+}
+
+char const* BattlegroundVHR::GetWaveEventName(VhrWaveEvent event)
+{
+    WaveEventInfo const* info = FindWaveEvent(event);
+    return info ? info->name : "NONE";
+}
+
+bool BattlegroundVHR::HasWaveEventAura(Player const* player)
+{
+    if (!player)
+        return false;
+    for (uint32 spellId : kWaveEventAuras)
+        if (player->HasAura(spellId))
+            return true;
+    return false;
+}
+
+void BattlegroundVHR::RemoveWaveEventAuras(Player* player)
+{
+    if (!player)
+        return;
+    for (uint32 spellId : kWaveEventAuras)
+        player->RemoveAurasDueToSpell(spellId);
+}
+
+void BattlegroundVHR::RollWaveEvent(uint32 wave)
+{
+    _waveEvent = VhrWaveEvent::None;
+    if (_forcedWaveEvent != VhrWaveEvent::None)
+    {
+        // A GM's pick (.vhr event) goes on whatever wave comes next.
+        _waveEvent = _forcedWaveEvent;
+        _forcedWaveEvent = VhrWaveEvent::None;
+        return;
+    }
+
+    if (wave < BG_VHR_EVENT_FIRST_WAVE || wave == BG_VHR_MIDBOSS_WAVE || wave >= BG_VHR_FINAL_WAVE)
+        return;
+    int32 const chance = std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.EventChancePercent", 25), 0, 100);
+    if (!roll_chance_i(chance))
+        return;
+
+    std::vector<VhrWaveEvent> pool;
+    for (WaveEventInfo const& info : kWaveEvents)
+        if (info.event != _lastWaveEvent)
+            pool.push_back(info.event);
+    if (!pool.empty())
+        _waveEvent = Trinity::Containers::SelectRandomContainerElement(pool);
+}
+
+uint32 BattlegroundVHR::AdjustEnemyCountForEvent(uint32 count) const
+{
+    switch (_waveEvent)
+    {
+        case VhrWaveEvent::Giants: return std::max<uint32>(1, count * 2 / 3);
+        case VhrWaveEvent::Swarm:  return std::min<uint32>(BG_VHR_MAX_ENEMIES, count * 2);
+        default:                   return count;
+    }
+}
+
+void BattlegroundVHR::AnnounceWaveEvent()
+{
+    WaveEventInfo const* info = FindWaveEvent(_waveEvent);
+    if (!info)
+        return;
+    char const* text = (!_shopMode && info->brokerText) ? info->brokerText : info->text;
+    SendTextToAll(Trinity::StringFormat("Wave {} - {}: {}.", _waveNumber, info->name, text));
+}
+
+void BattlegroundVHR::ApplyWaveEventToClones()
+{
+    if (_waveEvent != VhrWaveEvent::Giants)
+        return;
+    // At their seats, so the party watches them grow behind the doors.
+    for (ObjectGuid guid : _waveEnemies)
+        if (Player* enemy = ObjectAccessor::FindPlayer(guid))
+        {
+            enemy->AddAura(BG_VHR_SPELL_GIANT, enemy);
+            enemy->SetFullHealth();
+        }
+}
+
+void BattlegroundVHR::ApplyWaveEventAtGates()
+{
+    switch (_waveEvent)
+    {
+        case VhrWaveEvent::BloodMoon:
+        case VhrWaveEvent::Quicksilver:
+        {
+            // Everybody in the Hold: the party, its allies, every clone.
+            uint32 const spellId = _waveEvent == VhrWaveEvent::BloodMoon ? BG_VHR_SPELL_BLOOD_MOON : BG_VHR_SPELL_QUICKSILVER;
+            for (auto const& itr : GetPlayers())
+                if (Player* player = ObjectAccessor::FindPlayer(itr.first))
+                    if (player->IsInWorld())
+                        player->AddAura(spellId, player);
+            break;
+        }
+        case VhrWaveEvent::GoldRush:
+            if (!_shopMode)
+                ++_eventBonusBrokers;
+            break;
+        case VhrWaveEvent::Bounty:
+        {
+            // One of the clones that walks out now, never a held-back one.
+            std::vector<Player*> candidates;
+            for (ObjectGuid guid : _waveEnemies)
+                if (!IsHeldClone(guid))
+                    if (Player* enemy = ObjectAccessor::FindPlayer(guid))
+                        if (enemy->IsAlive())
+                            candidates.push_back(enemy);
+            if (candidates.empty())
+                break;
+            Player* target = Trinity::Containers::SelectRandomContainerElement(candidates);
+            target->AddAura(BG_VHR_SPELL_BOUNTY, target);
+            _bountyGuid = target->GetGUID();
+
+            // The skull, for every group the party is in.
+            std::set<Group*> groups;
+            for (ObjectGuid guid : GetHumanRoster(false))
+                if (Player* member = ObjectAccessor::FindPlayer(guid))
+                    if (Group* group = member->GetGroup())
+                        groups.insert(group);
+            for (Group* group : groups)
+                group->SetTargetIcon(BG_VHR_BOUNTY_RAID_ICON, ObjectGuid::Empty, _bountyGuid);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+void BattlegroundVHR::OnWaveEventKill(Player* victim)
+{
+    if (!victim || !_bountyGuid || victim->GetGUID() != _bountyGuid)
+        return;
+    _bountyGuid.Clear();
+
+    if (_shopMode)
+    {
+        for (ObjectGuid guid : GetHumanRoster(false))
+            _shop.AddShards(guid, BG_VHR_BOUNTY_SHARDS);
+        SendTextToAll(Trinity::StringFormat("The bounty is claimed: {} shards each!", uint32(BG_VHR_BOUNTY_SHARDS)));
+        NotifyShopChanged();
+    }
+    else
+    {
+        ++_eventBonusBrokers;
+        SendTextToAll("The bounty is claimed: an extra boon broker will come when this wave falls!");
+    }
+}
+
+void BattlegroundVHR::EndWaveEvent()
+{
+    if (_waveEvent == VhrWaveEvent::None)
+        return;
+    for (auto const& itr : GetPlayers())
+        if (Player* player = ObjectAccessor::FindPlayer(itr.first))
+            RemoveWaveEventAuras(player);
+    _lastWaveEvent = _waveEvent;
+    _waveEvent = VhrWaveEvent::None;
+    _bountyGuid.Clear();
+    _eventBonusBrokers = 0;
 }
 
 bool BattlegroundVHR::MayUseBoonBroker(Player const* player, ObjectGuid brokerGuid) const
@@ -2578,10 +2911,21 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
                 if (_timedReleaseMs <= diff)
                 {
                     _timedReleaseMs = 0;
-                    ReleaseHeldClones(VhrCloneRelease::AfterDelay);
+                    ReleaseTimedBurst();
                 }
                 else
                     _timedReleaseMs -= diff;
+            }
+            else if (_staggerReleaseMs)
+            {
+                if (_staggerReleaseMs <= diff)
+                {
+                    ReleaseNextHeldClone(VhrCloneRelease::AfterDelay);
+                    _staggerReleaseMs = CountHeldClones(VhrCloneRelease::AfterDelay)
+                        ? uint32(BG_VHR_STAGGER_RELEASE_INTERVAL_MS) : 0;
+                }
+                else
+                    _staggerReleaseMs -= diff;
             }
             break;
         default:
@@ -2741,10 +3085,14 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
             ++_multitudesThisWave;
 
         // Shop runs pay a killing blow in shards - to a party member's own
-        // blow or their pet's (credited to them), not to an ally's.
+        // blow or their pet's (credited to them), not to an ally's. Gold Rush
+        // pays it several times over.
         if (_shopMode && killer && killer != victim && killer->GetBGTeam() == _humanTeam
             && !IsAlly(killer->GetGUID()) && killer->GetSession() && !killer->GetSession()->IsTransientPlayerSession())
-            _shop.OnKillingBlow(killer->GetGUID());
+            _shop.OnKillingBlow(killer, _waveEvent == VhrWaveEvent::GoldRush ? uint32(BG_VHR_GOLD_RUSH_MULTIPLIER) : 1);
+
+        // The Bounty event's marked clone.
+        OnWaveEventKill(victim);
     }
 
     UpdateScoreWorldStates();

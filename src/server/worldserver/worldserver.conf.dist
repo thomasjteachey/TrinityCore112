@@ -6859,6 +6859,27 @@ Centurion.Marks.HonorCostMultiplier = 0
 #                     spell, legendary, artifact - six whole numbers in that order. A missing
 #                     number keeps its default. Read as each card is drawn.
 #        Default:     "3 5 8 10 20 15"
+#
+#    Centurion.VioletHold.Shop.RerollCost
+#        Description: Shards the shop's Reroll button costs; it redraws every card nobody
+#                     has locked. Boon of the Gambler makes one reroll a wave free per stack.
+#                     Clamped 0-1000; live on `.reload config`.
+#        Default:     2
+#
+#    Centurion.VioletHold.TopTierRollPercent
+#        Description: Odds of the top of the boon pool - class spells, legendaries, the
+#                     very-rare boons and the artifacts - as a percent of what their roll
+#                     weights alone would give. Brokers and the shop both use it. Clamped
+#                     1-200; live on `.reload config` (from the next card drawn).
+#        Default:     50
+#
+#    Centurion.VioletHold.EventChancePercent
+#        Description: Chance that a wave from wave 3 on carries a random event (Blood Moon,
+#                     Quicksilver, Giants, Swarm, Gold Rush, Bounty, Mirror Match). Never on
+#                     the champion or the final wave, never the same event twice running.
+#                     Clamped 0-100; live on `.reload config`. GMs can force the next wave's
+#                     event with .vhr event <name>.
+#        Default:     25
 
 Centurion.VioletHold.PrepSeconds = 30
 Centurion.VioletHold.CountdownFromSeconds = 15
@@ -6890,6 +6911,9 @@ Centurion.VioletHold.Shop.ShardsPerKillingBlow = 1
 Centurion.VioletHold.Shop.RerollChancePercent = 50
 Centurion.VioletHold.Shop.DiscountPercent = 25
 Centurion.VioletHold.Shop.TierPrices = "3 5 8 10 20 15"
+Centurion.VioletHold.Shop.RerollCost = 2
+Centurion.VioletHold.TopTierRollPercent = 50
+Centurion.VioletHold.EventChancePercent = 25
 
 ###############################################################################
 

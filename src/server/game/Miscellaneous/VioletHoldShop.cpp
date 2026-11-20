@@ -102,12 +102,19 @@ uint32 VioletHoldShop::GetDiscountPercent()
     return ReadInt("Centurion.VioletHold.Shop.DiscountPercent", 25, 0, 100);
 }
 
+uint32 VioletHoldShop::GetRerollCost()
+{
+    return ReadInt("Centurion.VioletHold.Shop.RerollCost", 2, 0, 1000);
+}
+
 void VioletHoldShop::Reset()
 {
     _slots.clear();
     _shards.clear();
     _killShardsThisWave.clear();
+    _freeRerollsUsed.clear();
     _viewers.clear();
+    _extraSlots = 0;
     _open = false;
 }
 
@@ -136,6 +143,15 @@ uint32 VioletHoldShop::GetPrice(Slot const& slot)
     double const kept = std::pow(double(100 - discountPercent) / 100.0, double(slot.discounts));
     long const price = std::lround(double(slot.basePrice) * kept);
     return uint32(std::max<long>(1, price));
+}
+
+uint32 VioletHoldShop::GetPriceFor(Slot const& slot, Player const* buyer)
+{
+    uint32 const price = GetPrice(slot);
+    if (!price || !buyer)
+        return price;
+    uint32 const off = GetStacks(buyer, Boon::Haggler);
+    return price > off ? std::max<uint32>(1, price - off) : 1;
 }
 
 int32 VioletHoldShop::FindSlot(Offer offer) const
@@ -171,6 +187,7 @@ bool VioletHoldShop::TryReplace(std::vector<Player const*> const& roster, size_t
     slot.basePrice = GetTierPrice(*rolled);
     slot.discounts = 0;
     slot.filled = true;
+    slot.lockedBy.Clear();
     return true;
 }
 
@@ -196,6 +213,7 @@ bool VioletHoldShop::RestockDeadSlots(std::vector<Player const*> const& roster)
             });
             if (anyoneCan)
                 continue;
+            // A lock on a card nobody can take keeps nothing worth keeping.
             Restock(roster, i);
             changed = true;
         }
@@ -216,9 +234,9 @@ void VioletHoldShop::AgeBoard(std::vector<Player const*> const& roster)
             continue;
         }
 
-        // A card that rolls a reroll but has nothing new to become stays, and
-        // takes the discount instead.
-        if (roll_chance_i(rerollChance) && TryReplace(roster, i))
+        // A locked card stays. A card that rolls a reroll but has nothing new
+        // to become stays too. Either way it takes the discount.
+        if (!_slots[i].lockedBy && roll_chance_i(rerollChance) && TryReplace(roster, i))
             continue;
 
         if (_slots[i].discounts < 255)
@@ -227,6 +245,91 @@ void VioletHoldShop::AgeBoard(std::vector<Player const*> const& roster)
 
     // Whatever nobody can take any more goes too.
     RestockDeadSlots(roster);
+
+    // Boon of the Gambler's rerolls are per wave.
+    _freeRerollsUsed.clear();
+}
+
+bool VioletHoldShop::HasRoomForSlot() const
+{
+    return _open && _slots.size() < MAX_SLOTS;
+}
+
+bool VioletHoldShop::AddSlot(std::vector<Player const*> const& roster)
+{
+    if (!HasRoomForSlot())
+        return false;
+    _slots.emplace_back();
+    ++_extraSlots;
+    TryReplace(roster, _slots.size() - 1);
+    return true;
+}
+
+uint32 VioletHoldShop::GetFreeRerollsLeft(Player const* who) const
+{
+    if (!who)
+        return 0;
+    uint32 const granted = GetStacks(who, Boon::Gambler);
+    auto const itr = _freeRerollsUsed.find(who->GetGUID());
+    uint32 const used = itr != _freeRerollsUsed.end() ? itr->second : 0;
+    return granted > used ? granted - used : 0;
+}
+
+uint32 VioletHoldShop::GetRerollCostFor(Player const* who) const
+{
+    return GetFreeRerollsLeft(who) ? 0 : GetRerollCost();
+}
+
+bool VioletHoldShop::Reroll(Player const* who, std::vector<Player const*> const& roster)
+{
+    if (!who || !_open)
+        return false;
+
+    if (GetFreeRerollsLeft(who))
+        ++_freeRerollsUsed[who->GetGUID()];
+    else if (!Spend(who->GetGUID(), GetRerollCost()))
+        return false;
+
+    for (size_t i = 0; i < _slots.size(); ++i)
+        if (!_slots[i].lockedBy)
+            TryReplace(roster, i);
+    return true;
+}
+
+uint32 VioletHoldShop::GetLocksMax(Player const* who) const
+{
+    return who && GetStacks(who, Boon::Safekeeping) ? SAFEKEEPING_LOCKS : 0;
+}
+
+uint32 VioletHoldShop::GetLocksUsed(ObjectGuid guid) const
+{
+    return uint32(std::count_if(_slots.begin(), _slots.end(), [guid](Slot const& slot)
+    {
+        return slot.filled && slot.lockedBy == guid;
+    }));
+}
+
+VioletHoldShop::LockResult VioletHoldShop::ToggleLock(Player const* who, Offer offer)
+{
+    int32 const index = FindSlot(offer);
+    if (!who || index < 0)
+        return LockResult::NoCard;
+
+    Slot& slot = _slots[size_t(index)];
+    if (slot.lockedBy == who->GetGUID())
+    {
+        slot.lockedBy.Clear();
+        return LockResult::Unlocked;
+    }
+    if (slot.lockedBy)
+        return LockResult::NotYours;
+    if (!GetLocksMax(who))
+        return LockResult::NoLocks;
+    if (GetLocksUsed(who->GetGUID()) >= GetLocksMax(who))
+        return LockResult::AllInUse;
+
+    slot.lockedBy = who->GetGUID();
+    return LockResult::Locked;
 }
 
 uint32 VioletHoldShop::GetShards(ObjectGuid guid) const
@@ -254,13 +357,43 @@ bool VioletHoldShop::Spend(ObjectGuid guid, uint32 amount)
     return true;
 }
 
-void VioletHoldShop::OnKillingBlow(ObjectGuid killer)
+uint32 VioletHoldShop::GetInterestFor(Player const* member) const
 {
-    uint32 const amount = GetShardsPerKillingBlow();
+    if (!member || !GetStacks(member, Boon::Usurer))
+        return 0;
+    return std::min<uint32>(GetShards(member->GetGUID()) / USURER_SHARDS_PER, USURER_MAX);
+}
+
+uint32 VioletHoldShop::GetWavePayFor(Player const* member) const
+{
+    if (!member)
+        return 0;
+    return GetShardsPerWave() + GetStacks(member, Boon::Tithes) + GetInterestFor(member);
+}
+
+uint32 VioletHoldShop::PayWave(Player const* member, uint32& interest)
+{
+    interest = GetInterestFor(member);
+    uint32 const pay = GetWavePayFor(member);
+    if (member)
+        AddShards(member->GetGUID(), pay);
+    return pay;
+}
+
+uint32 VioletHoldShop::GetKillPayFor(Player const* killer) const
+{
+    if (!killer)
+        return 0;
+    return GetShardsPerKillingBlow() + GetStacks(killer, Boon::Bounties);
+}
+
+void VioletHoldShop::OnKillingBlow(Player const* killer, uint32 multiplier)
+{
+    uint32 const amount = GetKillPayFor(killer) * std::max<uint32>(1, multiplier);
     if (!_open || !killer || !amount)
         return;
-    AddShards(killer, amount);
-    uint32& tally = _killShardsThisWave[killer];
+    AddShards(killer->GetGUID(), amount);
+    uint32& tally = _killShardsThisWave[killer->GetGUID()];
     tally = std::min<uint32>(tally + amount, MAX_SHARD_AMOUNT);
 }
 

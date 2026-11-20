@@ -9,6 +9,7 @@
 #include "BattlegroundVHR.h"
 #include "CellImpl.h"
 #include "Chat.h"
+#include "Config.h"
 #include "Containers.h"
 #include "DatabaseEnv.h"
 #include "GridNotifiers.h"
@@ -282,8 +283,22 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
 
     // The tenth artifact block, spells 94461-94462 in this order.
     { Boon::SpellMirror,  SPELL_BOON_SPELL_MIRROR, 1, 1, ClassBit(CLASS_SHAMAN), 0, "Boon of the Spell Mirror", "Grounding Totem reflects the spell it catches back at whoever cast it, and that kills the totem; its cooldown resets whenever it dies", "" },
-    { Boon::GuardianFlame, SPELL_BOON_GUARDIAN_FLAME, 1, 1, ClassBit(CLASS_SHAMAN), 0, "Boon of the Guardian Flame", "every Searing Totem hit permanently lowers the target's damage by 5%, stacking up to 75%", "" }
+    { Boon::GuardianFlame, SPELL_BOON_GUARDIAN_FLAME, 1, 1, ClassBit(CLASS_SHAMAN), 0, "Boon of the Guardian Flame", "every Searing Totem hit permanently lowers the target's damage by 5%, stacking up to 75%", "" },
+    // Shop boons: only in a shop run (IsShopOnlyBoon). Their grants are exempt
+    // from the stacking multiplier: one stack is one shard, slot or reroll.
+    { Boon::Gambler,     SPELL_BOON_GAMBLER,     1, 3, MASK_ALL, 6, "Boon of the Gambler", "free shop reroll every wave", "" },
+    { Boon::Safekeeping, SPELL_BOON_SAFEKEEPING, 1, 1, MASK_ALL, 4, "Boon of Safekeeping", "lock up to 3 cards in the shop: a locked card never rerolls, and still gets cheaper", "" },
+    { Boon::Tithes,      SPELL_BOON_TITHES,      2, 6, MASK_ALL, 7, "Boon of Tithes",      "shards for every cleared wave", "" },
+    { Boon::Bazaar,      SPELL_BOON_BAZAAR,      1, 3, MASK_ALL, 3, "Boon of the Bazaar",  "card in the shop, for the whole party", "" },
+    { Boon::Usurer,      SPELL_BOON_USURER,      1, 1, MASK_ALL, 5, "Boon of the Usurer",  "every cleared wave, 1 extra shard for every 10 you are holding (up to 5)", "" },
+    { Boon::Bounties,    SPELL_BOON_BOUNTIES,    1, 3, MASK_ALL, 6, "Boon of Bounties",    "shard for every killing blow", "" },
+    { Boon::Haggler,     SPELL_BOON_HAGGLER,     1, 2, MASK_ALL, 4, "Boon of the Haggler", "shard off every price in the shop (never below 1)", "" },
+    // One stack reads as FORTUNE_PCT_PER_STACK% (DisplayPerStack).
+    { Boon::Fortune,     SPELL_BOON_FORTUNE,     1, 3, MASK_ALL, 4, "Boon of Fortune",     "chance of rare and better cards in the shop, for the whole party", "%" }
 };
+
+static_assert(uint8(Boon::Fortune) - uint8(Boon::Gambler) == SPELL_BOON_SHOP_LAST - SPELL_BOON_SHOP_FIRST,
+    "the shop boons and their spell block must be the same length");
 
 // Boon of the Healthstone hands out one of these: the warlock's improved
 // (2/2) stone of each rank, cloned as item_template 160808-160812 with no
@@ -466,6 +481,7 @@ int32 RunHeld(Player const* player, Boon boon)
         case Boon::Abundance:
         case Boon::SecondOpinion:
         case Boon::Crucible:
+        case Boon::Bazaar:
             break;
         default:
             return -1;
@@ -494,6 +510,8 @@ int32 RunHeld(Player const* player, Boon boon)
             ? (player->HasAura(SPELL_BOON_SECOND_OPINION) ? 1 : 0)
             : (run->GetSecondOpinionCharges(player) ? 1 : 0);
         case Boon::Crucible:      return run->HasCrucible(player) ? 1 : 0;
+        // The slots the party's Bazaar picks have added to the shop.
+        case Boon::Bazaar:        return int32(run->GetShop().GetExtraSlots());
         default:               return 0;
     }
 }
@@ -814,6 +832,10 @@ static bool UsesStackingGrantMultiplier(BoonInfo const& info)
             break;
     }
 
+    // A shop boon's stack is a count of shards, slots or rerolls.
+    if (IsShopOnlyBoon(info.boon))
+        return false;
+
     // A one-stack grant normally represents a discrete mechanic rather than
     // a numeric power value (one broker, one guardian, one unlock, and so on).
     return info.grantStacks > 1;
@@ -869,6 +891,7 @@ BoonInfo const* FindBySpell(uint32 spellId)
 bool IsBoonSpell(uint32 spellId)
 {
     return (spellId >= SPELL_BOON_FIRST && spellId <= SPELL_BOON_LAST)
+        || (spellId >= SPELL_BOON_SHOP_FIRST && spellId <= SPELL_BOON_SHOP_LAST)
         || (spellId >= SPELL_BOON_EXTRA_FIRST && spellId <= SPELL_BOON_EXTRA_LAST)
         || (spellId >= SPELL_BOON_COOLDOWN_CLASS_FIRST && spellId <= SPELL_BOON_COOLDOWN_CLASS_LAST)
         || (spellId >= SPELL_BOON_BATCH2_FIRST && spellId <= SPELL_BOON_BATCH2_LAST)
@@ -975,6 +998,11 @@ bool IsRunUnique(Boon boon)
 bool IsBrokerOnlyBoon(Boon boon)
 {
     return boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::SecondOpinion || boon == Boon::Crucible;
+}
+
+bool IsShopOnlyBoon(Boon boon)
+{
+    return boon >= Boon::Gambler && boon <= Boon::Fortune;
 }
 
 uint8 GetRarityTier(Offer offer)
@@ -1114,6 +1142,16 @@ PickResult CanTake(Player const* player, Offer offer)
 
         if (info.boon == Boon::Level)
             return player->GetLevel() < LEVEL_BOON_CEILING ? PickResult::Ok : PickResult::LevelCeiling;
+
+        // A shop boon is worth nothing without the shop.
+        if (IsShopOnlyBoon(info.boon))
+        {
+            BattlegroundVHR const* run = GetRunOf(player);
+            if (!run || !run->UsesShop())
+                return PickResult::Failed;
+            if (info.boon == Boon::Bazaar && !run->GetShop().HasRoomForSlot())
+                return PickResult::AtCap;
+        }
 
         // Sharing with nobody is nothing: the party boons are for a party of
         // two or more. (Herald also helps a lone holder, so it is not here.)
@@ -1383,7 +1421,7 @@ bool SuitsSpec(Player const* player, Offer const& offer)
 // In quarters (ROLL_QUARTERS_PER_WEIGHT), so the very-rare tier can sit below
 // the rarest whole weight. Scaling everything by the same factor leaves every
 // other offer's odds exactly where they were.
-uint32 GetOfferWeight(Offer const& offer)
+uint32 GetOfferQuarters(Offer const& offer)
 {
     switch (offer.kind)
     {
@@ -1400,12 +1438,30 @@ uint32 GetOfferWeight(Offer const& offer)
     return 0;
 }
 
+// The roll weight: quarters x 100, except the top of the pool - class
+// spells, legendaries, the very-rare boons and the artifacts (card tiers 4-6)
+// - which roll at Centurion.VioletHold.TopTierRollPercent of that (owner
+// 2026-11-20: "i'm seeing the really powerful boons a little too much").
+// Read at every draw, so `.reload config` retunes it for the next broker or
+// shop card. Brokers and the shop share it.
+uint32 GetOfferWeight(Offer const& offer)
+{
+    uint32 const quarters = GetOfferQuarters(offer);
+    if (!quarters)
+        return 0;
+    if (GetRarityTier(offer) < 4)
+        return quarters * 100;
+    uint32 const percent = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.TopTierRollPercent", 50), 1, 200));
+    return std::max<uint32>(1, quarters * percent);
+}
+
 namespace
 {
-// RollOffers' draw, over only the offers `allowed` lets through.
-template <typename Allowed>
+// RollOffers' draw, over only the offers `allowed` lets through, each at the
+// weight `weigh` gives it.
+template <typename Allowed, typename Weigh>
 std::vector<Offer> RollOffersWhere(std::vector<Player const*> const& roster, uint8 count, bool commonBoonsOnly,
-    Allowed const& allowed)
+    Allowed const& allowed, Weigh const& weigh)
 {
     // "Only rolls when it makes sense": something is in the pool while at
     // least one person on the team could take it. Two hunters and one who
@@ -1449,7 +1505,7 @@ std::vector<Offer> RollOffersWhere(std::vector<Player const*> const& roster, uin
     {
         uint32 total = 0;
         for (Offer const& offer : pool)
-            total += GetOfferWeight(offer);
+            total += weigh(offer);
         if (!total)
             break;
 
@@ -1457,7 +1513,7 @@ std::vector<Offer> RollOffersWhere(std::vector<Player const*> const& roster, uin
         size_t chosen = 0;
         for (size_t i = 0; i < pool.size(); ++i)
         {
-            uint32 const w = GetOfferWeight(pool[i]);
+            uint32 const w = weigh(pool[i]);
             if (roll <= w)
             {
                 chosen = i;
@@ -1476,16 +1532,34 @@ std::vector<Offer> RollOffersWhere(std::vector<Player const*> const& roster, uin
 
 std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count, bool commonBoonsOnly)
 {
-    return RollOffersWhere(roster, count, commonBoonsOnly, [](Offer const&) { return true; });
+    // Brokers never sell the shop boons (CanTake refuses them without a shop
+    // anyway; this keeps them out of a GM's mixed run too).
+    return RollOffersWhere(roster, count, commonBoonsOnly, [](Offer const& offer)
+    {
+        return offer.kind != Offer::Kind::Boon || !IsShopOnlyBoon(Boon(offer.index));
+    }, GetOfferWeight);
 }
 
 Optional<Offer> RollShopOffer(std::vector<Player const*> const& roster, std::vector<Offer> const& exclude)
 {
+    // Boon of Fortune, everybody's stacks together: rare and better cards
+    // weigh FORTUNE_PCT_PER_STACK% more per stack.
+    uint32 fortunePct = 0;
+    for (Player const* member : roster)
+        if (member)
+            fortunePct += GetStacks(member, Boon::Fortune) * FORTUNE_PCT_PER_STACK;
+
     std::vector<Offer> const rolled = RollOffersWhere(roster, 1, false, [&exclude](Offer const& offer)
     {
         if (offer.kind == Offer::Kind::Boon && IsBrokerOnlyBoon(Boon(offer.index)))
             return false;
         return std::find(exclude.begin(), exclude.end(), offer) == exclude.end();
+    }, [fortunePct](Offer const& offer)
+    {
+        uint32 const weight = GetOfferWeight(offer);
+        if (!fortunePct || GetRarityTier(offer) < 3)
+            return weight;
+        return uint32(uint64(weight) * (100 + fortunePct) / 100);
     });
     if (rolled.empty())
         return {};
@@ -1637,6 +1711,11 @@ PickResult Take(Player* player, Offer offer)
         case Boon::Crucible:
             if (BattlegroundVHR* run = GetRunOf(player))
                 run->EnableCrucible(player);
+            break;
+        case Boon::Bazaar:
+            if (BattlegroundVHR* run = GetRunOf(player))
+                for (uint8 i = 0; i < grantStacks; ++i)
+                    run->AddShopSlot();
             break;
         case Boon::Fellowship:
             if (BattlegroundVHR* run = GetRunOf(player))
@@ -1822,6 +1901,8 @@ void StripAll(Player* player)
     player->RemoveAurasDueToSpell(SPELL_ATONEMENT_EMPOWERED);
     player->RemoveAurasDueToSpell(SPELL_KNOWLEDGE_MARKER);
     player->RemoveAurasDueToSpell(SPELL_CACHE_MARKER);
+    // A wave event's aura (Blood Moon, Quicksilver...) never leaves the Hold.
+    BattlegroundVHR::RemoveWaveEventAuras(player);
 
     // The Beastmaster blessing rides on the pets, not the player.
     RefreshBeastmaster(player);
@@ -2030,7 +2111,8 @@ void OnLogin(Player* player)
     }
 
     bool carrying = player->HasAura(SPELL_KNOWLEDGE_MARKER) || player->HasAura(SPELL_CACHE_MARKER)
-        || player->HasAura(GetBoonSpellFor(Boon::Cooldown, player->GetClass()));
+        || player->HasAura(GetBoonSpellFor(Boon::Cooldown, player->GetClass()))
+        || BattlegroundVHR::HasWaveEventAura(player);
     // The map limit on the run-only legendaries already deletes them at login
     // for a living character; a dead one keeps them until this sweep.
     for (ItemGrantInfo const& info : kItemGrants)
@@ -2152,6 +2234,8 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Overflow:
         case Boon::SecondOpinion:
         case Boon::Crucible:
+        case Boon::Safekeeping:
+        case Boon::Usurer:
             return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:
             return Trinity::StringFormat("{}: +1 {}{}", info.name, info.summary, blocked);

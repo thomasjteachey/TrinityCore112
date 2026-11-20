@@ -307,14 +307,19 @@ shop.count:SetTextColor(GOLD.r, GOLD.g, GOLD.b);
 shop.count:SetPoint("BOTTOM", shop.purse, "BOTTOM", 0, 9);
 
 shop.purseLabel = ShopRegion(Text(frame, 10));
-shop.purseLabel:SetPoint("BOTTOMRIGHT", shop.purse, "LEFT", -10, 1);
+shop.purseLabel:SetPoint("TOPRIGHT", shop.purse, "TOPLEFT", -10, -9);
 shop.purseLabel:SetJustifyH("RIGHT");
 shop.purseLabel:SetTextColor(LILAC.r, LILAC.g, LILAC.b);
 shop.purseLabel:SetText("YOUR SHARDS");
 shop.income = ShopRegion(Text(frame, 10));
-shop.income:SetPoint("TOPRIGHT", shop.purse, "LEFT", -10, -2);
+shop.income:SetPoint("TOPRIGHT", shop.purseLabel, "BOTTOMRIGHT", 0, -3);
 shop.income:SetJustifyH("RIGHT");
 shop.income:SetTextColor(0.49, 0.45, 0.62);
+-- Boon of the Usurer's interest and Boon of Safekeeping's locks, when held
+shop.extras = ShopRegion(Text(frame, 10));
+shop.extras:SetPoint("TOPRIGHT", shop.income, "BOTTOMRIGHT", 0, -3);
+shop.extras:SetJustifyH("RIGHT");
+shop.extras:SetTextColor(0.49, 0.45, 0.62);
 
 -- The rule of the board, or what waiting does to the picked card.
 shop.footer = ShopRegion(Text(frame, 11));
@@ -727,6 +732,26 @@ local function MakeShopCard(i)
 	col.note = Text(col, 10);
 	col.note:SetPoint("TOP", col.tag, "BOTTOM", 0, -4);
 
+	-- Boon of Safekeeping: the padlock beside the tag
+	col.lock = CreateFrame("Button", nil, col);
+	col.lock:SetWidth(18);
+	col.lock:SetHeight(18);
+	col.lock:SetPoint("RIGHT", col.tag, "LEFT", -4, 0);
+	col.lock:RegisterForClicks("LeftButtonUp");
+	col.lock.icon = Tex(col.lock, "ARTWORK", TEX .. "lock");
+	col.lock.icon:SetAllPoints(col.lock);
+	col.lock:SetScript("OnClick", function(self)
+		local card = col.card.data;
+		if ( card and self.clickable ) then Request("LOCK", card.code); end
+	end);
+	col.lock:SetScript("OnEnter", function(self)
+		if ( not GameTooltip or not self.tip ) then return; end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT");
+		GameTooltip:SetText(self.tip);
+		GameTooltip:Show();
+	end);
+	col.lock:SetScript("OnLeave", function() if ( GameTooltip ) then GameTooltip:Hide(); end end);
+
 	c:SetScript("OnClick", function(self) if ( self.data ) then Select(self.data.code); end end);
 	c:SetScript("OnDoubleClick", function(self) if ( self.data ) then Select(self.data.code); Take(); end end);
 	c:SetScript("OnEnter", CardTooltip);
@@ -853,6 +878,30 @@ local function DrawShopCard(col, card, index, left)
 	end
 	col.tag:SetWidth(math.max(76, (col.tagText:GetStringWidth() or 12) + 13 + 5 + 26));
 
+	-- the padlock: yours (gold, click to take it off), somebody else's (lilac),
+	-- or an empty one you could put on (faint, click to lock)
+	local s = draft.shop;
+	local lock = col.lock;
+	lock.clickable = false;
+	if ( card.lockedByMe ) then
+		lock.icon:SetVertexColor(GOLD.r, GOLD.g, GOLD.b, 1);
+		lock.tip = "Locked by you: it won't reroll, and it still gets cheaper. Click to unlock.";
+		lock.clickable = true;
+		lock:Show();
+	elseif ( card.lockedBy ) then
+		lock.icon:SetVertexColor(ARCANE.r, ARCANE.g, ARCANE.b, 1);
+		lock.tip = "Locked by " .. card.lockedBy .. ": it won't reroll.";
+		lock:Show();
+	elseif ( (s.locksMax or 0) > 0 ) then
+		lock.icon:SetVertexColor(0.85, 0.82, 0.95, 0.35);
+		lock.tip = string.format("Lock this card so it won't reroll (%d of %d locks in use).", s.locksUsed or 0, s.locksMax);
+		lock.clickable = (s.locksUsed or 0) < s.locksMax;
+		lock:Show();
+	else
+		lock.tip = nil;
+		lock:Hide();
+	end
+
 	c:Show();
 	col:Show();
 end
@@ -866,6 +915,15 @@ local function Forecast(card)
 	end
 	local base = card.basePrice or card.price;
 	local nextPrice = math.max(1, math.floor(base * ((100 - cut) / 100) ^ ((card.discounts or 0) + 1) + 0.5));
+	-- your price comes off the board's by as much as Boon of the Haggler takes
+	local off = (card.basePrice and card.price) and math.max(0, (math.max(1, math.floor(base * ((100 - cut) / 100) ^ (card.discounts or 0) + 0.5))) - card.price) or 0;
+	nextPrice = math.max(1, nextPrice - off);
+	if ( card.lockedBy ) then
+		if ( nextPrice >= card.price ) then
+			return "Locked: it stays on the board at this price.";
+		end
+		return string.format("Locked: it stays on the board and drops to %s next wave.", Shards(nextPrice));
+	end
 	if ( reroll >= 100 ) then
 		return "If you wait, it leaves the board when the next wave is cleared.";
 	end
@@ -895,7 +953,20 @@ reroll:SetWidth(150);
 reroll:SetHeight(22);
 reroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, PAD);
 reroll:SetScript("OnClick", function()
-	if ( not draft or draft.taken or (draft.secondOpinions or 0) < 1 ) then return; end
+	if ( not draft or draft.taken ) then return; end
+	-- At the shop: redraw every unlocked card, for shards or a free reroll.
+	if ( draft.shop ) then
+		local s = draft.shop;
+		local cost = (s.freeRerolls or 0) > 0 and 0 or (s.rerollCost or 0);
+		if ( draft.rerolling or cost > (s.shards or 0) ) then return; end
+		if ( demo ) then return; end
+		draft.rerolling = true;
+		draft.rerollingUntil = GetTime() + 2;
+		Request("REROLL", 0);
+		Refresh();
+		return;
+	end
+	if ( (draft.secondOpinions or 0) < 1 ) then return; end
 	reroll:Disable();
 	Request("REROLL", 0);
 end);
@@ -954,6 +1025,10 @@ local function RefreshShop()
 		#draft.party > 1 and "  ·  SHARED WITH YOUR PARTY" or ""));
 	shop.count:SetText(tostring(s.shards or 0));
 	shop.income:SetText(string.format("+%d a wave  ·  +%d a kill", s.perWave or 0, s.perKill or 0));
+	local extras = {};
+	if ( (s.interest or 0) > 0 ) then extras[#extras + 1] = string.format("+%d interest", s.interest); end
+	if ( (s.locksMax or 0) > 0 ) then extras[#extras + 1] = string.format("locks %d/%d", s.locksUsed or 0, s.locksMax); end
+	shop.extras:SetText(table.concat(extras, "  ·  "));
 
 	local left = SHOP_PAD + (width - needed) / 2;
 	for i, card in ipairs(draft.cards) do
@@ -970,7 +1045,24 @@ local function RefreshShop()
 		if ( c.code == draft.selected ) then card, index = c, i; end
 	end
 	shop.footer:SetText(Forecast(card));
-	reroll:Hide();
+
+	-- Reroll, top left: free while a Gambler reroll is left this wave
+	local cost = (s.freeRerolls or 0) > 0 and 0 or (s.rerollCost or 0);
+	reroll:ClearAllPoints();
+	reroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -18);
+	reroll:SetWidth(132);
+	reroll:SetFrameLevel(frame:GetFrameLevel() + 12);
+	if ( draft.rerolling ) then
+		reroll:SetText("Rerolling...");
+		reroll:Disable();
+	elseif ( cost == 0 ) then
+		reroll:SetText((s.freeRerolls or 0) > 1 and string.format("Reroll (%d free)", s.freeRerolls) or "Reroll (free)");
+		reroll:Enable();
+	else
+		reroll:SetText("Reroll  ·  " .. Shards(cost));
+		if ( cost > (s.shards or 0) ) then reroll:Disable(); else reroll:Enable(); end
+	end
+	reroll:Show();
 
 	take:ClearAllPoints();
 	if ( not card ) then
@@ -1038,6 +1130,10 @@ Refresh = function()
 		take:Enable();
 	end
 
+	reroll:ClearAllPoints();
+	reroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, PAD);
+	reroll:SetWidth(150);
+	reroll:SetFrameLevel(frame:GetFrameLevel() + 3);
 	if ( (draft.secondOpinions or 0) > 0 ) then
 		reroll:SetText(string.format("Second opinion (%d)", draft.secondOpinions));
 		reroll:Enable();
@@ -1062,6 +1158,10 @@ frame:SetScript("OnUpdate", function()
 	end
 	if ( draft and draft.buying and GetTime() >= (draft.buyingUntil or 0) ) then
 		draft.buying = nil;
+		Refresh();
+	end
+	if ( draft and draft.rerolling and GetTime() >= (draft.rerollingUntil or 0) ) then
+		draft.rerolling = nil;
 		Refresh();
 	end
 end);
@@ -1176,6 +1276,8 @@ function handlers.SHOP(f)
 	pending.shop = {
 		shards = tonumber(f[2]) or 0, perWave = tonumber(f[3]) or 0, perKill = tonumber(f[4]) or 0,
 		reroll = tonumber(f[5]) or 50, discount = tonumber(f[6]) or 25,
+		rerollCost = tonumber(f[7]) or 2, freeRerolls = tonumber(f[8]) or 0,
+		locksUsed = tonumber(f[9]) or 0, locksMax = tonumber(f[10]) or 0, interest = tonumber(f[11]) or 0,
 	};
 end
 
@@ -1187,6 +1289,8 @@ function handlers.PRICE(f)
 			card.price = tonumber(f[3]) or 0;
 			card.basePrice = tonumber(f[4]) or card.price;
 			card.discounts = tonumber(f[5]) or 0;
+			card.lockedBy = (f[6] and f[6] ~= "") and f[6] or nil;
+			card.lockedByMe = f[7] == "1";
 			return;
 		end
 	end
@@ -1304,7 +1408,8 @@ local function ShopDemo()
 	demo = true;
 	Show({
 		tag = "demo-shop", wave = 9, final = 25, greed = 0, abundance = 0, hoarder = 0, secondOpinions = 0, commonOnly = false,
-		shop = { shards = 11, perWave = 4, perKill = 1, reroll = 50, discount = 25 },
+		shop = { shards = 11, perWave = 6, perKill = 1, reroll = 50, discount = 25,
+		         rerollCost = 2, freeRerolls = 1, locksUsed = 1, locksMax = 3, interest = 1 },
 		party = { { name = me, class = 4 }, { name = "Kaelen", class = 7 } }, classOf = { [me] = 4, Kaelen = 7 },
 		looks = { Kaelen = 27 }, deck = {},
 		cards = {
@@ -1321,7 +1426,7 @@ local function ShopDemo()
 			  held = 0, after = 1, cap = 1, unit = "", status = 0, owners = {}, price = 15, basePrice = 15 },
 			{ code = 302, kind = "I", tier = 5, icon = "I19019", name = "Thunderfury, Blessed Blade of the Windseeker", headline = "Crusader",
 			  text = "Lost when you leave the Hold.", held = 0, after = 0, cap = 0, unit = "", status = 0, owners = {},
-			  price = 20, basePrice = 20 },
+			  price = 20, basePrice = 20, lockedBy = me, lockedByMe = true },
 		},
 	});
 end
