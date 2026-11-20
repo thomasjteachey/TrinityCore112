@@ -972,6 +972,27 @@ bool IsRunUnique(Boon boon)
         || boon == Boon::SecondOpinion || boon == Boon::Crucible;
 }
 
+bool IsBrokerOnlyBoon(Boon boon)
+{
+    return boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::SecondOpinion || boon == Boon::Crucible;
+}
+
+uint8 GetRarityTier(Offer offer)
+{
+    if (offer.kind == Offer::Kind::Item)
+        return 5;
+    if (offer.kind == Offer::Kind::ClassSpell)
+        return 4;
+    if (offer.index >= uint8(Boon::Max))
+        return 1;
+    if (IsArtifact(Boon(offer.index)))
+        return 6;
+    uint8 const weight = kBoons[offer.index].weight;
+    if (!weight)
+        return 5;
+    return weight >= 8 ? 1 : weight >= 5 ? 2 : 3;
+}
+
 bool CallsMultitudes(Player const* player)
 {
     return player && player->HasAura(SPELL_BOON_MULTITUDES);
@@ -1379,13 +1400,20 @@ uint32 GetOfferWeight(Offer const& offer)
     return 0;
 }
 
-std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count, bool commonBoonsOnly)
+namespace
+{
+// RollOffers' draw, over only the offers `allowed` lets through.
+template <typename Allowed>
+std::vector<Offer> RollOffersWhere(std::vector<Player const*> const& roster, uint8 count, bool commonBoonsOnly,
+    Allowed const& allowed)
 {
     // "Only rolls when it makes sense": something is in the pool while at
     // least one person on the team could take it. Two hunters and one who
     // already has Silencing Shot still leaves it rollable for the other.
-    auto anyoneCan = [&roster](Offer const& offer)
+    auto anyoneCan = [&roster, &allowed](Offer const& offer)
     {
+        if (!allowed(offer))
+            return false;
         for (Player const* member : roster)
             if (member && CanTake(member, offer) == PickResult::Ok && SuitsSpec(member, offer))
                 return true;
@@ -1443,6 +1471,25 @@ std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 co
     }
 
     return picked;
+}
+}
+
+std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count, bool commonBoonsOnly)
+{
+    return RollOffersWhere(roster, count, commonBoonsOnly, [](Offer const&) { return true; });
+}
+
+Optional<Offer> RollShopOffer(std::vector<Player const*> const& roster, std::vector<Offer> const& exclude)
+{
+    std::vector<Offer> const rolled = RollOffersWhere(roster, 1, false, [&exclude](Offer const& offer)
+    {
+        if (offer.kind == Offer::Kind::Boon && IsBrokerOnlyBoon(Boon(offer.index)))
+            return false;
+        return std::find(exclude.begin(), exclude.end(), offer) == exclude.end();
+    });
+    if (rolled.empty())
+        return {};
+    return rolled.front();
 }
 
 PickResult Take(Player* player, Offer offer)

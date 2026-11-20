@@ -66,6 +66,7 @@
 #include "Common.h"
 #include "Position.h"
 #include "VioletHoldBoons.h"
+#include "VioletHoldShop.h"
 
 #include <bitset>
 #include <map>
@@ -170,8 +171,16 @@ enum BG_VHR_Creatures
     // five brokers per player (late-run base two, Hoarder x2 and Crucible),
     // a whole run can retain 1,250. Leave a little failure room.
     BG_VHR_CREATURE_BOON_BROKER_MAX = 1280,
-    BG_VHR_CREATURE_MAX            = 1280
+    // The shop keeper, in a run that has the shop instead of brokers
+    // (Centurion.VioletHold.Shop.Enable). One for the whole run, on the
+    // entrance landing.
+    BG_VHR_CREATURE_SHOP_KEEPER    = 1280,
+    BG_VHR_CREATURE_MAX            = 1281
 };
+
+// CreatureAI::DoAction on the shop keeper: the board or the wallets changed,
+// so whoever has the shop window open is sent it again.
+constexpr int32 BG_VHR_ACTION_SHOP_CHANGED = 1;
 
 enum BG_VHR_Constants
 {
@@ -628,6 +637,22 @@ public:
     void EnableCrucible(Player* player);
     bool IsCommonOnlyBroker(ObjectGuid guid) const { return _commonOnlyBrokers.find(guid) != _commonOnlyBrokers.end(); }
 
+    // --- the shop (Centurion.VioletHold.Shop.Enable) ------------------------
+    // Fixed at the first gate opening, like the broker mode. A shop run drops
+    // no brokers at all; the shop keeper stands on the entrance landing for
+    // the whole run and the party buys from one shared board (VioletHoldShop).
+    bool UsesShop() const { return _shopMode; }
+    VioletHoldShop& GetShop() { return _shop; }
+    VioletHoldShop const& GetShop() const { return _shop; }
+    ObjectGuid GetShopKeeperGuid() const;
+    bool IsShopKeeper(ObjectGuid guid) const { return _shopMode && guid && guid == GetShopKeeperGuid(); }
+    // Asks the keeper's script to send the board again to whoever has it open.
+    void NotifyShopChanged();
+    // GM test (.vhr shop start): makes this run a shop run now, whatever
+    // Centurion.VioletHold.Shop.Enable says - before the gates or mid-run.
+    // Brokers already standing stay; no more come. False if it already is.
+    bool StartShop();
+
     // The mode is fixed at the first gate opening. A broker without an owner
     // is one of the legacy shared brokers.
     bool UsesPersonalBrokers() const { return _personalBrokerMode; }
@@ -837,6 +862,14 @@ private:
         ObjectGuid ownerGuid = ObjectGuid::Empty);
     uint32 EnsurePersonalBrokerPhase(Player* player);
     void ApplyPersonalBrokerDifficulty(Player* enemy);
+    // The shop keeper onto the entrance landing (once per run).
+    void SpawnShopKeeper();
+    // A cleared wave in a shop run: everyone is paid and told their total,
+    // then the board rerolls or discounts its cards.
+    void PayWaveShards();
+    // Centre screen and in chat, to everyone in the run - for the champion
+    // and final-wave warnings in a shop run, which have no brokers to count.
+    void SendTextToAll(std::string const& text);
 
     uint32 GetHonorRewardForRun() const;
     void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;
@@ -908,6 +941,8 @@ private:
     bool _humanDiedThisWave = false;
     GuidSet _commonOnlyBrokers;
     bool _personalBrokerMode = false;
+    bool _shopMode = false;
+    VioletHoldShop _shop;
     std::unordered_map<ObjectGuid, ObjectGuid> _brokerOwners;
     std::unordered_map<ObjectGuid, uint32> _personalBrokerPhases;
     std::unordered_map<ObjectGuid, uint8> _personalSecondOpinionCharges;

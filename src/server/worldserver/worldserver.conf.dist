@@ -6816,6 +6816,49 @@ Centurion.Marks.HonorCostMultiplier = 0
 #                     for each member; Resolve shortens crowd control. Legacy mode retains
 #                     its original 100% Stamina/player, 50%+10% damage/player and 50% Resolve.
 #        Defaults:    75 / 30 / 8 / 40
+#
+#    Centurion.VioletHold.Shop.Enable
+#        Description: Replaces the boon brokers with one shared shop. The Ethereal Broker
+#                     stands on the entrance landing for the whole run with Slots cards that
+#                     the whole party sees; each player pays from their own shards. Buying a
+#                     card takes it off the board for everyone and its slot is drawn again at
+#                     once. Every cleared wave, each card either rerolls into a new one or
+#                     stays and gets cheaper. Greed, Hoarder, Second Opinion and Crucible are
+#                     not sold. PersonalBrokers still picks the difficulty curve. Captured
+#                     when a run starts; `.reload config` applies to the next run. Turn this
+#                     on only once the CENTURION_VioletHold addon with shop support is out.
+#        Default:     0 - (Boon brokers)
+#                     1 - (Shared shop)
+#
+#    Centurion.VioletHold.Shop.Slots
+#        Description: Cards on the shop board. Read when a run starts. Clamped 1-8.
+#        Default:     5
+#
+#    Centurion.VioletHold.Shop.StartingShards
+#    Centurion.VioletHold.Shop.ShardsPerWave
+#    Centurion.VioletHold.Shop.ShardsPerKillingBlow
+#        Description: Shards every party member starts the run with, is paid for each
+#                     cleared wave, and is paid for each killing blow on a wave clone (their
+#                     pet's blows count as theirs). Live on `.reload config`.
+#        Defaults:    0 / 4 / 1
+#
+#    Centurion.VioletHold.Shop.RerollChancePercent
+#        Description: Chance, as each wave is cleared, that a card on the board rerolls into
+#                     a new one. A card that does not reroll gets one DiscountPercent cheaper.
+#                     Clamped 0-100; live on `.reload config`.
+#        Default:     50
+#
+#    Centurion.VioletHold.Shop.DiscountPercent
+#        Description: How much cheaper a card gets for each wave it stays on the board,
+#                     compounding (25: 20 -> 15 -> 11 -> 8). Never below 1 shard. Clamped
+#                     0-100; live on `.reload config`.
+#        Default:     25
+#
+#    Centurion.VioletHold.Shop.TierPrices
+#        Description: Full price of a card by its frame: common, uncommon, rare, class
+#                     spell, legendary, artifact - six whole numbers in that order. A missing
+#                     number keeps its default. Read as each card is drawn.
+#        Default:     "3 5 8 10 20 15"
 
 Centurion.VioletHold.PrepSeconds = 30
 Centurion.VioletHold.CountdownFromSeconds = 15
@@ -6839,6 +6882,14 @@ Centurion.VioletHold.PersonalDifficulty.ChampionStaminaPercentPerPlayer = 75
 Centurion.VioletHold.PersonalDifficulty.ChampionDamageBasePercent = 30
 Centurion.VioletHold.PersonalDifficulty.ChampionDamagePercentPerPlayer = 8
 Centurion.VioletHold.PersonalDifficulty.ChampionResolvePercent = 40
+Centurion.VioletHold.Shop.Enable = 0
+Centurion.VioletHold.Shop.Slots = 5
+Centurion.VioletHold.Shop.StartingShards = 0
+Centurion.VioletHold.Shop.ShardsPerWave = 4
+Centurion.VioletHold.Shop.ShardsPerKillingBlow = 1
+Centurion.VioletHold.Shop.RerollChancePercent = 50
+Centurion.VioletHold.Shop.DiscountPercent = 25
+Centurion.VioletHold.Shop.TierPrices = "3 5 8 10 20 15"
 
 ###############################################################################
 

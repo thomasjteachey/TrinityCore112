@@ -221,4 +221,99 @@ take.scripts.OnClick(take);
 frame:Hide();
 check(#sent == before, "the demo never talks to the server");
 
+-- The shop (Centurion.VioletHold.Shop.Enable): the same block plus SHOP and
+-- PRICE lines, drawn as cards on display with hanging price tags. Buying keeps
+-- the window open and waits for the restocked board.
+local SHOPTAG = "0xF13000DBCD000500";
+local SHOPCARDS = {
+	[302] = { line = "^302^I^5^0^0^I19019^Thunderfury^Crusader^Lost when you leave the Hold.^0^0^0^^0", base = 20 },
+	[1] = { line = "^1^B^1^0^0^S90231^Boon of Might^+3%^damage done^6^9^255^%^0", base = 3 },
+	[27] = { line = "^27^B^3^0^0^S90291^Boon of the Vampire^+3%^of damage dealt returned as health^0^3^30^%^0", base = 8 },
+	[4] = { line = "^4^B^2^0^0^S90243^Boon of Haste^+6%^attack speed^0^6^255^%^0", base = 5 },
+};
+-- list: { { code, waves discounted }, ... }
+local function shopDeal(shards, list)
+	fire("VHBOON:DEAL:" .. SHOPTAG .. "^9^25^0^0^0^0^0^Baku^4^Kaelen^7");
+	fire("VHBOON:SHOP:" .. SHOPTAG .. "^" .. shards .. "^4^1^50^25");
+	for _, entry in ipairs(list) do
+		local def = SHOPCARDS[entry[1]];
+		local price = math.max(1, math.floor(def.base * 0.75 ^ entry[2] + 0.5));
+		fire("VHBOON:CARD:" .. SHOPTAG .. def.line);
+		fire("VHBOON:PRICE:" .. SHOPTAG .. "^" .. entry[1] .. "^" .. price .. "^" .. def.base .. "^" .. entry[2]);
+	end
+	fire("VHBOON:SHOW:" .. SHOPTAG);
+end
+local sounds = {};
+PlaySound = function(name) sounds[#sounds + 1] = name end
+local function heard(name) for _, s in ipairs(sounds) do if s == name then return true end end return false end
+local function tagOf(code) return card(code) and tostring(card(code).col.tagText.text) end
+local function noteOf(code) return card(code) and card(code).col.note.text end
+local function flagOf(code) local c = card(code); return c and c.flag.shown and c.flag.text or nil end
+
+shopDeal(11, { { 302, 0 }, { 1, 0 }, { 27, 2 } });
+check(frame.shown and #cards() == 3, "the shop's board is up (got " .. #cards() .. " cards)");
+check(tagOf(1) == "3", "a card's price hangs on its tag (got " .. tostring(tagOf(1)) .. ")");
+check(tagOf(27) == "5" and noteOf(27) == "38% OFF  ·  WAS 8", "a discounted card says how far it has come down (got " .. tostring(noteOf(27)) .. ")");
+check(noteOf(302) == "9 SHORT", "a card you cannot pay for says how short you are (got " .. tostring(noteOf(302)) .. ")");
+check(noteOf(1) == "", "a card at full price you can pay for has no note");
+check(not flagOf(1) and not flagOf(27), "the first look at a shop tags nothing");
+check(lastSent() == "VHBOON:LOOK:" .. SHOPTAG .. ":1", "the shop opens on the first card you can pay for (got " .. tostring(lastSent()) .. ")");
+check(take.shown and take.enabled and take.text == "Buy", "Buy sits under the picked card (got " .. tostring(take.text) .. ")");
+check(not button("Second opinion") or not button("Second opinion").shown, "no Second Opinion at the shop");
+
+card(302).scripts.OnClick(card(302));
+check(take.shown and not take.enabled and take.text == "Not enough", "Buy is off for a card you cannot pay for (got " .. tostring(take.text) .. ")");
+card(1).scripts.OnClick(card(1));
+take.scripts.OnClick(take);
+check(lastSent() == "VHBOON:BUY:" .. SHOPTAG .. ":1", "Buy sends BUY (got " .. tostring(lastSent()) .. ")");
+check(frame.shown, "buying keeps the shop open");
+check(not take.enabled and take.text == "Buying...", "Buy waits for the server (got " .. tostring(take.text) .. ")");
+take.scripts.OnClick(take);
+check(lastSent() == "VHBOON:BUY:" .. SHOPTAG .. ":1" and not take.enabled, "a second click while waiting sends nothing");
+
+-- the server restocks: Might is gone, Haste took its slot
+sounds = {};
+shopDeal(8, { { 302, 0 }, { 4, 0 }, { 27, 2 } });
+check(heard("LOOTWINDOWCOINSOUND"), "the sale going through rings the coins");
+check(flagOf(4) == "NEW" and not flagOf(27), "the restocked card is tagged NEW (got " .. tostring(flagOf(4)) .. ")");
+check(take.enabled and take.text == "Buy", "the restocked board frees the button (got " .. tostring(take.text) .. ")");
+check(lastSent() == "VHBOON:LOOK:" .. SHOPTAG .. ":4", "with the bought card gone, the next one you can pay for is picked (got " .. tostring(lastSent()) .. ")");
+
+-- a wave clears: two cards stayed and came down
+before = #sent;
+sounds = {};
+shopDeal(12, { { 302, 1 }, { 4, 0 }, { 27, 3 } });
+check(flagOf(302) == "CHEAPER" and flagOf(27) == "CHEAPER" and not flagOf(4), "cards that came down are tagged CHEAPER");
+check(tagOf(302) == "15" and noteOf(302) == "3 SHORT", "Thunderfury is now 15, three short (got " .. tostring(tagOf(302)) .. ", " .. tostring(noteOf(302)) .. ")");
+check(#sent == before and not heard("LOOTWINDOWCOINSOUND"), "the same card stays picked, quietly");
+
+take.scripts.OnClick(take);
+now = now + 3;
+frame.scripts.OnUpdate(frame);
+check(take.enabled and take.text == "Buy", "a buy nobody answers stops waiting (got " .. tostring(take.text) .. ")");
+
+frame:Hide();
+check(lastSent() == "VHBOON:LOOK:" .. SHOPTAG .. ":999", "closing the shop tells the server (got " .. tostring(lastSent()) .. ")");
+
+shopDeal(0, {});
+check(frame.shown and #cards() == 0, "a sold-out shop still opens");
+check(not take.shown, "no Buy in a sold-out shop");
+frame:Hide();
+
+before = #sent;
+sounds = {};
+SlashCmdList.CENTURIONVHDRAFT("shop");
+check(frame.shown and #cards() == 5, "/vhdraft shop shows five cards (got " .. #cards() .. ")");
+check(flagOf(27) == "CHEAPER" and flagOf(208) == "NEW", "the demo shows both tags");
+take.scripts.OnClick(take);
+check(frame.shown and #sent == before and heard("LOOTWINDOWCOINSOUND"), "the shop demo buys locally and never talks to the server");
+frame:Hide();
+
+-- a broker after the shop: back to the plain hand
+deal();
+fire("VHBOON:SHOW:" .. TAG);
+check(frame.shown and #cards() == 5, "a broker's hand after the shop shows only its own five cards (got " .. #cards() .. ")");
+check(take.shown and take.text == "Take", "the broker's Take button is back (got " .. tostring(take.text) .. ")");
+fire("VHBOON:GONE:" .. TAG);
+
 OUT = string.format("pass=%d fail=%d %s", pass, fail, table.concat(log, "; "));

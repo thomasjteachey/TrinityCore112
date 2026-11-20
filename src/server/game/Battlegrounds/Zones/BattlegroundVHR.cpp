@@ -2,7 +2,9 @@
 
 #include "BattlegroundMgr.h"
 #include "CharacterCache.h"
+#include "Chat.h"
 #include "CombatManager.h"
+#include "CreatureAI.h"
 #include "DatabaseEnv.h"
 #include "Creature.h"
 #include "DBCStores.h"
@@ -74,6 +76,12 @@ Position const kMainDoor = { 1822.59f, 803.928f, 44.3647f, 3.14159f };
 
 // Where the party is put down, just inside the seal on the entrance landing.
 Position const kPlayerStart = { 1848.03f, 804.62f, 44.07f, 0.027476f };
+
+// The shop keeper (Centurion.VioletHold.Shop.Enable), a few steps north of the
+// party's landing spot, between where the stock instance stands its training
+// dummy (1840.4, 813.6) and its northern gate guard (1854.0, 810.5) - both on
+// the landing's floor.
+Position const kShopKeeperSpot = { 1846.0f, 811.0f, 44.07f, 0.0f };
 
 // Middle of the chamber floor, below the ramp. Anyone loitering on a cell that
 // is about to open gets moved here - it is the furthest point from every cell.
@@ -325,6 +333,8 @@ void BattlegroundVHR::Reset()
     _humanDiedThisWave = false;
     _commonOnlyBrokers.clear();
     _personalBrokerMode = false;
+    _shopMode = false;
+    _shop.Reset();
     _brokerOwners.clear();
     _personalBrokerPhases.clear();
     _personalSecondOpinionCharges.clear();
@@ -408,6 +418,12 @@ void BattlegroundVHR::StartingEventOpenDoors()
         for (ObjectGuid guid : GetHumanRoster(false))
             if (Player* player = ObjectAccessor::FindPlayer(guid))
                 EnsurePersonalBrokerPhase(player);
+
+    // The shop replaces the brokers for the whole run. PersonalBrokers still
+    // picks the difficulty curve; it just has no brokers to hand out. A GM may
+    // already have opened it during the countdown (.vhr shop start).
+    if (!_shopMode && VioletHoldShop::IsEnabledInConfig())
+        StartShop();
 
     BeginWave();
 }
@@ -1357,17 +1373,30 @@ void BattlegroundVHR::CompleteWave()
     _recentHits.clear();
     RestorePartyAfterWave();
     uint32 const brokers = SpawnWaveRewardBuffs();
+    if (_shopMode)
+        PayWaveShards();
 
     // The waves before the champion and before the last one are worth a
     // warning: centre screen so it is seen, and in chat so it stays.
     uint32 const nextWave = _waveNumber + 1;
-    if (_personalBrokerMode && nextWave == uint32(sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_SECOND_BROKER_WAVE)))
+    if (_personalBrokerMode && !_shopMode
+        && nextWave == uint32(sWorld->getIntConfig(CONFIG_CENTURION_VHR_PERSONAL_SECOND_BROKER_WAVE)))
     {
         PSendMessageToAll(BG_VHR_STRING_SECOND_BROKER, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, nextWave);
         PSendMessageToAll(BG_VHR_STRING_SECOND_BROKER, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, nextWave);
     }
 
-    if (nextWave == BG_VHR_MIDBOSS_WAVE)
+    // A shop run has no brokers to count, so its warnings leave them out.
+    if (_shopMode && nextWave == BG_VHR_MIDBOSS_WAVE)
+    {
+        PickWarchief();
+        SendTextToAll(_warchiefGuid
+            ? Trinity::StringFormat("Wave {} is the Warchief, {}.", nextWave, _warchiefName)
+            : Trinity::StringFormat("Wave {} is a champion.", nextWave));
+    }
+    else if (_shopMode && nextWave == BG_VHR_FINAL_WAVE)
+        SendTextToAll("The next wave is the last.");
+    else if (nextWave == BG_VHR_MIDBOSS_WAVE)
     {
         PickWarchief();
         if (_warchiefGuid)
@@ -1643,6 +1672,15 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
         }
         droppedRune = true;
         placed.push_back(spot);
+    }
+
+    // A shop run's boons are bought at the shop keeper; no broker comes.
+    if (_shopMode)
+    {
+        if (droppedRune)
+            _runesOut = true;
+        SendRuneFeedIfChanged();
+        return 0;
     }
 
     // And a boon broker PER drop, on top of the runes, never instead of one -
@@ -2037,10 +2075,99 @@ uint32 BattlegroundVHR::GetExtraPlayerPhaseMask(Player const* player) const
     return itr != _personalBrokerPhases.end() ? itr->second : 0;
 }
 
+ObjectGuid BattlegroundVHR::GetShopKeeperGuid() const
+{
+    return BgCreatures.size() > BG_VHR_CREATURE_SHOP_KEEPER ? BgCreatures[BG_VHR_CREATURE_SHOP_KEEPER] : ObjectGuid::Empty;
+}
+
+void BattlegroundVHR::SpawnShopKeeper()
+{
+    if (BgCreatures[BG_VHR_CREATURE_SHOP_KEEPER])
+        DelCreature(BG_VHR_CREATURE_SHOP_KEEPER);
+
+    // Onto the landing's floor wherever the spot's height is a little off,
+    // but never down onto the chamber floor below if the search misses.
+    Position spot = kShopKeeperSpot;
+    if (Map* map = FindBgMap())
+    {
+        float const z = map->GetHeight(PHASEMASK_NORMAL, spot.GetPositionX(), spot.GetPositionY(),
+            spot.GetPositionZ() + 3.0f, true, 6.0f);
+        if (z > INVALID_HEIGHT && std::fabs(z - kPlayerStart.GetPositionZ()) < 1.5f)
+            spot.m_positionZ = z;
+    }
+    spot.SetOrientation(spot.GetAbsoluteAngle(kPlayerStart));
+
+    if (!AddCreature(VioletHoldBoons::NPC_BOON_BROKER, BG_VHR_CREATURE_SHOP_KEEPER, spot))
+        TC_LOG_ERROR("bg.battleground", "BattlegroundVHR: could not create the shop keeper (entry {}) for instance {}.",
+            VioletHoldBoons::NPC_BOON_BROKER, GetInstanceID());
+}
+
+bool BattlegroundVHR::StartShop()
+{
+    if (_shopMode && _shop.IsOpen())
+        return false;
+
+    _shopMode = true;
+    std::vector<Player const*> roster;
+    CollectHumanPlayers(roster);
+    _shop.Open(roster);
+    SpawnShopKeeper();
+    return true;
+}
+
+void BattlegroundVHR::NotifyShopChanged()
+{
+    if (!_shopMode)
+        return;
+    Map* map = FindBgMap();
+    Creature* keeper = map ? map->GetCreature(GetShopKeeperGuid()) : nullptr;
+    if (keeper && keeper->AI())
+        keeper->AI()->DoAction(BG_VHR_ACTION_SHOP_CHANGED);
+}
+
+void BattlegroundVHR::PayWaveShards()
+{
+    std::vector<Player const*> roster;
+    CollectHumanPlayers(roster);
+
+    uint32 const perWave = VioletHoldShop::GetShardsPerWave();
+    for (Player const* member : roster)
+    {
+        if (!member)
+            continue;
+        uint32 const fromKills = _shop.TakeKillingBlowShards(member->GetGUID());
+        _shop.AddShards(member->GetGUID(), perWave);
+        if (!member->GetSession())
+            continue;
+
+        std::string line = Trinity::StringFormat("Wave {} cleared: +{} shards", _waveNumber, perWave);
+        if (fromKills)
+            line += Trinity::StringFormat(", +{} from killing blows", fromKills);
+        line += Trinity::StringFormat(". You have {} shards to spend at the broker.", _shop.GetShards(member->GetGUID()));
+        ChatHandler(member->GetSession()).SendSysMessage(line.c_str());
+    }
+
+    _shop.AgeBoard(roster);
+    NotifyShopChanged();
+}
+
+void BattlegroundVHR::SendTextToAll(std::string const& text)
+{
+    for (ChatMsg type : { CHAT_MSG_RAID_BOSS_EMOTE, CHAT_MSG_BG_SYSTEM_NEUTRAL })
+    {
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, type, LANG_UNIVERSAL, ObjectGuid::Empty, ObjectGuid::Empty, text, 0);
+        SendPacketToAll(&data);
+    }
+}
+
 bool BattlegroundVHR::MayUseBoonBroker(Player const* player, ObjectGuid brokerGuid) const
 {
     if (!player)
         return false;
+    // The shop keeper serves the whole party, whatever the broker mode.
+    if (IsShopKeeper(brokerGuid))
+        return player->GetBGTeam() == _humanTeam && !IsAlly(player->GetGUID());
     ObjectGuid const owner = GetBoonBrokerOwner(brokerGuid);
     return !_personalBrokerMode ? !owner : owner == player->GetGUID();
 }
@@ -2612,6 +2739,12 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
             && VioletHoldBoons::CallsMultitudes(killer)
             && RequestReflection(killer, "Lesser ", VioletHoldBoons::MULTITUDES_DIMINISHED_STACKS))
             ++_multitudesThisWave;
+
+        // Shop runs pay a killing blow in shards - to a party member's own
+        // blow or their pet's (credited to them), not to an ally's.
+        if (_shopMode && killer && killer != victim && killer->GetBGTeam() == _humanTeam
+            && !IsAlly(killer->GetGUID()) && killer->GetSession() && !killer->GetSession()->IsTransientPlayerSession())
+            _shop.OnKillingBlow(killer->GetGUID());
     }
 
     UpdateScoreWorldStates();

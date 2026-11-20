@@ -61,6 +61,7 @@
 
 #include "Define.h"
 #include "ObjectGuid.h"
+#include "Optional.h"
 #include "SharedDefines.h"
 #include <string>
 #include <vector>
@@ -715,6 +716,16 @@ namespace VioletHoldBoons
     // that run offers it again, even if its holder leaves.
     TC_GAME_API bool IsRunUnique(Boon boon);
 
+    // Greed, Hoarder, Second Opinion and Crucible: boons about brokers, which
+    // mean nothing in a run that has the shop instead (BattlegroundVHR::UsesShop).
+    TC_GAME_API bool IsBrokerOnlyBoon(Boon boon);
+
+    // The card's frame colour, read off the roll weight so a card that looks
+    // rare is rare in the pool: 1 common, 2 uncommon, 3 rare, 4 class spell,
+    // 5 legendary (and the very-rare weight-0 boons), 6 artifact. The shop
+    // prices by it too (Centurion.VioletHold.Shop.TierPrices).
+    TC_GAME_API uint8 GetRarityTier(Offer offer);
+
     // Boon of Multitudes: each killing blow its holder lands on a wave clone
     // calls a copy of the holder for the rest of the wave, at 25% power
     // (MULTITUDES_DIMINISHED_STACKS of Diminished: 75% less damage and
@@ -762,6 +773,11 @@ namespace VioletHoldBoons
     // Fewer if the pool has run dry.
     TC_GAME_API std::vector<Offer> RollOffers(std::vector<Player const*> const& roster, uint8 count = OFFERS_PER_BROKER,
         bool commonBoonsOnly = false);
+
+    // One card for the shop: the same weighted draw as RollOffers, leaving out
+    // `exclude` (what the shop's other slots already show) and the broker-only
+    // boons. Nothing when the pool has run dry.
+    TC_GAME_API Optional<Offer> RollShopOffer(std::vector<Player const*> const& roster, std::vector<Offer> const& exclude);
 
     // Apply one pick. Ok on success; otherwise nothing changed.
     TC_GAME_API PickResult Take(Player* player, Offer offer);
