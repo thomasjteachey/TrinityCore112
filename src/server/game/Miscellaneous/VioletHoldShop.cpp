@@ -107,12 +107,18 @@ uint32 VioletHoldShop::GetRerollCost()
     return ReadInt("Centurion.VioletHold.Shop.RerollCost", 2, 0, 1000);
 }
 
+uint32 VioletHoldShop::GetRerollCostStep()
+{
+    return ReadInt("Centurion.VioletHold.Shop.RerollCostStep", 1, 0, 100);
+}
+
 void VioletHoldShop::Reset()
 {
     _slots.clear();
     _shards.clear();
     _killShardsThisWave.clear();
     _freeRerollsUsed.clear();
+    _paidRerolls.clear();
     _viewers.clear();
     _extraSlots = 0;
     _open = false;
@@ -246,8 +252,10 @@ void VioletHoldShop::AgeBoard(std::vector<Player const*> const& roster)
     // Whatever nobody can take any more goes too.
     RestockDeadSlots(roster);
 
-    // Boon of the Gambler's rerolls are per wave.
+    // Boon of the Gambler's rerolls are per wave, and so is the climbing
+    // price of the paid ones.
     _freeRerollsUsed.clear();
+    _paidRerolls.clear();
 }
 
 bool VioletHoldShop::HasRoomForSlot() const
@@ -277,7 +285,11 @@ uint32 VioletHoldShop::GetFreeRerollsLeft(Player const* who) const
 
 uint32 VioletHoldShop::GetRerollCostFor(Player const* who) const
 {
-    return GetFreeRerollsLeft(who) ? 0 : GetRerollCost();
+    if (!who || GetFreeRerollsLeft(who))
+        return 0;
+    auto const itr = _paidRerolls.find(who->GetGUID());
+    uint32 const paid = itr != _paidRerolls.end() ? itr->second : 0;
+    return std::min<uint32>(GetRerollCost() + paid * GetRerollCostStep(), MAX_SHARD_AMOUNT);
 }
 
 bool VioletHoldShop::Reroll(Player const* who, std::vector<Player const*> const& roster)
@@ -287,7 +299,9 @@ bool VioletHoldShop::Reroll(Player const* who, std::vector<Player const*> const&
 
     if (GetFreeRerollsLeft(who))
         ++_freeRerollsUsed[who->GetGUID()];
-    else if (!Spend(who->GetGUID(), GetRerollCost()))
+    else if (Spend(who->GetGUID(), GetRerollCostFor(who)))
+        ++_paidRerolls[who->GetGUID()];
+    else
         return false;
 
     for (size_t i = 0; i < _slots.size(); ++i)

@@ -1280,6 +1280,7 @@ public:
             { "giants", VhrWaveEvent::Giants }, { "swarm", VhrWaveEvent::Swarm },
             { "goldrush", VhrWaveEvent::GoldRush }, { "bounty", VhrWaveEvent::Bounty },
             { "mirror", VhrWaveEvent::MirrorMatch }, { "mirrormatch", VhrWaveEvent::MirrorMatch },
+            { "doppelganger", VhrWaveEvent::Doppelganger }, { "doppel", VhrWaveEvent::Doppelganger },
         };
         for (auto const& [label, event] : kNames)
             if (key == label)
@@ -1289,7 +1290,7 @@ public:
                 return true;
             }
 
-        handler->SendSysMessage("Events: bloodmoon, quicksilver, giants, swarm, goldrush, bounty, mirror.");
+        handler->SendSysMessage("Events: bloodmoon, quicksilver, giants, swarm, goldrush, bounty, mirror, doppelganger.");
         handler->SetSentErrorMessage(true);
         return false;
     }

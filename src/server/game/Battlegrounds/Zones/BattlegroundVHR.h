@@ -196,7 +196,8 @@ enum class VhrWaveEvent : uint8
     Swarm,         // twice the clones, each at half strength
     GoldRush,      // killing blows pay triple shards / one more broker after the wave
     Bounty,        // one marked clone: its death pays everyone shards / one more broker
-    MirrorMatch,   // the whole wave is reflections of the party
+    MirrorMatch,   // the whole wave is reflections of the party, all of it evenly
+    Doppelganger,  // the whole wave is reflections of ONE party member
     Max
 };
 
@@ -212,7 +213,13 @@ enum BG_VHR_EventConstants
     BG_VHR_GOLD_RUSH_MULTIPLIER  = 3,
     BG_VHR_BOUNTY_SHARDS         = 10,
     // Raid target icon on the bounty: the skull.
-    BG_VHR_BOUNTY_RAID_ICON      = 7
+    BG_VHR_BOUNTY_RAID_ICON      = 7,
+    // The bounty has this long from the gates to die; then it escapes into a
+    // cell and the bounty is lost (owner 2026-11-20: killing it was no
+    // different from killing the rest of the wave). It sprints away as the
+    // gates open (Sprint, rank 3).
+    BG_VHR_BOUNTY_ESCAPE_MS      = 25 * IN_MILLISECONDS,
+    BG_VHR_SPELL_BOUNTY_SPRINT   = 11305
 };
 
 enum BG_VHR_Constants
@@ -262,15 +269,8 @@ enum BG_VHR_Constants
     // short of the map's MinHeight, so nothing slips past between sweeps.
     BG_VHR_FLOOR_CHECK_INTERVAL = 500,
 
-    // Chance per wave of each special composition, in tenths of a percent, so
-    // 25 is 2.5%. Rolled against urand(0, 999) in the order declared here.
-    BG_VHR_MONO_WAVE_CHANCE_PERMILLE   = 25,
-    BG_VHR_ROSTER_WAVE_CHANCE_PERMILLE = 25,
-
-    // Deliberately party-mirrored waves are seasoning. After one appears,
-    // deal at least this many bot-sourced waves before another party mirror
-    // may roll, so independent RNG cannot clump the same solo reflection.
-    BG_VHR_PARTY_WAVE_COOLDOWN = 3,
+    // (Retired 2026-11-20: the party-made waves are the Mirror Match and
+    // Doppelganger wave events now, and these silent odds no longer roll.)
 
     // How close a player has to be to a cell's release point to be pushed off
     // it when that cell is chosen. Checked once, as the wave is composed.
@@ -940,6 +940,10 @@ private:
     void ApplyWaveEventToClones();
     void ApplyWaveEventAtGates();
     void OnWaveEventKill(Player* victim);
+    // The bounty's time ran out: it slips into a cell and is gone.
+    void BountyEscapes();
+    // The skull on `target` for every group the party is in; Empty clears it.
+    void SetBountyIcon(ObjectGuid target);
     void EndWaveEvent();
 
     uint32 GetHonorRewardForRun() const;
@@ -1024,6 +1028,9 @@ private:
     VhrWaveEvent _lastWaveEvent = VhrWaveEvent::None;
     VhrWaveEvent _forcedWaveEvent = VhrWaveEvent::None;
     ObjectGuid _bountyGuid;
+    uint32 _bountyEscapeMs = 0;
+    // Doppelganger: whose reflections the wave is, for the announcement.
+    std::string _doppelgangerName;
     uint32 _eventBonusBrokers = 0;
     // .vhr next: the coming wave opens as soon as it is seated.
     bool _skipNextPrep = false;

@@ -6713,8 +6713,9 @@ Centurion.Marks.HonorCostMultiplier = 0
 #        Default:     15
 #
 #    Centurion.VioletHold.PartyWaveChancePercent
-#        Description: Percent chance a wave mirrors the party itself instead of being drawn
-#                     from the playerbot population.
+#        Description: No longer used (2026-11-20). Waves made of the party itself are the
+#                     Mirror Match and Doppelganger wave events now; see
+#                     Centurion.VioletHold.EventChancePercent.
 #        Default:     10
 #
 #    Centurion.VioletHold.FullPowerClonesPerPlayer
@@ -6861,10 +6862,14 @@ Centurion.Marks.HonorCostMultiplier = 0
 #        Default:     "3 5 8 10 20 15"
 #
 #    Centurion.VioletHold.Shop.RerollCost
-#        Description: Shards the shop's Reroll button costs; it redraws every card nobody
-#                     has locked. Boon of the Gambler makes one reroll a wave free per stack.
-#                     Clamped 0-1000; live on `.reload config`.
-#        Default:     2
+#    Centurion.VioletHold.Shop.RerollCostStep
+#        Description: The shop's Reroll button redraws every card nobody has locked. A
+#                     player's first paid reroll of a wave costs RerollCost shards, and each
+#                     one after it that wave costs RerollCostStep more (2, 3, 4...); the
+#                     price goes back down as each wave is cleared. Boon of the Gambler makes
+#                     one reroll a wave free per stack, and free rerolls do not raise the
+#                     price. Clamped 0-1000 / 0-100; live on `.reload config`.
+#        Defaults:    2 / 1
 #
 #    Centurion.VioletHold.TopTierRollPercent
 #        Description: Odds of the top of the boon pool - class spells, legendaries, the
@@ -6875,7 +6880,8 @@ Centurion.Marks.HonorCostMultiplier = 0
 #
 #    Centurion.VioletHold.EventChancePercent
 #        Description: Chance that a wave from wave 3 on carries a random event (Blood Moon,
-#                     Quicksilver, Giants, Swarm, Gold Rush, Bounty, Mirror Match). Never on
+#                     Quicksilver, Giants, Swarm, Gold Rush, Bounty, Mirror Match,
+#                     Doppelganger). Never on
 #                     the champion or the final wave, never the same event twice running.
 #                     Clamped 0-100; live on `.reload config`. GMs can force the next wave's
 #                     event with .vhr event <name>.
@@ -6912,6 +6918,7 @@ Centurion.VioletHold.Shop.RerollChancePercent = 50
 Centurion.VioletHold.Shop.DiscountPercent = 25
 Centurion.VioletHold.Shop.TierPrices = "3 5 8 10 20 15"
 Centurion.VioletHold.Shop.RerollCost = 2
+Centurion.VioletHold.Shop.RerollCostStep = 1
 Centurion.VioletHold.TopTierRollPercent = 50
 Centurion.VioletHold.EventChancePercent = 25
 

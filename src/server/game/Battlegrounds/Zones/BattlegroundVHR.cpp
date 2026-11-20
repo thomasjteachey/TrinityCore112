@@ -344,6 +344,8 @@ void BattlegroundVHR::Reset()
     _lastWaveEvent = VhrWaveEvent::None;
     _forcedWaveEvent = VhrWaveEvent::None;
     _bountyGuid.Clear();
+    _bountyEscapeMs = 0;
+    _doppelgangerName.clear();
     _eventBonusBrokers = 0;
     _skipNextPrep = false;
     _brokerOwners.clear();
@@ -650,31 +652,18 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
         _pendingRequest.hostBotMaxLevel = std::max(GetCustomRules().VhrBotMinLevel, GetCustomRules().VhrBotMaxLevel);
     }
 
-    // Party-mirror waves are the seasoning, not the meal: most waves are
-    // drawn from the playerbot population, with the party flavours rolled
-    // first so they keep their advertised odds whenever the anti-clumping
-    // cooldown says another party wave is eligible.
+    // Every wave is drawn from the playerbot population, except the two wave
+    // events made of the party itself (owner 2026-11-20: the old silent
+    // party-mirror rolls - one player over and over, the whole roster, a
+    // random mix - are announced events now; their old odds are gone, and
+    // Centurion.VioletHold.PartyWaveChancePercent no longer does anything).
     VhrWaveComposition composition = VhrWaveComposition::BotSourced;
-    bool const partyWaveEligible = !_lastPartyWave || _waveNumber - _lastPartyWave > BG_VHR_PARTY_WAVE_COOLDOWN;
-    if (partyWaveEligible)
-    {
-        if (urand(0, 999) < BG_VHR_MONO_WAVE_CHANCE_PERMILLE)
-            composition = VhrWaveComposition::SingleSource;
-        else if (urand(0, 999) < BG_VHR_ROSTER_WAVE_CHANCE_PERMILLE)
-            composition = VhrWaveComposition::FullRoster;
-        else if (urand(0, 99) < sWorld->getIntConfig(CONFIG_CENTURION_VHR_PARTY_WAVE_CHANCE))
-            composition = VhrWaveComposition::RandomPerSlot;
-
-        if (composition != VhrWaveComposition::BotSourced)
-            _lastPartyWave = _waveNumber;
-    }
-
-    // The Mirror Match event: every clone is one of the party.
     if (_waveEvent == VhrWaveEvent::MirrorMatch)
-    {
         composition = VhrWaveComposition::FullRoster;
+    else if (_waveEvent == VhrWaveEvent::Doppelganger)
+        composition = VhrWaveComposition::SingleSource;
+    if (composition != VhrWaveComposition::BotSourced)
         _lastPartyWave = _waveNumber;
-    }
 
     _pendingRequest.composition = composition;
     _pendingRequest.sourceGuids.reserve(enemyCount);
@@ -688,6 +677,8 @@ void BattlegroundVHR::ComposeWave(uint32 enemyCount)
             // One unlucky player, over and over.
             ObjectGuid const source = roster[urand(0, uint32(roster.size()) - 1)];
             _pendingRequest.sourceGuids.assign(enemyCount, source);
+            if (Player const* who = ObjectAccessor::FindPlayer(source))
+                _doppelgangerName = who->GetName();
             break;
         }
         case VhrWaveComposition::FullRoster:
@@ -2315,9 +2306,11 @@ WaveEventInfo const kWaveEvents[] =
     { VhrWaveEvent::Giants,      "GIANTS",       "fewer clones, but twice the size and half again as tough", nullptr },
     { VhrWaveEvent::Swarm,       "SWARM",        "twice the clones, each at half strength", nullptr },
     { VhrWaveEvent::GoldRush,    "GOLD RUSH",    "killing blows pay triple shards", "an extra boon broker comes when this wave falls" },
-    { VhrWaveEvent::Bounty,      "BOUNTY",       "one clone is marked with a skull, and its death pays everyone 10 shards",
-                                                 "one clone is marked with a skull, and its death calls an extra boon broker" },
+    { VhrWaveEvent::Bounty,      "BOUNTY",       "one clone is marked with a skull - kill it within 25 seconds and everyone gets 10 shards, or it escapes",
+                                                 "one clone is marked with a skull - kill it within 25 seconds for an extra boon broker, or it escapes" },
     { VhrWaveEvent::MirrorMatch, "MIRROR MATCH", "the whole wave is your own reflections", nullptr },
+    // Its text names the party member (AnnounceWaveEvent).
+    { VhrWaveEvent::Doppelganger, "DOPPELGANGER", "every clone in this wave is", nullptr },
 };
 
 WaveEventInfo const* FindWaveEvent(VhrWaveEvent event)
@@ -2396,6 +2389,12 @@ void BattlegroundVHR::AnnounceWaveEvent()
     if (!info)
         return;
     char const* text = (!_shopMode && info->brokerText) ? info->brokerText : info->text;
+    if (_waveEvent == VhrWaveEvent::Doppelganger)
+    {
+        SendTextToAll(Trinity::StringFormat("Wave {} - {}: {} {}.", _waveNumber, info->name, text,
+            _doppelgangerName.empty() ? std::string("one of you") : _doppelgangerName));
+        return;
+    }
     SendTextToAll(Trinity::StringFormat("Wave {} - {}: {}.", _waveNumber, info->name, text));
 }
 
@@ -2443,17 +2442,17 @@ void BattlegroundVHR::ApplyWaveEventAtGates()
             if (candidates.empty())
                 break;
             Player* target = Trinity::Containers::SelectRandomContainerElement(candidates);
-            target->AddAura(BG_VHR_SPELL_BOUNTY, target);
+            // The mark counts down the time the party has (the client shows
+            // the aura's duration), and the bounty sprints off.
+            if (Aura* mark = target->AddAura(BG_VHR_SPELL_BOUNTY, target))
+            {
+                mark->SetMaxDuration(BG_VHR_BOUNTY_ESCAPE_MS);
+                mark->SetDuration(BG_VHR_BOUNTY_ESCAPE_MS);
+            }
+            target->AddAura(BG_VHR_SPELL_BOUNTY_SPRINT, target);
             _bountyGuid = target->GetGUID();
-
-            // The skull, for every group the party is in.
-            std::set<Group*> groups;
-            for (ObjectGuid guid : GetHumanRoster(false))
-                if (Player* member = ObjectAccessor::FindPlayer(guid))
-                    if (Group* group = member->GetGroup())
-                        groups.insert(group);
-            for (Group* group : groups)
-                group->SetTargetIcon(BG_VHR_BOUNTY_RAID_ICON, ObjectGuid::Empty, _bountyGuid);
+            _bountyEscapeMs = BG_VHR_BOUNTY_ESCAPE_MS;
+            SetBountyIcon(_bountyGuid);
             break;
         }
         default:
@@ -2461,11 +2460,49 @@ void BattlegroundVHR::ApplyWaveEventAtGates()
     }
 }
 
+void BattlegroundVHR::SetBountyIcon(ObjectGuid target)
+{
+    // The skull, for every group the party is in (Empty takes it off).
+    std::set<Group*> groups;
+    for (ObjectGuid guid : GetHumanRoster(false))
+        if (Player* member = ObjectAccessor::FindPlayer(guid))
+            if (Group* group = member->GetGroup())
+                groups.insert(group);
+    for (Group* group : groups)
+        group->SetTargetIcon(BG_VHR_BOUNTY_RAID_ICON, ObjectGuid::Empty, target);
+}
+
+void BattlegroundVHR::BountyEscapes()
+{
+    ObjectGuid const guid = _bountyGuid;
+    _bountyGuid.Clear();
+    _bountyEscapeMs = 0;
+    SetBountyIcon(ObjectGuid::Empty);
+
+    Player* bounty = guid ? ObjectAccessor::FindPlayer(guid) : nullptr;
+    if (!bounty || !bounty->IsAlive())
+        return;
+
+    SendTextToAll("The bounty got away!");
+    // Back through a door it came out of, out of sight, and out of the wave.
+    // The guid is already cleared, so this death pays nobody.
+    bounty->RemoveAurasDueToSpell(BG_VHR_SPELL_BOUNTY);
+    bounty->AddAura(SPELL_ARENA_PREPARATION, bounty);
+    if (!_waveCells.empty())
+    {
+        Position const& cell = kCells[_waveCells.front()].release;
+        bounty->NearTeleportTo(cell.GetPositionX(), cell.GetPositionY(), cell.GetPositionZ(), cell.GetOrientation());
+    }
+    bounty->KillSelf();
+}
+
 void BattlegroundVHR::OnWaveEventKill(Player* victim)
 {
     if (!victim || !_bountyGuid || victim->GetGUID() != _bountyGuid)
         return;
     _bountyGuid.Clear();
+    _bountyEscapeMs = 0;
+    SetBountyIcon(ObjectGuid::Empty);
 
     if (_shopMode)
     {
@@ -2491,6 +2528,8 @@ void BattlegroundVHR::EndWaveEvent()
     _lastWaveEvent = _waveEvent;
     _waveEvent = VhrWaveEvent::None;
     _bountyGuid.Clear();
+    _bountyEscapeMs = 0;
+    _doppelgangerName.clear();
     _eventBonusBrokers = 0;
 }
 
@@ -2926,6 +2965,14 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
                 }
                 else
                     _staggerReleaseMs -= diff;
+            }
+            // The Bounty event's clock.
+            if (_bountyEscapeMs)
+            {
+                if (_bountyEscapeMs <= diff)
+                    BountyEscapes();
+                else
+                    _bountyEscapeMs -= diff;
             }
             break;
         default:

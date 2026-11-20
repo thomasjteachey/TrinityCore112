@@ -82,7 +82,10 @@ public:
     static uint32 GetShardsPerKillingBlow();
     static uint32 GetRerollChancePercent();
     static uint32 GetDiscountPercent();
+    // The first paid reroll of a wave; each one after it that wave costs
+    // GetRerollCostStep() more (owner 2026-11-20: "like brotato").
     static uint32 GetRerollCost();
+    static uint32 GetRerollCostStep();
 
     void Reset();
     // Fills the board for the party as it stands and hands everyone their
@@ -117,8 +120,10 @@ public:
     uint32 GetExtraSlots() const { return _extraSlots; }
 
     // The reroll button: free while `who` has Boon of the Gambler rerolls left
-    // this wave, else Shop.RerollCost shards. Redraws every unlocked card.
-    // False, with nothing changed, when they cannot pay.
+    // this wave, else Shop.RerollCost shards plus Shop.RerollCostStep for
+    // every reroll they have already paid for this wave (free ones do not
+    // count). Redraws every unlocked card. False, with nothing changed, when
+    // they cannot pay.
     uint32 GetRerollCostFor(Player const* who) const;
     uint32 GetFreeRerollsLeft(Player const* who) const;
     bool Reroll(Player const* who, std::vector<Player const*> const& roster);
@@ -160,6 +165,7 @@ private:
     std::unordered_map<ObjectGuid, uint32> _shards;
     std::unordered_map<ObjectGuid, uint32> _killShardsThisWave;
     std::unordered_map<ObjectGuid, uint32> _freeRerollsUsed;
+    std::unordered_map<ObjectGuid, uint32> _paidRerolls;
     GuidSet _viewers;
     uint32 _extraSlots = 0;
     bool _open = false;
