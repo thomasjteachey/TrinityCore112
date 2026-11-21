@@ -338,7 +338,8 @@ shopDeal(0, { { 302, 0 }, { 4, 0 } }, "^0^1^0^0^0");
 check(rerollButton.enabled and rerollButton.text == "Reroll (free)", "a Gambler reroll is free, shards or not (got " .. tostring(rerollButton.text) .. ")");
 frame:Hide();
 
--- Ready: the next wave waits for the party to tell the broker
+-- The next-wave button: any one player starts the waiting wave, or calls
+-- the next one in on top of a fight
 local function readyDeal(waveLine)
 	fire("VHBOON:DEAL:" .. SHOPTAG .. "^9^25^0^0^0^0^0^Baku^4^Kaelen^7");
 	fire("VHBOON:SHOP:" .. SHOPTAG .. "^10^4^1^50^25^2^0^0^0^0");
@@ -347,19 +348,25 @@ local function readyDeal(waveLine)
 	if waveLine then fire("VHBOON:WAVE:" .. SHOPTAG .. waveLine) end
 	fire("VHBOON:SHOW:" .. SHOPTAG);
 end
-local readyBtn = button("I'm ready") or button("Start next wave") or button("Ready");
-readyDeal("^1^0^2^0");
-readyBtn = button("I'm ready");
-check(readyBtn and readyBtn.shown and readyBtn.enabled and readyBtn.text == "I'm ready  0/2", "Ready shows the party count (got " .. tostring(readyBtn and readyBtn.text) .. ")");
+readyDeal("^1^0^1^0^1^9");
+local readyBtn = button("Start wave");
+check(readyBtn and readyBtn.shown and readyBtn.enabled and readyBtn.text == "Start wave 9", "between waves it starts the waiting wave (got " .. tostring(readyBtn and readyBtn.text) .. ")");
 readyBtn.scripts.OnClick(readyBtn);
-check(lastSent() == "VHBOON:READY:" .. SHOPTAG .. ":0", "Ready sends READY (got " .. tostring(lastSent()) .. ")");
-check(not readyBtn.enabled, "Ready waits for the server");
-readyDeal("^1^1^2^1");
-check(readyBtn.shown and not readyBtn.enabled and readyBtn.text == "Ready  1/2", "once you are ready it says so (got " .. tostring(readyBtn.text) .. ")");
-readyDeal("^0^0^2^0");
-check(not readyBtn.shown, "no Ready while no wave is waiting");
+check(lastSent() == "VHBOON:READY:" .. SHOPTAG .. ":0", "the button sends READY (got " .. tostring(lastSent()) .. ")");
+check(not readyBtn.enabled and readyBtn.text == "Sending...", "it waits for the server (got " .. tostring(readyBtn.text) .. ")");
+local before = #sent;
+readyBtn.scripts.OnClick(readyBtn);
+check(#sent == before, "a second click while sending sends nothing");
+now = now + 3;
+frame.scripts.OnUpdate(frame);
+readyDeal("^1^0^1^0^2^10");
+check(readyBtn.shown and readyBtn.enabled and readyBtn.text == "Call wave 10 now", "mid-fight it calls the next wave in (got " .. tostring(readyBtn.text) .. ")");
+readyDeal("^1^0^1^0");
+check(readyBtn.shown and readyBtn.enabled and readyBtn.text == "Start next wave", "a line without the call fields still works (got " .. tostring(readyBtn.text) .. ")");
+readyDeal("^0^0^1^0^0^9");
+check(not readyBtn.shown, "no button while there is nothing to start");
 readyDeal(nil);
-check(not readyBtn.shown, "no Ready from a server that sends no WAVE line");
+check(not readyBtn.shown, "no button from a server that sends no WAVE line");
 frame:Hide();
 
 -- a broker after the shop: back to the plain hand

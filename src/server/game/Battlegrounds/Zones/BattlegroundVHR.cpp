@@ -351,8 +351,8 @@ void BattlegroundVHR::Reset()
     _eventBonusBrokers = 0;
     _skipNextPrep = false;
     _waitingForReady = false;
-    _readyVotes.clear();
     _readyTimeoutMs = 0;
+    _carriedOver.clear();
     _brokerOwners.clear();
     _personalBrokerPhases.clear();
     _personalSecondOpinionCharges.clear();
@@ -597,8 +597,6 @@ void BattlegroundVHR::BeginWave()
     _heldClones.clear();
     _timedReleaseMs = 0;
     _staggerReleaseMs = 0;
-    // A fresh ready vote for this wave.
-    _readyVotes.clear();
     _waitingForReady = false;
     _readyTimeoutMs = 0;
 
@@ -830,7 +828,14 @@ void BattlegroundVHR::ClearPlayersFromSpawn()
     for (auto const& itr : GetPlayers())
     {
         Player* player = ObjectAccessor::FindPlayer(itr.first);
-        if (!player || player->GetBGTeam() != _humanTeam || player->IsBeingTeleported())
+        if (!player || player->IsBeingTeleported())
+            continue;
+
+        // A clone an early call left standing - most likely one let out of
+        // its cell that very moment - must not be shut back in with the
+        // next wave either.
+        bool const carriedOver = IsCarriedOverClone(itr.first);
+        if (player->GetBGTeam() != _humanTeam && !(carriedOver && player->IsAlive()))
             continue;
 
         for (uint32 cellIndex : _waveCells)
@@ -843,8 +848,12 @@ void BattlegroundVHR::ClearPlayersFromSpawn()
             if ((dx * dx + dy * dy + dz * dz) > radiusSq)
                 continue;
 
-            player->TeleportTo(GetMapId(), kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(),
-                kChamberCentre.GetPositionZ(), kChamberCentre.GetOrientation());
+            if (carriedOver)
+                player->NearTeleportTo(kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(),
+                    kChamberCentre.GetPositionZ(), kChamberCentre.GetOrientation());
+            else
+                player->TeleportTo(GetMapId(), kChamberCentre.GetPositionX(), kChamberCentre.GetPositionY(),
+                    kChamberCentre.GetPositionZ(), kChamberCentre.GetOrientation());
             break;
         }
     }
@@ -866,10 +875,12 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
 
     // Record the wave's clones by reading the roster back out: the driver
     // spawned them straight into this battleground, so they are already in
-    // m_Players on the enemy side.
+    // m_Players on the enemy side. What an early call left standing is not
+    // this wave's: it must not be held, topped up or counted as seated here.
     _waveEnemies.clear();
     for (auto const& itr : GetPlayers())
-        if (itr.second.Team == _enemyTeam && _eliminated.find(itr.first) == _eliminated.end())
+        if (itr.second.Team == _enemyTeam && _eliminated.find(itr.first) == _eliminated.end()
+            && !IsCarriedOverClone(itr.first))
             _waveEnemies.push_back(itr.first);
 
     // Which of them stay in their cells when the gates open, from the slot
@@ -932,18 +943,12 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
         _waveState = WaveState::Preparing;
         if (_shopMode && !_skipNextPrep && VioletHoldTuning::Int("Wave.ReadyToStart"))
         {
-            // No timer: the wave waits for the party (VoteReady). Votes cast
-            // while it was still being seated count.
+            // No timer: the wave waits for somebody to send it (StartNextWave).
             _waitingForReady = true;
             int32 const timeout = VioletHoldTuning::Int("Wave.ReadyTimeoutSeconds");
             _readyTimeoutMs = timeout > 0 ? uint32(timeout) * IN_MILLISECONDS : 0;
-            if (AllReady())
-                StartReadyCountdown();
-            else
-            {
-                SendTextToAll(Trinity::StringFormat("Wave {} waits behind the doors. Tell the broker when you are ready.", _waveNumber));
-                NotifyShopChanged();
-            }
+            SendTextToAll(Trinity::StringFormat("Wave {} waits behind the doors. Tell the broker to send it in.", _waveNumber));
+            NotifyShopChanged();
         }
         else
         {
@@ -1389,8 +1394,9 @@ bool BattlegroundVHR::OwnsPreparationState(Player const* player) const
             // before the window starts, and the clones already in the world sit
             // that out behind a shut door with no preparation, no immunity and
             // live bot AI. The previous wave's bodies are still on this team
-            // until the driver clears them, hence the living only.
-            return player->IsAlive() && player->GetBGTeam() == _enemyTeam;
+            // until the driver clears them, hence the living only - and not
+            // what an early call left standing, which is still fighting.
+            return player->IsAlive() && player->GetBGTeam() == _enemyTeam && !IsCarriedOverClone(player->GetGUID());
         case WaveState::Preparing:
             return std::find(_waveEnemies.begin(), _waveEnemies.end(), player->GetGUID()) != _waveEnemies.end();
         case WaveState::Fighting:
@@ -1458,6 +1464,9 @@ void BattlegroundVHR::OpenWaveCell()
             PSendMessageToAll(BG_VHR_STRING_CHAMPION_FREE, CHAT_MSG_RAID_BOSS_EMOTE, nullptr, name.c_str());
             PSendMessageToAll(BG_VHR_STRING_CHAMPION_FREE, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr, name.c_str());
         }
+
+    // The shop window's button turns from "start" to "call the next one".
+    NotifyShopChanged();
 }
 
 void BattlegroundVHR::CompleteWave()
@@ -1473,10 +1482,10 @@ void BattlegroundVHR::CompleteWave()
     // draws its source characters from the living roster, and a party that just
     // clawed through a wave should be whole again when that happens.
     // Reflections last the wave they joined; they go before anyone is raised.
+    // (Waves called on top of each other share one floor: all of it is clear.)
+    _carriedOver.clear();
     DismissFleetingAllies();
-    _multitudesThisWave = 0;
-    _oncePerWave.clear();
-    _perWaveCounts.clear();
+    ResetPerWaveCharges();
     // Undying runs out on the wave, not on the holder: ended here without a
     // death, so the restore below finds them standing and fills them up.
     EndUndying();
@@ -1485,9 +1494,22 @@ void BattlegroundVHR::CompleteWave()
     VioletHoldBoons::ReturnInheritance(_inherited);
     _recentHits.clear();
     RestorePartyAfterWave();
+    PayOutWave();
+    BeginWave();
+}
+
+void BattlegroundVHR::ResetPerWaveCharges()
+{
+    _multitudesThisWave = 0;
+    _oncePerWave.clear();
+    _perWaveCounts.clear();
+}
+
+void BattlegroundVHR::PayOutWave(bool early)
+{
     uint32 const brokers = SpawnWaveRewardBuffs();
     if (_shopMode)
-        PayWaveShards();
+        PayWaveShards(early);
 
     // The waves before the champion and before the last one are worth a
     // warning: centre screen so it is seen, and in chat so it stays.
@@ -1531,8 +1553,6 @@ void BattlegroundVHR::CompleteWave()
 
     // The event's rewards are in the drop above; now it is over.
     EndWaveEvent();
-
-    BeginWave();
 }
 
 void BattlegroundVHR::OnRuneTaken(Player* taker, uint32 runeSpellId)
@@ -2232,26 +2252,16 @@ bool BattlegroundVHR::StartShop()
     return true;
 }
 
-void BattlegroundVHR::GetReadyState(Player const* player, uint32& ready, uint32& needed, bool& mine) const
+BattlegroundVHR::NextWaveCall BattlegroundVHR::GetNextWaveCall() const
 {
-    ready = needed = 0;
-    for (ObjectGuid guid : GetHumanRoster(false))
-        if (Player const* member = ObjectAccessor::FindPlayer(guid))
-            if (member->IsInWorld())
-            {
-                ++needed;
-                if (_readyVotes.count(guid))
-                    ++ready;
-            }
-    mine = player && _readyVotes.count(player->GetGUID()) != 0;
-}
-
-bool BattlegroundVHR::AllReady() const
-{
-    uint32 ready = 0, needed = 0;
-    bool mine = false;
-    GetReadyState(nullptr, ready, needed, mine);
-    return needed && ready >= needed;
+    if (!_shopMode || GetStatus() != STATUS_IN_PROGRESS || !VioletHoldTuning::Int("Wave.ReadyToStart"))
+        return NextWaveCall::None;
+    if (_waveState == WaveState::Preparing && _waitingForReady)
+        return NextWaveCall::Start;
+    // Never on top of the last wave: what comes after it is the win.
+    if (_waveState == WaveState::Fighting && _waveNumber < BG_VHR_FINAL_WAVE && VioletHoldTuning::Int("Wave.CallEarly"))
+        return NextWaveCall::CallEarly;
+    return NextWaveCall::None;
 }
 
 void BattlegroundVHR::StartReadyCountdown()
@@ -2264,28 +2274,75 @@ void BattlegroundVHR::StartReadyCountdown()
     NotifyShopChanged();
 }
 
-std::string BattlegroundVHR::VoteReady(Player* player)
+std::string BattlegroundVHR::StartNextWave(Player* player)
 {
-    if (!player || !_shopMode || !VioletHoldTuning::Int("Wave.ReadyToStart"))
+    if (!player)
+        return std::string();
+
+    switch (GetNextWaveCall())
+    {
+        case NextWaveCall::Start:
+            // One player's word is enough (owner 2026-11-20).
+            if (GetHumanRoster(false).size() > 1)
+                SendTextToAll(Trinity::StringFormat("{} sends wave {} in.", player->GetName(), _waveNumber));
+            StartReadyCountdown();
+            return "Here they come.";
+        case NextWaveCall::CallEarly:
+            return CallNextWaveEarly(player);
+        default:
+            break;
+    }
+
+    if (!_shopMode || !VioletHoldTuning::Int("Wave.ReadyToStart"))
         return "The next wave comes on its own timer.";
-    if (_waveState == WaveState::Fighting || _waveState == WaveState::NotStarted)
-        return "There is no wave waiting yet.";
-    if (_waveState == WaveState::Preparing && !_waitingForReady)
+    if (_waveState == WaveState::Fighting)
+        return _waveNumber >= BG_VHR_FINAL_WAVE ? "This is the last wave. Finish it." : "Finish this wave first.";
+    if (_waveState == WaveState::Preparing)
         return "The wave is already coming.";
+    return "The next wave is still being seated.";
+}
 
-    if (!_readyVotes.insert(player->GetGUID()).second)
-        return "You are ready. Waiting for the rest of the party.";
+std::string BattlegroundVHR::CallNextWaveEarly(Player* caller)
+{
+    uint32 const nextWave = _waveNumber + 1;
+    uint32 const standing = CountAliveEnemies();
+    int32 const cap = VioletHoldTuning::Int("Wave.CallEarlyMaxEnemies");
+    if (cap > 0 && standing + GetEnemyCountForWave(nextWave) > uint32(cap))
+        return Trinity::StringFormat("Too many are still standing ({}). Thin them out first.", standing);
 
-    uint32 ready = 0, needed = 0;
-    bool mine = false;
-    GetReadyState(player, ready, needed, mine);
-    if (needed > 1)
-        SendTextToAll(Trinity::StringFormat("{} is ready ({}/{}).", player->GetName(), ready, needed));
-    if (_waitingForReady && AllReady())
-        StartReadyCountdown();
-    else
-        NotifyShopChanged();
-    return ready >= needed ? "Here they come." : "You are ready. Waiting for the rest of the party.";
+    // Everything still behind a door comes out now: the whole of this wave is
+    // on the floor before the next one is seated.
+    ReleaseHeldClones(VhrCloneRelease::OnEnemyDeath);
+    ReleaseHeldClones(VhrCloneRelease::AfterDelay);
+    _timedReleaseMs = 0;
+    _staggerReleaseMs = 0;
+
+    // Whoever is standing - this wave's, and any earlier call's - fights on
+    // beside the next one. Rebuilt each call, so the dead drop out of it.
+    _carriedOver.clear();
+    for (auto const& itr : GetPlayers())
+        if (itr.second.Team == _enemyTeam && !itr.second.OfflineRemoveTime
+            && _eliminated.find(itr.first) == _eliminated.end())
+            _carriedOver.insert(itr.first);
+
+    uint32 const bonus = uint32(std::max<int32>(0, VioletHoldTuning::Int("Wave.CallEarlyShards")));
+    if (bonus)
+        for (ObjectGuid guid : GetHumanRoster(false))
+            _shop.AddShards(guid, bonus);
+    std::string const name = caller->GetName();
+    SendTextToAll(bonus
+        ? Trinity::StringFormat("{} calls wave {} in on top of {} still standing! +{} shards each.", name, nextWave, standing, bonus)
+        : Trinity::StringFormat("{} calls wave {} in on top of {} still standing!", name, nextWave, standing));
+
+    // This wave pays now: shards, runes, the per-wave boon charges. Raising
+    // the dead and topping everyone up wait for a clear floor (CompleteWave).
+    ResetPerWaveCharges();
+    PayOutWave(true);
+    // Seated, it opens at once: no preparation window in the middle of a fight.
+    _skipNextPrep = true;
+    BeginWave();
+    NotifyShopChanged();
+    return "Here they come.";
 }
 
 char const* BattlegroundVHR::SkipToNextWave()
@@ -2308,7 +2365,8 @@ char const* BattlegroundVHR::SkipToNextWave()
             _skipNextPrep = true;
             // Copied first: every death edits the held-back list, and the
             // last one clears the wave.
-            std::vector<ObjectGuid> const enemies = _waveEnemies;
+            std::vector<ObjectGuid> enemies = _waveEnemies;
+            enemies.insert(enemies.end(), _carriedOver.begin(), _carriedOver.end());
             for (ObjectGuid guid : enemies)
                 if (Player* enemy = ObjectAccessor::FindPlayer(guid))
                     if (enemy->IsInWorld() && enemy->IsAlive())
@@ -2341,7 +2399,7 @@ void BattlegroundVHR::NotifyShopChanged()
         keeper->AI()->DoAction(BG_VHR_ACTION_SHOP_CHANGED);
 }
 
-void BattlegroundVHR::PayWaveShards()
+void BattlegroundVHR::PayWaveShards(bool early)
 {
     std::vector<Player const*> roster;
     CollectHumanPlayers(roster);
@@ -2356,7 +2414,7 @@ void BattlegroundVHR::PayWaveShards()
         if (!member->GetSession())
             continue;
 
-        std::string line = Trinity::StringFormat("Wave {} cleared: +{} shards", _waveNumber, paid);
+        std::string line = Trinity::StringFormat("Wave {} {}: +{} shards", _waveNumber, early ? "called past" : "cleared", paid);
         if (interest)
             line += Trinity::StringFormat(" ({} of it interest)", interest);
         if (fromKills)
@@ -3090,18 +3148,14 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
         case WaveState::Preparing:
             if (_waitingForReady)
             {
-                // Someone left or went offline and the rest are all ready, or
-                // the optional timeout ran out.
-                bool timedOut = false;
+                // Nobody has sent it in: only the optional timeout starts it.
                 if (_readyTimeoutMs)
                 {
                     if (_readyTimeoutMs <= diff)
-                        timedOut = true;
+                        StartReadyCountdown();
                     else
                         _readyTimeoutMs -= diff;
                 }
-                if (timedOut || AllReady())
-                    StartReadyCountdown();
                 break;
             }
             if (_prepTimerMs <= diff)
@@ -3286,7 +3340,10 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
         if (held != _heldClones.end())
             _heldClones.erase(held);
 
-        if (_waveState == WaveState::Fighting)
+        // A clone an early call left standing is extra on the floor: its
+        // death only takes the floor back towards a normal wave's size, so it
+        // lets nobody out.
+        if (_waveState == WaveState::Fighting && !IsCarriedOverClone(victim->GetGUID()))
             ReleaseNextHeldClone(VhrCloneRelease::OnEnemyDeath);
 
         // Boon of Multitudes: the holder's killing blow (their own, or their

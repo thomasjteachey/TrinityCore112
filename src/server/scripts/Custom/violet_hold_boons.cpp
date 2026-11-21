@@ -59,7 +59,8 @@ constexpr uint32 ACTION_TEST_PREVIOUS = GOSSIP_ACTION_INFO_DEF + 501;
 constexpr uint32 ACTION_TEST_NEXT = GOSSIP_ACTION_INFO_DEF + 502;
 // The shop's wallet line: does nothing but show the menu again.
 constexpr uint32 ACTION_SHOP_WALLET = GOSSIP_ACTION_INFO_DEF + 503;
-// "I'm ready": the next wave may come (BattlegroundVHR::VoteReady).
+// "Send the next wave": any one player starts it, or calls it in on top of
+// the live one (BattlegroundVHR::StartNextWave).
 constexpr uint32 ACTION_SHOP_READY = GOSSIP_ACTION_INFO_DEF + 504;
 constexpr size_t TEST_OFFERS_PER_PAGE = 10;
 
@@ -782,7 +783,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         BattlegroundVHR* run = GetRun(me);
         if (!run || !run->IsShopKeeper(me->GetGUID()) || !MayTradeWith(player, run))
             return;
-        std::string const reply = run->VoteReady(player);
+        std::string const reply = run->StartNextWave(player);
         if (WorldSession* session = player->GetSession())
             session->SendNotification("%s", reply.c_str());
         run->GetShop().AddViewer(player->GetGUID());
@@ -857,15 +858,20 @@ private:
             rerollCost ? Trinity::StringFormat("Reroll the unlocked cards ({} shards)", rerollCost)
                        : std::string("Reroll the unlocked cards (free)"),
             GOSSIP_SENDER_MAIN, ACTION_REROLL);
-        if (run->IsWaitingForReady())
+        switch (run->GetNextWaveCall())
         {
-            uint32 ready = 0, needed = 0;
-            bool mine = false;
-            run->GetReadyState(player, ready, needed, mine);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE,
-                mine ? Trinity::StringFormat("You are ready ({}/{}) - waiting for the party", ready, needed)
-                     : Trinity::StringFormat("I'm ready - send the next wave ({}/{})", ready, needed),
-                GOSSIP_SENDER_MAIN, ACTION_SHOP_READY);
+            case BattlegroundVHR::NextWaveCall::Start:
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE,
+                    Trinity::StringFormat("Send wave {} in", run->GetWaveNumber()),
+                    GOSSIP_SENDER_MAIN, ACTION_SHOP_READY);
+                break;
+            case BattlegroundVHR::NextWaveCall::CallEarly:
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE,
+                    Trinity::StringFormat("Call wave {} in now, on top of this one", run->GetWaveNumber() + 1),
+                    GOSSIP_SENDER_MAIN, ACTION_SHOP_READY);
+                break;
+            default:
+                break;
         }
 
         SendGossipMenuFor(player, NPC_TEXT_BOON_BROKER, me->GetGUID());
@@ -904,13 +910,17 @@ private:
                 Field(LockerName(slot)), slot.lockedBy == viewer->GetGUID() ? 1 : 0));
         }
 
-        // The ready vote, for the window's Ready button.
+        // The window's next-wave button:
+        //   WAVE:<tag>^<shown>^0^1^0^<call>^<wave>
+        // call 1 = send the waiting wave in, 2 = call the next one in on top
+        // of this fight; wave = the wave it brings. Fields 3-5 (ready, needed,
+        // mine) are what addons up to 1.00176 read for the old party vote:
+        // "0 of 1, not mine" draws their button as "Start next wave".
         {
-            uint32 ready = 0, needed = 0;
-            bool mine = false;
-            run->GetReadyState(viewer, ready, needed, mine);
-            Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:WAVE:{}^{}^{}^{}^{}", tag,
-                run->IsWaitingForReady() ? 1 : 0, ready, needed, mine ? 1 : 0));
+            BattlegroundVHR::NextWaveCall const call = run->GetNextWaveCall();
+            uint32 const wave = call == BattlegroundVHR::NextWaveCall::CallEarly ? run->GetWaveNumber() + 1 : run->GetWaveNumber();
+            Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:WAVE:{}^{}^0^1^0^{}^{}", tag,
+                call != BattlegroundVHR::NextWaveCall::None ? 1 : 0, uint32(call), wave));
         }
 
         SendDeck(viewer, tag);

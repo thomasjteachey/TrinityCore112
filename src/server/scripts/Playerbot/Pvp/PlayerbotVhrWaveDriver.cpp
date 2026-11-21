@@ -712,12 +712,17 @@ void FulfilWaveRequest(BattlegroundVHR* bg)
     if (AdvanceWaveAwaitingLoads(bg, *request))
         return;
 
-    // A pending request means the previous wave is fully dead (that is the
-    // only way a new wave begins), so every ENEMY clone this instance still
-    // holds is a corpse. Take them down now rather than letting forty waves of
+    // A pending request means the previous wave is dead or was called past:
+    // every ENEMY clone this instance holds is a corpse, except what an early
+    // call left standing (BattlegroundVHR::IsCarriedOverClone), which is still
+    // fighting. Take the rest down now rather than letting forty waves of
     // bodies and their transient sessions pile up in the player roster. The
     // party's Fellowship allies are clones on the human team and stay.
-    playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(instanceId, request->enemyTeam);
+    uint32 const waveTeam = request->enemyTeam;
+    for (playerbot::PlayerbotObcCloneManager::CustomGameCloneInfo const& clone :
+        playerbot::PlayerbotObcCloneManager::GetCustomGameClones(instanceId))
+        if (clone.team == waveTeam && !bg->IsCarriedOverClone(clone.cloneGuid))
+            playerbot::PlayerbotObcCloneManager::DestroyCustomGameClone(clone.cloneGuid);
 
     // Copy what we need before spawning: the first successful clone mutates
     // the battleground's player roster, and AddPlayer paths may touch the

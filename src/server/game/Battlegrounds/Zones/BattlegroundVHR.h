@@ -701,13 +701,23 @@ public:
     static void RemoveWaveEventAuras(Player* player);
     // GM test (.vhr event <name>): the next wave gets this event.
     void ForceNextWaveEvent(VhrWaveEvent event) { _forcedWaveEvent = event; }
-    // Shop runs: between waves the next one waits behind its doors until the
-    // whole party has told the broker it is ready (Wave.ReadyToStart), then
-    // a short countdown opens the gates. Returns the line for the player.
-    std::string VoteReady(Player* player);
-    bool IsWaitingForReady() const { return _waitingForReady; }
-    // Ready so far, ready needed (the party in the run), and this player's vote.
-    void GetReadyState(Player const* player, uint32& ready, uint32& needed, bool& mine) const;
+    // Shop runs (Wave.ReadyToStart): any one player starts the next wave at
+    // the broker. Between waves it waits behind its doors until somebody
+    // does, then a short countdown opens the gates. Mid-fight (Wave.CallEarly)
+    // it is called in on top of the live one: whatever is still standing
+    // fights on beside it (_carriedOver), the wave's pay comes at once, and
+    // the raising of the dead waits until the floor is really clear.
+    enum class NextWaveCall : uint8
+    {
+        None = 0,
+        Start,       // waiting behind the doors for somebody to send it
+        CallEarly    // a wave is being fought; the next can be called on top
+    };
+    NextWaveCall GetNextWaveCall() const;
+    // Returns the line for the player.
+    std::string StartNextWave(Player* player);
+    // A clone still standing from a wave the next was called on top of.
+    bool IsCarriedOverClone(ObjectGuid guid) const { return _carriedOver.find(guid) != _carriedOver.end(); }
 
     // GM test (.vhr next): get the next wave going now. Mid-fight the wave's
     // clones die (it clears and pays as usual) and the next one skips its
@@ -935,7 +945,7 @@ private:
     void SpawnShopKeeper();
     // A cleared wave in a shop run: everyone is paid and told their total,
     // then the board rerolls or discounts its cards.
-    void PayWaveShards();
+    void PayWaveShards(bool early = false);
     // Centre screen and in chat, to everyone in the run - for the champion
     // and final-wave warnings in a shop run, which have no brokers to count.
     void SendTextToAll(std::string const& text);
@@ -1043,12 +1053,22 @@ private:
     uint32 _eventBonusBrokers = 0;
     // .vhr next: the coming wave opens as soon as it is seated.
     bool _skipNextPrep = false;
-    // The ready vote between waves (VoteReady).
+    // Between waves: the next one waits for somebody to send it (StartNextWave).
     bool _waitingForReady = false;
-    GuidSet _readyVotes;
     uint32 _readyTimeoutMs = 0;
-    bool AllReady() const;
     void StartReadyCountdown();
+    // Mid-fight: the next wave called on top of this one.
+    std::string CallNextWaveEarly(Player* caller);
+    // Clones still standing from waves the next was called on top of. They
+    // are no part of the wave being seated (its hold, its cells, the driver's
+    // teardown) and go when the floor is clear (CompleteWave).
+    GuidSet _carriedOver;
+    // CompleteWave in two halves, so an early call can pay a wave without
+    // clearing the floor: the per-wave boon charges start over, and the
+    // reward drop, the shards, the next-wave warnings and the event's end.
+    void ResetPerWaveCharges();
+    // `early`: called on top of a fight, not cleared (the chat line says so).
+    void PayOutWave(bool early = false);
     std::unordered_map<ObjectGuid, ObjectGuid> _brokerOwners;
     std::unordered_map<ObjectGuid, uint32> _personalBrokerPhases;
     std::unordered_map<ObjectGuid, uint8> _personalSecondOpinionCharges;

@@ -94,9 +94,12 @@ Knob const kKnobs[] =
     { "Event.BountySeconds",         Kind::Int, 25, 5, 300, 0, "Bounty: seconds before it escapes" },
 
     // --- between waves (shop runs) -------------------------------------------
-    { "Wave.ReadyToStart",           Kind::Int, 1, 0, 1, 0, "1 = in a shop run the next wave waits until the party tells the broker it is ready; 0 = PrepSeconds timer" },
-    { "Wave.ReadyCountdownSeconds",  Kind::Int, 3, 1, 60, 0, "countdown once everyone is ready" },
+    { "Wave.ReadyToStart",           Kind::Int, 1, 0, 1, 0, "1 = in a shop run the next wave waits until any one player tells the broker to send it; 0 = PrepSeconds timer" },
+    { "Wave.ReadyCountdownSeconds",  Kind::Int, 3, 1, 60, 0, "countdown once somebody sends the waiting wave in" },
     { "Wave.ReadyTimeoutSeconds",    Kind::Int, 0, 0, 3600, 0, "start anyway after this long (0 = wait forever)" },
+    { "Wave.CallEarly",              Kind::Int, 1, 0, 1, 0, "1 = mid-fight, one player may call the next wave in on top of the live one (never the last)" },
+    { "Wave.CallEarlyMaxEnemies",    Kind::Int, 60, 0, 200, 0, "refuse an early call that would put more enemies than this in the Hold (0 = no cap)" },
+    { "Wave.CallEarlyShards",        Kind::Int, 2, 0, 1000, 0, "shards for everyone each time a wave is called early" },
 
     // --- the wave's release ---------------------------------------------------
     { "Release.TimedDelaySeconds",   Kind::Int, 30, 0, 300, 0, "the timed group comes out this long after the gates" },

@@ -971,14 +971,15 @@ reroll:SetScript("OnClick", function()
 	Request("REROLL", 0);
 end);
 
--- At the shop, between waves: tell the broker you are ready for the next one.
+-- At the shop: any one player starts the next wave - between waves the one
+-- waiting behind the doors, mid-fight the next one called in on top.
 local readyButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate");
 readyButton:SetWidth(132);
 readyButton:SetHeight(22);
 readyButton:Hide();
 readyButton:SetScript("OnClick", function()
 	local r = draft and draft.shop and draft.ready;
-	if ( not r or not r.waiting or r.mine or draft.readying or demo ) then return; end
+	if ( not r or not r.waiting or draft.readying or demo ) then return; end
 	draft.readying = true;
 	draft.readyingUntil = GetTime() + 2;
 	Request("READY", 0);
@@ -1078,20 +1079,20 @@ local function RefreshShop()
 	end
 	reroll:Show();
 
-	-- Ready, under Reroll, while the next wave waits for the party
+	-- The next-wave button, under Reroll
 	local r = draft.ready;
 	readyButton:ClearAllPoints();
 	readyButton:SetPoint("TOPLEFT", reroll, "BOTTOMLEFT", 0, -6);
 	readyButton:SetFrameLevel(frame:GetFrameLevel() + 12);
 	if ( r and r.waiting ) then
-		if ( r.mine ) then
-			readyButton:SetText(string.format("Ready  %d/%d", r.ready, r.needed));
+		if ( draft.readying ) then
+			readyButton:SetText("Sending...");
 			readyButton:Disable();
-		elseif ( draft.readying ) then
-			readyButton:SetText("Ready...");
-			readyButton:Disable();
+		elseif ( r.call == 2 ) then
+			readyButton:SetText(r.wave and string.format("Call wave %d now", r.wave) or "Call next wave now");
+			readyButton:Enable();
 		else
-			readyButton:SetText((r.needed or 1) > 1 and string.format("I'm ready  %d/%d", r.ready, r.needed) or "Start next wave");
+			readyButton:SetText(r.wave and string.format("Start wave %d", r.wave) or "Start next wave");
 			readyButton:Enable();
 		end
 		readyButton:Show();
@@ -1321,10 +1322,12 @@ function handlers.SHOP(f)
 	};
 end
 
--- The next wave waiting for the party to say it is ready.
+-- The next-wave button: WAVE:<tag>^<shown>^0^1^0^<call>^<wave>. call 1 =
+-- send the waiting wave in, 2 = call the next one in on top of the fight.
+-- (Fields 3-5 are the retired party vote, kept for older addons.)
 function handlers.WAVE(f)
 	if ( not pending or not pending.shop or not SameGuid(pending.tag, f[1]) ) then return; end
-	pending.ready = { waiting = f[2] == "1", ready = tonumber(f[3]) or 0, needed = tonumber(f[4]) or 1, mine = f[5] == "1" };
+	pending.ready = { waiting = f[2] == "1", call = tonumber(f[6]) or 1, wave = tonumber(f[7]) };
 end
 
 function handlers.PRICE(f)
