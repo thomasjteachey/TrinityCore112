@@ -37,6 +37,7 @@
 #include "Util.h"
 #include "VioletHoldBoons.h"
 #include "VioletHoldClassBoons.h"
+#include "VioletHoldTuning.h"
 #include "WorldSession.h"
 #include "WrappedSpells.h"
 
@@ -790,7 +791,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
                 break;
             case VioletHoldShop::LockResult::AllInUse:
                 if (session)
-                    session->SendNotification("All %u of your locks are in use.", SAFEKEEPING_LOCKS);
+                    session->SendNotification("All %u of your locks are in use.", shop.GetLocksMax(player));
                 break;
             case VioletHoldShop::LockResult::NotYours:
                 if (session)
@@ -1171,6 +1172,9 @@ public:
             { "shop",   shopTable },
             { "event",  HandleEvent,  rbac::RBAC_PERM_COMMAND_GM, Console::No },
             { "next",   HandleNext,   rbac::RBAC_PERM_COMMAND_GM, Console::No },
+            // Balancing: no run needed, so they work from the console too.
+            { "tune",   HandleTune,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "boon",   HandleBoon,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
         static ChatCommandTable commandTable =
         {
@@ -1248,6 +1252,42 @@ public:
             return nullptr;
         }
         return run;
+    }
+
+    // `.vhr tune`                 every knob and its value
+    // `.vhr tune <filter>`        the knobs whose name contains it (shop, event, release...)
+    // `.vhr tune <knob> <value>`  set it live (until restart); "reset" undoes it
+    // `.vhr tune reset`           drop every live override (knobs and boons)
+    static bool HandleTune(ChatHandler* handler, Optional<std::string> knob, Optional<std::string> value)
+    {
+        if (knob && value)
+        {
+            handler->SendSysMessage(VioletHoldTuning::Set(*knob, *value).c_str());
+            return true;
+        }
+        if (knob && *knob == "reset")
+        {
+            VioletHoldTuning::ResetAll();
+            handler->SendSysMessage("Every live Violet Hold override is gone; config values and defaults apply.");
+            return true;
+        }
+        std::vector<std::string> lines;
+        VioletHoldTuning::List(knob ? *knob : std::string(), lines);
+        if (lines.empty())
+            handler->SendSysMessage("No knob matches that. .vhr tune lists them all.");
+        for (std::string const& line : lines)
+            handler->SendSysMessage(line.c_str());
+        return true;
+    }
+
+    // `.vhr boon <name>`                    its weight and shop price
+    // `.vhr boon <name> weight <w>`         roll weight (8-10 = plain common, 0 = never offered)
+    // `.vhr boon <name> price <shards>`     its shop price
+    // `.vhr boon <name> reset`
+    static bool HandleBoon(ChatHandler* handler, std::string name, Optional<std::string> what, Optional<std::string> value)
+    {
+        handler->SendSysMessage(VioletHoldTuning::BoonCommand(name, what ? *what : std::string(), value ? *value : std::string()).c_str());
+        return true;
     }
 
     // `.vhr next`: start the next wave now (BattlegroundVHR::SkipToNextWave).

@@ -11,6 +11,7 @@
 #include "Chat.h"
 #include "Config.h"
 #include "Containers.h"
+#include "VioletHoldTuning.h"
 #include "DatabaseEnv.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
@@ -1005,6 +1006,11 @@ bool IsShopOnlyBoon(Boon boon)
     return boon >= Boon::Gambler && boon <= Boon::Fortune;
 }
 
+uint32 GetFortunePercentPerStack()
+{
+    return uint32(std::max<int32>(0, VioletHoldTuning::Int("Shop.FortunePercentPerStack")));
+}
+
 uint8 GetRarityTier(Offer offer)
 {
     if (offer.kind == Offer::Kind::Item)
@@ -1428,6 +1434,9 @@ uint32 GetOfferQuarters(Offer const& offer)
         case Offer::Kind::Boon:
             if (offer.index >= uint8(Boon::Max))
                 return 0;
+            // A balancing override (.vhr boon <name> weight, BoonWeights) wins.
+            if (Optional<uint32> const tuned = VioletHoldTuning::GetBoonQuarters(offer.index))
+                return *tuned;
             // Class boons: a little rarer than any one legendary weapon.
             if (IsArtifact(Boon(offer.index)))
                 return ARTIFACT_ROLL_QUARTERS;
@@ -1451,7 +1460,7 @@ uint32 GetOfferWeight(Offer const& offer)
         return 0;
     if (GetRarityTier(offer) < 4)
         return quarters * 100;
-    uint32 const percent = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.TopTierRollPercent", 50), 1, 200));
+    uint32 const percent = uint32(std::max<int32>(0, VioletHoldTuning::Int("TopTierRollPercent")));
     return std::max<uint32>(1, quarters * percent);
 }
 
@@ -1547,7 +1556,7 @@ Optional<Offer> RollShopOffer(std::vector<Player const*> const& roster, std::vec
     uint32 fortunePct = 0;
     for (Player const* member : roster)
         if (member)
-            fortunePct += GetStacks(member, Boon::Fortune) * FORTUNE_PCT_PER_STACK;
+            fortunePct += GetStacks(member, Boon::Fortune) * GetFortunePercentPerStack();
 
     std::vector<Offer> const rolled = RollOffersWhere(roster, 1, false, [&exclude](Offer const& offer)
     {

@@ -792,6 +792,7 @@ private:
     // The timed half's moment: half of it comes out at once, the rest is
     // staggered (_staggerReleaseMs).
     void ReleaseTimedBurst();
+    static uint32 GetStaggerIntervalMs();
     uint32 CountHeldClones(VhrCloneRelease release) const;
     void FreeWaveClone(Player* enemy);
     void CheckRunState();

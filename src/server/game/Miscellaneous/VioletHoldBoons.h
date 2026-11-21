@@ -908,8 +908,9 @@ namespace VioletHoldBoons
     // How much one stack reads as on cards and in the deck: Tempo's 125 ms,
     // Devastation's 15%, and 1 for every other boon.
     // Boon of Fortune: each stack anyone in the party holds makes the shop's
-    // rare-and-better cards (card tier 3+) this much more likely.
-    constexpr uint32 FORTUNE_PCT_PER_STACK = 50;
+    // rare-and-better cards (card tier 3+) this much more likely, in percent
+    // (the Shop.FortunePercentPerStack tuning knob, 50 by default).
+    TC_GAME_API uint32 GetFortunePercentPerStack();
 
     inline uint32 DisplayPerStack(Boon boon)
     {
@@ -917,7 +918,7 @@ namespace VioletHoldBoons
         {
             case Boon::Tempo:       return uint32(TEMPO_MS_PER_STACK);
             case Boon::Devastation: return DEVASTATION_PCT_PER_STACK;
-            case Boon::Fortune:     return FORTUNE_PCT_PER_STACK;
+            case Boon::Fortune:     return GetFortunePercentPerStack();
             default:                return 1;
         }
     }

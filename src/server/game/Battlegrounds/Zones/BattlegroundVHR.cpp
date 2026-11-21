@@ -8,6 +8,8 @@
 #include "Containers.h"
 #include "CreatureAI.h"
 #include "Group.h"
+#include "SpellAuraEffects.h"
+#include "VioletHoldTuning.h"
 #include "DatabaseEnv.h"
 #include "Creature.h"
 #include "DBCStores.h"
@@ -595,10 +597,13 @@ void BattlegroundVHR::BeginWave()
 
     ComposeWave(enemyCount);
 
-    // A swarm is twice the clones at no more than half strength each.
+    // A swarm's clones fight at no more than Event.SwarmStrengthPercent.
     if (_waveEvent == VhrWaveEvent::Swarm)
+    {
+        uint8 const weakened = uint8(std::clamp<int32>(100 - VioletHoldTuning::Int("Event.SwarmStrengthPercent"), 0, 99));
         for (uint8& stacks : _pendingRequest.diminishedStacks)
-            stacks = std::max<uint8>(stacks, uint8(BG_VHR_SWARM_DIMINISHED));
+            stacks = std::max<uint8>(stacks, weakened);
+    }
     AnnounceWaveEvent();
 
     _waveState = WaveState::AwaitingSpawn;
@@ -1184,7 +1189,7 @@ void BattlegroundVHR::ReleaseWaveFromPreparation()
         // door on the rest: still held, immune and untouchable, they used to
         // stand there in plain view (owner 2026-11-20). Hidden, the open cell
         // just looks empty until each of them comes out.
-        HoldWaveClone(enemy, true);
+        HoldWaveClone(enemy, VioletHoldTuning::Int("Release.HideHeld") != 0);
     }
 }
 
@@ -1296,13 +1301,19 @@ uint32 BattlegroundVHR::CountHeldClones(VhrCloneRelease release) const
         [release](VhrHeldClone const& held) { return held.release == release; }));
 }
 
+uint32 BattlegroundVHR::GetStaggerIntervalMs()
+{
+    return uint32(std::max<int32>(1, VioletHoldTuning::Int("Release.StaggerSeconds")) * int32(IN_MILLISECONDS));
+}
+
 void BattlegroundVHR::ReleaseTimedBurst()
 {
     uint32 const waiting = CountHeldClones(VhrCloneRelease::AfterDelay);
-    for (uint32 i = 0; i < (waiting + 1) / 2; ++i)
+    uint32 const burst = (waiting * uint32(VioletHoldTuning::Int("Release.BurstPercent")) + 99) / 100;
+    for (uint32 i = 0; i < burst; ++i)
         if (!ReleaseNextHeldClone(VhrCloneRelease::AfterDelay))
             break;
-    _staggerReleaseMs = CountHeldClones(VhrCloneRelease::AfterDelay) ? uint32(BG_VHR_STAGGER_RELEASE_INTERVAL_MS) : 0;
+    _staggerReleaseMs = CountHeldClones(VhrCloneRelease::AfterDelay) ? GetStaggerIntervalMs() : 0;
 }
 
 void BattlegroundVHR::NotifyCloneSource(ObjectGuid cloneGuid, ObjectGuid sourceGuid)
@@ -1398,7 +1409,7 @@ void BattlegroundVHR::OpenWaveCell()
     // The clock on the timed half starts with the gates.
     bool const anyTimed = std::any_of(_heldClones.begin(), _heldClones.end(),
         [](VhrHeldClone const& held) { return held.release == VhrCloneRelease::AfterDelay; });
-    _timedReleaseMs = anyTimed ? uint32(BG_VHR_TIMED_RESERVE_DELAY_MS) : 0;
+    _timedReleaseMs = anyTimed ? uint32(std::max<int32>(1, VioletHoldTuning::Int("Release.TimedDelaySeconds") * int32(IN_MILLISECONDS))) : 0;
 
     // Anything the party bought from the brokers since the last wave opened is
     // on their reflections too, as of this moment (when copies inherit boons).
@@ -2292,6 +2303,8 @@ namespace
 struct WaveEventInfo
 {
     VhrWaveEvent event;
+    // Its tuning name: Event.Weight.<knob> (VioletHoldTuning).
+    char const* knob;
     char const* name;
     // What the event does, as announced; brokerText (when set) replaces it in
     // a run without the shop.
@@ -2301,16 +2314,16 @@ struct WaveEventInfo
 
 WaveEventInfo const kWaveEvents[] =
 {
-    { VhrWaveEvent::BloodMoon,   "BLOOD MOON",   "everyone in the Hold deals 50% more damage", nullptr },
-    { VhrWaveEvent::Quicksilver, "QUICKSILVER",  "everyone moves 50% faster and attacks and casts 20% faster", nullptr },
-    { VhrWaveEvent::Giants,      "GIANTS",       "fewer clones, but twice the size and half again as tough", nullptr },
-    { VhrWaveEvent::Swarm,       "SWARM",        "twice the clones, each at half strength", nullptr },
-    { VhrWaveEvent::GoldRush,    "GOLD RUSH",    "killing blows pay triple shards", "an extra boon broker comes when this wave falls" },
-    { VhrWaveEvent::Bounty,      "BOUNTY",       "one clone is marked with a skull - kill it within 25 seconds and everyone gets 10 shards, or it escapes",
-                                                 "one clone is marked with a skull - kill it within 25 seconds for an extra boon broker, or it escapes" },
-    { VhrWaveEvent::MirrorMatch, "MIRROR MATCH", "the whole wave is your own reflections", nullptr },
+    { VhrWaveEvent::BloodMoon,   "BloodMoon",   "BLOOD MOON",   "everyone in the Hold deals more damage", nullptr },
+    { VhrWaveEvent::Quicksilver, "Quicksilver", "QUICKSILVER",  "everyone moves, attacks and casts faster", nullptr },
+    { VhrWaveEvent::Giants,      "Giants",      "GIANTS",       "fewer clones, but bigger and tougher", nullptr },
+    { VhrWaveEvent::Swarm,       "Swarm",       "SWARM",        "more clones, each weaker", nullptr },
+    { VhrWaveEvent::GoldRush,    "GoldRush",    "GOLD RUSH",    "killing blows pay extra shards", "an extra boon broker comes when this wave falls" },
+    // Bounty's text is written in AnnounceWaveEvent (it names the clock and the purse).
+    { VhrWaveEvent::Bounty,      "Bounty",      "BOUNTY",       "", "" },
+    { VhrWaveEvent::MirrorMatch, "MirrorMatch", "MIRROR MATCH", "the whole wave is your own reflections", nullptr },
     // Its text names the party member (AnnounceWaveEvent).
-    { VhrWaveEvent::Doppelganger, "DOPPELGANGER", "every clone in this wave is", nullptr },
+    { VhrWaveEvent::Doppelganger, "Doppelganger", "DOPPELGANGER", "every clone in this wave is", nullptr },
 };
 
 WaveEventInfo const* FindWaveEvent(VhrWaveEvent event)
@@ -2359,28 +2372,64 @@ void BattlegroundVHR::RollWaveEvent(uint32 wave)
         return;
     }
 
-    if (wave < BG_VHR_EVENT_FIRST_WAVE || wave == BG_VHR_MIDBOSS_WAVE || wave >= BG_VHR_FINAL_WAVE)
+    if (wave < uint32(VioletHoldTuning::Int("Event.FirstWave")) || wave == BG_VHR_MIDBOSS_WAVE || wave >= BG_VHR_FINAL_WAVE)
         return;
-    int32 const chance = std::clamp<int32>(sConfigMgr->GetIntDefault("Centurion.VioletHold.EventChancePercent", 25), 0, 100);
-    if (!roll_chance_i(chance))
+    if (!roll_chance_i(VioletHoldTuning::Int("EventChancePercent")))
         return;
 
-    std::vector<VhrWaveEvent> pool;
+    // Weighted by Event.Weight.<Name> (0 = never), never last wave's again.
+    std::vector<std::pair<VhrWaveEvent, uint32>> pool;
+    uint32 total = 0;
     for (WaveEventInfo const& info : kWaveEvents)
-        if (info.event != _lastWaveEvent)
-            pool.push_back(info.event);
-    if (!pool.empty())
-        _waveEvent = Trinity::Containers::SelectRandomContainerElement(pool);
+    {
+        if (info.event == _lastWaveEvent)
+            continue;
+        uint32 const weight = uint32(std::max<int32>(0, VioletHoldTuning::Int(
+            (std::string("Event.Weight.") + info.knob).c_str())));
+        if (!weight)
+            continue;
+        pool.emplace_back(info.event, weight);
+        total += weight;
+    }
+    if (!total)
+        return;
+    uint32 roll = urand(1, total);
+    for (auto const& [event, weight] : pool)
+    {
+        if (roll <= weight)
+        {
+            _waveEvent = event;
+            return;
+        }
+        roll -= weight;
+    }
 }
 
 uint32 BattlegroundVHR::AdjustEnemyCountForEvent(uint32 count) const
 {
     switch (_waveEvent)
     {
-        case VhrWaveEvent::Giants: return std::max<uint32>(1, count * 2 / 3);
-        case VhrWaveEvent::Swarm:  return std::min<uint32>(BG_VHR_MAX_ENEMIES, count * 2);
-        default:                   return count;
+        case VhrWaveEvent::Giants:
+            return std::max<uint32>(1, count * uint32(VioletHoldTuning::Int("Event.GiantsCountPercent")) / 100);
+        case VhrWaveEvent::Swarm:
+            return std::min<uint32>(BG_VHR_MAX_ENEMIES, count * uint32(VioletHoldTuning::Int("Event.SwarmCountPercent")) / 100);
+        default:
+            return count;
     }
+}
+
+namespace
+{
+// An event aura's numbers come from the tuning knobs, not the DBC row: each
+// listed effect is set to its amount as the aura goes on.
+void SetEventAuraAmounts(Aura* aura, std::initializer_list<std::pair<uint8, int32>> amounts)
+{
+    if (!aura)
+        return;
+    for (auto const& [index, amount] : amounts)
+        if (AuraEffect* effect = aura->GetEffect(index))
+            effect->ChangeAmount(amount);
+}
 }
 
 void BattlegroundVHR::AnnounceWaveEvent()
@@ -2389,6 +2438,16 @@ void BattlegroundVHR::AnnounceWaveEvent()
     if (!info)
         return;
     char const* text = (!_shopMode && info->brokerText) ? info->brokerText : info->text;
+    if (_waveEvent == VhrWaveEvent::Bounty)
+    {
+        int32 const seconds = VioletHoldTuning::Int("Event.BountySeconds");
+        SendTextToAll(_shopMode
+            ? Trinity::StringFormat("Wave {} - BOUNTY: one clone is marked with a skull - kill it within {} seconds and everyone gets {} shards, or it escapes.",
+                _waveNumber, seconds, VioletHoldTuning::Int("Event.BountyShards"))
+            : Trinity::StringFormat("Wave {} - BOUNTY: one clone is marked with a skull - kill it within {} seconds for an extra boon broker, or it escapes.",
+                _waveNumber, seconds));
+        return;
+    }
     if (_waveEvent == VhrWaveEvent::Doppelganger)
     {
         SendTextToAll(Trinity::StringFormat("Wave {} - {}: {} {}.", _waveNumber, info->name, text,
@@ -2403,10 +2462,12 @@ void BattlegroundVHR::ApplyWaveEventToClones()
     if (_waveEvent != VhrWaveEvent::Giants)
         return;
     // At their seats, so the party watches them grow behind the doors.
+    int32 const scale = VioletHoldTuning::Int("Event.GiantScalePercent");
+    int32 const health = VioletHoldTuning::Int("Event.GiantHealthPercent");
     for (ObjectGuid guid : _waveEnemies)
         if (Player* enemy = ObjectAccessor::FindPlayer(guid))
         {
-            enemy->AddAura(BG_VHR_SPELL_GIANT, enemy);
+            SetEventAuraAmounts(enemy->AddAura(BG_VHR_SPELL_GIANT, enemy), { { 0, scale }, { 1, health } });
             enemy->SetFullHealth();
         }
 }
@@ -2419,11 +2480,21 @@ void BattlegroundVHR::ApplyWaveEventAtGates()
         case VhrWaveEvent::Quicksilver:
         {
             // Everybody in the Hold: the party, its allies, every clone.
-            uint32 const spellId = _waveEvent == VhrWaveEvent::BloodMoon ? BG_VHR_SPELL_BLOOD_MOON : BG_VHR_SPELL_QUICKSILVER;
+            bool const bloodMoon = _waveEvent == VhrWaveEvent::BloodMoon;
+            uint32 const spellId = bloodMoon ? BG_VHR_SPELL_BLOOD_MOON : BG_VHR_SPELL_QUICKSILVER;
+            int32 const damage = VioletHoldTuning::Int("Event.BloodMoonDamagePercent");
+            int32 const speed = VioletHoldTuning::Int("Event.QuicksilverSpeedPercent");
+            int32 const haste = VioletHoldTuning::Int("Event.QuicksilverHastePercent");
             for (auto const& itr : GetPlayers())
                 if (Player* player = ObjectAccessor::FindPlayer(itr.first))
                     if (player->IsInWorld())
-                        player->AddAura(spellId, player);
+                    {
+                        Aura* aura = player->AddAura(spellId, player);
+                        if (bloodMoon)
+                            SetEventAuraAmounts(aura, { { 0, damage } });
+                        else
+                            SetEventAuraAmounts(aura, { { 0, speed }, { 1, haste }, { 2, haste } });
+                    }
             break;
         }
         case VhrWaveEvent::GoldRush:
@@ -2444,14 +2515,15 @@ void BattlegroundVHR::ApplyWaveEventAtGates()
             Player* target = Trinity::Containers::SelectRandomContainerElement(candidates);
             // The mark counts down the time the party has (the client shows
             // the aura's duration), and the bounty sprints off.
+            int32 const escapeMs = VioletHoldTuning::Int("Event.BountySeconds") * int32(IN_MILLISECONDS);
             if (Aura* mark = target->AddAura(BG_VHR_SPELL_BOUNTY, target))
             {
-                mark->SetMaxDuration(BG_VHR_BOUNTY_ESCAPE_MS);
-                mark->SetDuration(BG_VHR_BOUNTY_ESCAPE_MS);
+                mark->SetMaxDuration(escapeMs);
+                mark->SetDuration(escapeMs);
             }
             target->AddAura(BG_VHR_SPELL_BOUNTY_SPRINT, target);
             _bountyGuid = target->GetGUID();
-            _bountyEscapeMs = BG_VHR_BOUNTY_ESCAPE_MS;
+            _bountyEscapeMs = uint32(escapeMs);
             SetBountyIcon(_bountyGuid);
             break;
         }
@@ -2506,9 +2578,10 @@ void BattlegroundVHR::OnWaveEventKill(Player* victim)
 
     if (_shopMode)
     {
+        uint32 const purse = uint32(std::max<int32>(0, VioletHoldTuning::Int("Event.BountyShards")));
         for (ObjectGuid guid : GetHumanRoster(false))
-            _shop.AddShards(guid, BG_VHR_BOUNTY_SHARDS);
-        SendTextToAll(Trinity::StringFormat("The bounty is claimed: {} shards each!", uint32(BG_VHR_BOUNTY_SHARDS)));
+            _shop.AddShards(guid, purse);
+        SendTextToAll(Trinity::StringFormat("The bounty is claimed: {} shards each!", purse));
         NotifyShopChanged();
     }
     else
@@ -2960,8 +3033,7 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
                 if (_staggerReleaseMs <= diff)
                 {
                     ReleaseNextHeldClone(VhrCloneRelease::AfterDelay);
-                    _staggerReleaseMs = CountHeldClones(VhrCloneRelease::AfterDelay)
-                        ? uint32(BG_VHR_STAGGER_RELEASE_INTERVAL_MS) : 0;
+                    _staggerReleaseMs = CountHeldClones(VhrCloneRelease::AfterDelay) ? GetStaggerIntervalMs() : 0;
                 }
                 else
                     _staggerReleaseMs -= diff;
@@ -3136,7 +3208,8 @@ void BattlegroundVHR::HandleKillPlayer(Player* victim, Player* killer)
         // pays it several times over.
         if (_shopMode && killer && killer != victim && killer->GetBGTeam() == _humanTeam
             && !IsAlly(killer->GetGUID()) && killer->GetSession() && !killer->GetSession()->IsTransientPlayerSession())
-            _shop.OnKillingBlow(killer, _waveEvent == VhrWaveEvent::GoldRush ? uint32(BG_VHR_GOLD_RUSH_MULTIPLIER) : 1);
+            _shop.OnKillingBlow(killer, _waveEvent == VhrWaveEvent::GoldRush
+                ? uint32(std::max<int32>(1, VioletHoldTuning::Int("Event.GoldRushMultiplier"))) : 1);
 
         // The Bounty event's marked clone.
         OnWaveEventKill(victim);
@@ -3353,12 +3426,12 @@ uint32 BattlegroundVHR::GetHonorRewardForRun() const
     uint32 const arenaWinHonor = uint32((sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_WINNER)
         + sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) * 3) * arenaMultiplier);
 
-    double const compounded = std::pow(1.0 + double(BG_VHR_HONOR_COMPOUND_PERCENT) / 100.0, double(_waveNumber) - 1.0);
+    double const compounded = std::pow(1.0 + double(VioletHoldTuning::Int("Reward.HonorCompoundPercent")) / 100.0, double(_waveNumber) - 1.0);
     double const raw = double(arenaWinHonor) * double(_waveNumber) * compounded;
 
     // Divided at the end rather than inside the curve, so the shape of the
     // reward across waves is untouched and only its size moves.
-    return uint32(std::lround(raw / double(BG_VHR_REWARD_DIVISOR)));
+    return uint32(std::lround(raw / double(std::max<int32>(1, VioletHoldTuning::Int("Reward.Divisor")))));
 }
 
 void BattlegroundVHR::ModifyEndOfMatchHonorRewards(uint32 /*winner*/, uint32 team, uint32& winnerHonor, uint32& loserHonor) const
@@ -3394,7 +3467,7 @@ uint32 BattlegroundVHR::GetMoneyRewardForRun() const
     float const arenaMultiplier = sWorld->getFloatConfig(CONFIG_CENTURION_BG_ARENA_REWARD_MULTIPLIER);
     double const arenaWinMoney = double(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_MONEY_WINNER)) * double(arenaMultiplier);
 
-    return uint32(std::lround(arenaWinMoney * double(_waveNumber) / double(BG_VHR_REWARD_DIVISOR)));
+    return uint32(std::lround(arenaWinMoney * double(_waveNumber) / double(std::max<int32>(1, VioletHoldTuning::Int("Reward.Divisor")))));
 }
 
 void BattlegroundVHR::ModifyEndOfMatchMoneyRewards(uint32 /*winner*/, uint32 team, uint32& winnerMoney, uint32& loserMoney) const

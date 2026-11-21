@@ -19,10 +19,12 @@
 #include "Config.h"
 #include "Player.h"
 #include "Random.h"
+#include "VioletHoldTuning.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <string>
 
 using namespace VioletHoldBoons;
@@ -32,54 +34,33 @@ namespace
 constexpr uint32 MAX_SLOTS = 8;
 constexpr uint32 MAX_SHARD_AMOUNT = 100000;
 
-// Common, uncommon, rare, class spell, legendary, artifact - GetRarityTier 1-6.
-constexpr std::array<uint32, 6> DEFAULT_TIER_PRICES = { 3, 5, 8, 10, 20, 15 };
-
-uint32 ReadInt(char const* name, int32 def, int32 lo, int32 hi)
+// Every number goes through the tuning registry (VioletHoldTuning), which
+// reads `.vhr tune` overrides, then this same config key, then its default.
+// The default and range here only document the knob; the registry owns them.
+uint32 ReadInt(char const* name, int32 /*def*/, int32 /*lo*/, int32 /*hi*/)
 {
-    return uint32(std::clamp<int32>(sConfigMgr->GetIntDefault(name, def), lo, hi));
-}
-
-// Six whole numbers, separated by anything that is not a digit ("3 5 8 10 20
-// 15" or "3,5,8,10,20,15"). A tier the string leaves out keeps its default.
-std::array<uint32, 6> ReadTierPrices()
-{
-    std::array<uint32, 6> prices = DEFAULT_TIER_PRICES;
-    std::string const text = sConfigMgr->GetStringDefault("Centurion.VioletHold.Shop.TierPrices", "3 5 8 10 20 15");
-
-    size_t tier = 0;
-    uint32 value = 0;
-    bool inNumber = false;
-    for (char c : text)
-    {
-        if (c >= '0' && c <= '9')
-        {
-            value = std::min<uint32>(value * 10 + uint32(c - '0'), MAX_SHARD_AMOUNT);
-            inNumber = true;
-            continue;
-        }
-        if (inNumber && tier < prices.size())
-            prices[tier++] = value;
-        value = 0;
-        inNumber = false;
-    }
-    if (inNumber && tier < prices.size())
-        prices[tier] = value;
-
-    return prices;
+    static constexpr char const* PREFIX = "Centurion.VioletHold.";
+    std::string const key(name);
+    std::string const knob = key.rfind(PREFIX, 0) == 0 ? key.substr(std::strlen(PREFIX)) : key;
+    return uint32(std::max<int32>(0, VioletHoldTuning::Int(knob.c_str())));
 }
 
 uint32 GetTierPrice(Offer offer)
 {
+    // A boon's own price (.vhr boon <name> price, Shop.BoonPrices) first.
+    if (offer.kind == Offer::Kind::Boon)
+        if (Optional<uint32> const own = VioletHoldTuning::GetBoonPrice(offer.index))
+            return *own;
+    static char const* const kTierKnobs[] = { "Shop.Price.Common", "Shop.Price.Uncommon", "Shop.Price.Rare",
+        "Shop.Price.ClassSpell", "Shop.Price.Legendary", "Shop.Price.Artifact" };
     uint8 const tier = GetRarityTier(offer);
-    std::array<uint32, 6> const prices = ReadTierPrices();
-    return tier >= 1 && tier <= prices.size() ? prices[tier - 1] : prices[0];
+    return uint32(std::max<int32>(0, VioletHoldTuning::Int(kTierKnobs[tier >= 1 && tier <= 6 ? tier - 1 : 0])));
 }
 }
 
 bool VioletHoldShop::IsEnabledInConfig()
 {
-    return sConfigMgr->GetBoolDefault("Centurion.VioletHold.Shop.Enable", false);
+    return VioletHoldTuning::Int("Shop.Enable") != 0;
 }
 
 uint32 VioletHoldShop::GetShardsPerWave()
@@ -312,7 +293,7 @@ bool VioletHoldShop::Reroll(Player const* who, std::vector<Player const*> const&
 
 uint32 VioletHoldShop::GetLocksMax(Player const* who) const
 {
-    return who && GetStacks(who, Boon::Safekeeping) ? SAFEKEEPING_LOCKS : 0;
+    return who && GetStacks(who, Boon::Safekeeping) ? uint32(VioletHoldTuning::Int("Shop.SafekeepingLocks")) : 0;
 }
 
 uint32 VioletHoldShop::GetLocksUsed(ObjectGuid guid) const
@@ -375,7 +356,8 @@ uint32 VioletHoldShop::GetInterestFor(Player const* member) const
 {
     if (!member || !GetStacks(member, Boon::Usurer))
         return 0;
-    return std::min<uint32>(GetShards(member->GetGUID()) / USURER_SHARDS_PER, USURER_MAX);
+    uint32 const per = std::max<int32>(1, VioletHoldTuning::Int("Shop.UsurerShardsPer"));
+    return std::min<uint32>(GetShards(member->GetGUID()) / per, uint32(VioletHoldTuning::Int("Shop.UsurerMax")));
 }
 
 uint32 VioletHoldShop::GetWavePayFor(Player const* member) const
