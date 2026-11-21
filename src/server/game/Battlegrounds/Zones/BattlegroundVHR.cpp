@@ -350,6 +350,9 @@ void BattlegroundVHR::Reset()
     _doppelgangerName.clear();
     _eventBonusBrokers = 0;
     _skipNextPrep = false;
+    _waitingForReady = false;
+    _readyVotes.clear();
+    _readyTimeoutMs = 0;
     _brokerOwners.clear();
     _personalBrokerPhases.clear();
     _personalSecondOpinionCharges.clear();
@@ -594,6 +597,10 @@ void BattlegroundVHR::BeginWave()
     _heldClones.clear();
     _timedReleaseMs = 0;
     _staggerReleaseMs = 0;
+    // A fresh ready vote for this wave.
+    _readyVotes.clear();
+    _waitingForReady = false;
+    _readyTimeoutMs = 0;
 
     ComposeWave(enemyCount);
 
@@ -923,13 +930,31 @@ void BattlegroundVHR::NotifyWaveSpawnFulfilled(uint32 waveNumber, uint32 /*spawn
     {
         ApplyPreparationToWave();
         _waveState = WaveState::Preparing;
-        // A GM's .vhr next: the gates open on the next update.
-        _prepTimerMs = _skipNextPrep ? 1 : GetPrepWindowMs();
+        if (_shopMode && !_skipNextPrep && VioletHoldTuning::Int("Wave.ReadyToStart"))
+        {
+            // No timer: the wave waits for the party (VoteReady). Votes cast
+            // while it was still being seated count.
+            _waitingForReady = true;
+            int32 const timeout = VioletHoldTuning::Int("Wave.ReadyTimeoutSeconds");
+            _readyTimeoutMs = timeout > 0 ? uint32(timeout) * IN_MILLISECONDS : 0;
+            if (AllReady())
+                StartReadyCountdown();
+            else
+            {
+                SendTextToAll(Trinity::StringFormat("Wave {} waits behind the doors. Tell the broker when you are ready.", _waveNumber));
+                NotifyShopChanged();
+            }
+        }
+        else
+        {
+            // A GM's .vhr next: the gates open on the next update.
+            _prepTimerMs = _skipNextPrep ? 1 : GetPrepWindowMs();
+            // Seed above the first tick so the countdown announces the full
+            // window itself rather than needing a separate opening message.
+            _lastCountdownSecond = (_prepTimerMs / IN_MILLISECONDS) + 1;
+            AnnounceWaveCountdown();
+        }
         _skipNextPrep = false;
-        // Seed above the first tick so the countdown announces the full
-        // window itself rather than needing a separate opening message.
-        _lastCountdownSecond = (_prepTimerMs / IN_MILLISECONDS) + 1;
-        AnnounceWaveCountdown();
     }
 
     UpdateScoreWorldStates();
@@ -2207,6 +2232,62 @@ bool BattlegroundVHR::StartShop()
     return true;
 }
 
+void BattlegroundVHR::GetReadyState(Player const* player, uint32& ready, uint32& needed, bool& mine) const
+{
+    ready = needed = 0;
+    for (ObjectGuid guid : GetHumanRoster(false))
+        if (Player const* member = ObjectAccessor::FindPlayer(guid))
+            if (member->IsInWorld())
+            {
+                ++needed;
+                if (_readyVotes.count(guid))
+                    ++ready;
+            }
+    mine = player && _readyVotes.count(player->GetGUID()) != 0;
+}
+
+bool BattlegroundVHR::AllReady() const
+{
+    uint32 ready = 0, needed = 0;
+    bool mine = false;
+    GetReadyState(nullptr, ready, needed, mine);
+    return needed && ready >= needed;
+}
+
+void BattlegroundVHR::StartReadyCountdown()
+{
+    _waitingForReady = false;
+    _readyTimeoutMs = 0;
+    _prepTimerMs = uint32(std::max<int32>(1, VioletHoldTuning::Int("Wave.ReadyCountdownSeconds"))) * IN_MILLISECONDS;
+    _lastCountdownSecond = (_prepTimerMs / IN_MILLISECONDS) + 1;
+    AnnounceWaveCountdown();
+    NotifyShopChanged();
+}
+
+std::string BattlegroundVHR::VoteReady(Player* player)
+{
+    if (!player || !_shopMode || !VioletHoldTuning::Int("Wave.ReadyToStart"))
+        return "The next wave comes on its own timer.";
+    if (_waveState == WaveState::Fighting || _waveState == WaveState::NotStarted)
+        return "There is no wave waiting yet.";
+    if (_waveState == WaveState::Preparing && !_waitingForReady)
+        return "The wave is already coming.";
+
+    if (!_readyVotes.insert(player->GetGUID()).second)
+        return "You are ready. Waiting for the rest of the party.";
+
+    uint32 ready = 0, needed = 0;
+    bool mine = false;
+    GetReadyState(player, ready, needed, mine);
+    if (needed > 1)
+        SendTextToAll(Trinity::StringFormat("{} is ready ({}/{}).", player->GetName(), ready, needed));
+    if (_waitingForReady && AllReady())
+        StartReadyCountdown();
+    else
+        NotifyShopChanged();
+    return ready >= needed ? "Here they come." : "You are ready. Waiting for the rest of the party.";
+}
+
 char const* BattlegroundVHR::SkipToNextWave()
 {
     if (GetStatus() != STATUS_IN_PROGRESS)
@@ -2215,6 +2296,8 @@ char const* BattlegroundVHR::SkipToNextWave()
     switch (_waveState)
     {
         case WaveState::Preparing:
+            _waitingForReady = false;
+            _readyTimeoutMs = 0;
             _prepTimerMs = 1;
             return "The gates open now.";
         case WaveState::AwaitingSpawn:
@@ -3005,6 +3088,22 @@ void BattlegroundVHR::PostUpdateImpl(uint32 diff)
             // the wipe check below.
             break;
         case WaveState::Preparing:
+            if (_waitingForReady)
+            {
+                // Someone left or went offline and the rest are all ready, or
+                // the optional timeout ran out.
+                bool timedOut = false;
+                if (_readyTimeoutMs)
+                {
+                    if (_readyTimeoutMs <= diff)
+                        timedOut = true;
+                    else
+                        _readyTimeoutMs -= diff;
+                }
+                if (timedOut || AllReady())
+                    StartReadyCountdown();
+                break;
+            }
             if (_prepTimerMs <= diff)
             {
                 _prepTimerMs = 0;

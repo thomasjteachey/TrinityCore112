@@ -971,6 +971,20 @@ reroll:SetScript("OnClick", function()
 	Request("REROLL", 0);
 end);
 
+-- At the shop, between waves: tell the broker you are ready for the next one.
+local readyButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate");
+readyButton:SetWidth(132);
+readyButton:SetHeight(22);
+readyButton:Hide();
+readyButton:SetScript("OnClick", function()
+	local r = draft and draft.shop and draft.ready;
+	if ( not r or not r.waiting or r.mine or draft.readying or demo ) then return; end
+	draft.readying = true;
+	draft.readyingUntil = GetTime() + 2;
+	Request("READY", 0);
+	Refresh();
+end);
+
 -- Taking a card ends the deal: the hand goes the moment you pick.
 -- Buying one from the shop does not: the window stays up, and the server sends
 -- the restocked board back. Until it does, the button waits.
@@ -1064,6 +1078,27 @@ local function RefreshShop()
 	end
 	reroll:Show();
 
+	-- Ready, under Reroll, while the next wave waits for the party
+	local r = draft.ready;
+	readyButton:ClearAllPoints();
+	readyButton:SetPoint("TOPLEFT", reroll, "BOTTOMLEFT", 0, -6);
+	readyButton:SetFrameLevel(frame:GetFrameLevel() + 12);
+	if ( r and r.waiting ) then
+		if ( r.mine ) then
+			readyButton:SetText(string.format("Ready  %d/%d", r.ready, r.needed));
+			readyButton:Disable();
+		elseif ( draft.readying ) then
+			readyButton:SetText("Ready...");
+			readyButton:Disable();
+		else
+			readyButton:SetText((r.needed or 1) > 1 and string.format("I'm ready  %d/%d", r.ready, r.needed) or "Start next wave");
+			readyButton:Enable();
+		end
+		readyButton:Show();
+	else
+		readyButton:Hide();
+	end
+
 	take:ClearAllPoints();
 	if ( not card ) then
 		take:Hide();
@@ -1096,6 +1131,7 @@ Refresh = function()
 	end
 
 	ApplyLook(false);
+	readyButton:Hide();
 	for i = 1, #shopCols do
 		shopCols[i]:Hide(); shopCols[i].card:Hide(); shopCols[i].card.data = nil;
 	end
@@ -1162,6 +1198,10 @@ frame:SetScript("OnUpdate", function()
 	end
 	if ( draft and draft.rerolling and GetTime() >= (draft.rerollingUntil or 0) ) then
 		draft.rerolling = nil;
+		Refresh();
+	end
+	if ( draft and draft.readying and GetTime() >= (draft.readyingUntil or 0) ) then
+		draft.readying = nil;
 		Refresh();
 	end
 end);
@@ -1279,6 +1319,12 @@ function handlers.SHOP(f)
 		rerollCost = tonumber(f[7]) or 2, freeRerolls = tonumber(f[8]) or 0,
 		locksUsed = tonumber(f[9]) or 0, locksMax = tonumber(f[10]) or 0, interest = tonumber(f[11]) or 0,
 	};
+end
+
+-- The next wave waiting for the party to say it is ready.
+function handlers.WAVE(f)
+	if ( not pending or not pending.shop or not SameGuid(pending.tag, f[1]) ) then return; end
+	pending.ready = { waiting = f[2] == "1", ready = tonumber(f[3]) or 0, needed = tonumber(f[4]) or 1, mine = f[5] == "1" };
 end
 
 function handlers.PRICE(f)

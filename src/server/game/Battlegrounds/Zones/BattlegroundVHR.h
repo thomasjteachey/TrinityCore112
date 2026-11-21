@@ -701,6 +701,14 @@ public:
     static void RemoveWaveEventAuras(Player* player);
     // GM test (.vhr event <name>): the next wave gets this event.
     void ForceNextWaveEvent(VhrWaveEvent event) { _forcedWaveEvent = event; }
+    // Shop runs: between waves the next one waits behind its doors until the
+    // whole party has told the broker it is ready (Wave.ReadyToStart), then
+    // a short countdown opens the gates. Returns the line for the player.
+    std::string VoteReady(Player* player);
+    bool IsWaitingForReady() const { return _waitingForReady; }
+    // Ready so far, ready needed (the party in the run), and this player's vote.
+    void GetReadyState(Player const* player, uint32& ready, uint32& needed, bool& mine) const;
+
     // GM test (.vhr next): get the next wave going now. Mid-fight the wave's
     // clones die (it clears and pays as usual) and the next one skips its
     // preparation window; in the countdown the gates open at once. Returns
@@ -1035,6 +1043,12 @@ private:
     uint32 _eventBonusBrokers = 0;
     // .vhr next: the coming wave opens as soon as it is seated.
     bool _skipNextPrep = false;
+    // The ready vote between waves (VoteReady).
+    bool _waitingForReady = false;
+    GuidSet _readyVotes;
+    uint32 _readyTimeoutMs = 0;
+    bool AllReady() const;
+    void StartReadyCountdown();
     std::unordered_map<ObjectGuid, ObjectGuid> _brokerOwners;
     std::unordered_map<ObjectGuid, uint32> _personalBrokerPhases;
     std::unordered_map<ObjectGuid, uint8> _personalSecondOpinionCharges;

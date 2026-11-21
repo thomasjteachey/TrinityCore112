@@ -198,7 +198,7 @@ deal();
 fire("VHBOON:SHOW:" .. TAG);
 local buttons = 0;
 for _, f in ipairs(frames) do if f.template == "UIPanelButtonTemplate" then buttons = buttons + 1 end end
-check(buttons == 2, "Take and Second Opinion are the only buttons (got " .. buttons .. ")");
+check(buttons == 3, "Take, Second Opinion and the shop's Ready are the only buttons (got " .. buttons .. ")");
 events.scripts.OnEvent(events, "PLAYER_ENTERING_WORLD");
 check(not frame.shown, "leaving the Hold puts the hand away");
 
@@ -336,6 +336,30 @@ check(not rerollButton.enabled, "Reroll is off when you cannot pay for it");
 check(not card(302).col.lock.shown and not card(4).col.lock.shown, "no padlocks without Boon of Safekeeping");
 shopDeal(0, { { 302, 0 }, { 4, 0 } }, "^0^1^0^0^0");
 check(rerollButton.enabled and rerollButton.text == "Reroll (free)", "a Gambler reroll is free, shards or not (got " .. tostring(rerollButton.text) .. ")");
+frame:Hide();
+
+-- Ready: the next wave waits for the party to tell the broker
+local function readyDeal(waveLine)
+	fire("VHBOON:DEAL:" .. SHOPTAG .. "^9^25^0^0^0^0^0^Baku^4^Kaelen^7");
+	fire("VHBOON:SHOP:" .. SHOPTAG .. "^10^4^1^50^25^2^0^0^0^0");
+	fire("VHBOON:CARD:" .. SHOPTAG .. SHOPCARDS[4].line);
+	fire("VHBOON:PRICE:" .. SHOPTAG .. "^4^5^5^0^^0");
+	if waveLine then fire("VHBOON:WAVE:" .. SHOPTAG .. waveLine) end
+	fire("VHBOON:SHOW:" .. SHOPTAG);
+end
+local readyBtn = button("I'm ready") or button("Start next wave") or button("Ready");
+readyDeal("^1^0^2^0");
+readyBtn = button("I'm ready");
+check(readyBtn and readyBtn.shown and readyBtn.enabled and readyBtn.text == "I'm ready  0/2", "Ready shows the party count (got " .. tostring(readyBtn and readyBtn.text) .. ")");
+readyBtn.scripts.OnClick(readyBtn);
+check(lastSent() == "VHBOON:READY:" .. SHOPTAG .. ":0", "Ready sends READY (got " .. tostring(lastSent()) .. ")");
+check(not readyBtn.enabled, "Ready waits for the server");
+readyDeal("^1^1^2^1");
+check(readyBtn.shown and not readyBtn.enabled and readyBtn.text == "Ready  1/2", "once you are ready it says so (got " .. tostring(readyBtn.text) .. ")");
+readyDeal("^0^0^2^0");
+check(not readyBtn.shown, "no Ready while no wave is waiting");
+readyDeal(nil);
+check(not readyBtn.shown, "no Ready from a server that sends no WAVE line");
 frame:Hide();
 
 -- a broker after the shop: back to the plain hand

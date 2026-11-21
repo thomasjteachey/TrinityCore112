@@ -93,6 +93,11 @@ Knob const kKnobs[] =
     { "Event.BountyShards",          Kind::Int, 10, 0, 1000, 0, "Bounty: shards each when it dies in time" },
     { "Event.BountySeconds",         Kind::Int, 25, 5, 300, 0, "Bounty: seconds before it escapes" },
 
+    // --- between waves (shop runs) -------------------------------------------
+    { "Wave.ReadyToStart",           Kind::Int, 1, 0, 1, 0, "1 = in a shop run the next wave waits until the party tells the broker it is ready; 0 = PrepSeconds timer" },
+    { "Wave.ReadyCountdownSeconds",  Kind::Int, 3, 1, 60, 0, "countdown once everyone is ready" },
+    { "Wave.ReadyTimeoutSeconds",    Kind::Int, 0, 0, 3600, 0, "start anyway after this long (0 = wait forever)" },
+
     // --- the wave's release ---------------------------------------------------
     { "Release.TimedDelaySeconds",   Kind::Int, 30, 0, 300, 0, "the timed group comes out this long after the gates" },
     { "Release.BurstPercent",        Kind::Int, 50, 0, 100, 0, "% of the timed group that comes out at once" },

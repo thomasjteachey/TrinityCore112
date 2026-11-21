@@ -59,6 +59,8 @@ constexpr uint32 ACTION_TEST_PREVIOUS = GOSSIP_ACTION_INFO_DEF + 501;
 constexpr uint32 ACTION_TEST_NEXT = GOSSIP_ACTION_INFO_DEF + 502;
 // The shop's wallet line: does nothing but show the menu again.
 constexpr uint32 ACTION_SHOP_WALLET = GOSSIP_ACTION_INFO_DEF + 503;
+// "I'm ready": the next wave may come (BattlegroundVHR::VoteReady).
+constexpr uint32 ACTION_SHOP_READY = GOSSIP_ACTION_INFO_DEF + 504;
 constexpr size_t TEST_OFFERS_PER_PAGE = 10;
 
 // At most one all-boons test broker per GM character. A stale entry is harmless
@@ -132,6 +134,8 @@ BattlegroundVHR* RunOfPlayer(Player const* player)
 //   VHBOON:SHOP:<keeper>^<your shards>^<your shards per wave>^<your shards per killing blow>^<reroll %>^<discount %>
 //               ^<your reroll cost>^<your free rerolls left>^<your locks in use>^<your locks>^<your interest next wave>
 //   VHBOON:PRICE:<keeper>^<code>^<your price now>^<full price>^<waves discounted>^<locked by>^<locked by you 1|0>
+//   VHBOON:WAVE:<keeper>^<next wave waiting for the party 1|0>^<ready>^<needed>^<you ready 1|0>    (before SHOW)
+// and the addon may send VHBOON:READY:<keeper>:0 ("I'm ready").
 // and sends the whole block again to everyone with the window open whenever
 // the board or the wallets change. A shop sends no TAKEN: buying a card keeps
 // the window open on the restocked board.
@@ -516,7 +520,9 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         if (BattlegroundVHR* run = GetRun(me); run && run->IsShopKeeper(me->GetGUID()))
         {
             Offer offer;
-            if (action == ACTION_REROLL)
+            if (action == ACTION_SHOP_READY)
+                Ready(player);
+            else if (action == ACTION_REROLL)
                 ShopReroll(player, run);
             else if (action >= ACTION_PICK_BASE && action < ACTION_REROLL && Offer::Decode(action - ACTION_PICK_BASE, offer))
                 Buy(player, offer);
@@ -770,6 +776,19 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         SendShopToViewers(run);
     }
 
+    // "I'm ready" - from the gossip line or the shop window's Ready button.
+    void Ready(Player* player)
+    {
+        BattlegroundVHR* run = GetRun(me);
+        if (!run || !run->IsShopKeeper(me->GetGUID()) || !MayTradeWith(player, run))
+            return;
+        std::string const reply = run->VoteReady(player);
+        if (WorldSession* session = player->GetSession())
+            session->SendNotification("%s", reply.c_str());
+        run->GetShop().AddViewer(player->GetGUID());
+        SendShopToViewers(run);
+    }
+
     // Boon of Safekeeping: lock a card on the board, or take your lock off it.
     void ToggleLock(Player* player, Offer offer)
     {
@@ -838,6 +857,16 @@ private:
             rerollCost ? Trinity::StringFormat("Reroll the unlocked cards ({} shards)", rerollCost)
                        : std::string("Reroll the unlocked cards (free)"),
             GOSSIP_SENDER_MAIN, ACTION_REROLL);
+        if (run->IsWaitingForReady())
+        {
+            uint32 ready = 0, needed = 0;
+            bool mine = false;
+            run->GetReadyState(player, ready, needed, mine);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE,
+                mine ? Trinity::StringFormat("You are ready ({}/{}) - waiting for the party", ready, needed)
+                     : Trinity::StringFormat("I'm ready - send the next wave ({}/{})", ready, needed),
+                GOSSIP_SENDER_MAIN, ACTION_SHOP_READY);
+        }
 
         SendGossipMenuFor(player, NPC_TEXT_BOON_BROKER, me->GetGUID());
         return true;
@@ -873,6 +902,15 @@ private:
             Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:PRICE:{}^{}^{}^{}^{}^{}^{}", tag,
                 slot.offer.Encode(), VioletHoldShop::GetPriceFor(slot, viewer), slot.basePrice, uint32(slot.discounts),
                 Field(LockerName(slot)), slot.lockedBy == viewer->GetGUID() ? 1 : 0));
+        }
+
+        // The ready vote, for the window's Ready button.
+        {
+            uint32 ready = 0, needed = 0;
+            bool mine = false;
+            run->GetReadyState(viewer, ready, needed, mine);
+            Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:WAVE:{}^{}^{}^{}^{}", tag,
+                run->IsWaitingForReady() ? 1 : 0, ready, needed, mine ? 1 : 0));
         }
 
         SendDeck(viewer, tag);
@@ -1103,6 +1141,12 @@ void HandleBoonRequest(Player* sender, std::string_view argument)
     {
         if (ai->Reroll(sender))
             ai->OnGossipHello(sender);
+        return;
+    }
+
+    if (parts[0] == "READY")
+    {
+        ai->Ready(sender);
         return;
     }
 
