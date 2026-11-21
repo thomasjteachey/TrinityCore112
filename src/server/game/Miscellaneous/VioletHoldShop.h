@@ -68,9 +68,8 @@ public:
         Locked,
         Unlocked,
         NoCard,      // not on the board
-        NoLocks,     // the player has no Boon of Safekeeping
-        AllInUse,    // every one of their locks is on a card already
-        NotYours     // somebody else's lock
+        NoLocks,     // nobody in the run has taken Boon of Safekeeping
+        AllInUse     // every one of the party's locks is on a card already
     };
 
     // Whether a run starting now uses the shop. Read once per run, as its
@@ -128,10 +127,15 @@ public:
     uint32 GetFreeRerollsLeft(Player const* who) const;
     bool Reroll(Player const* who, std::vector<Player const*> const& roster);
 
-    // Boon of Safekeeping: lock the card if it is free, unlock it if it is yours.
-    uint32 GetLocksMax(Player const* who) const;
-    uint32 GetLocksUsed(ObjectGuid guid) const;
+    // Boon of Safekeeping, run-wide (owner 2026-11-21): the party shares its
+    // locks, Shop.SafekeepingLocks for every stack the run holds (up to 3
+    // stacks). Anyone in the run locks a free card while a lock is spare, and
+    // anyone takes any lock off. `lockedBy` only names who put it on.
+    uint32 GetLocksMax() const;
+    uint32 GetLocksUsed() const;
     LockResult ToggleLock(Player const* who, VioletHoldBoons::Offer offer);
+    void AddLockStacks(uint32 stacks) { _lockStacks += stacks; }
+    uint32 GetLockStacks() const { return _lockStacks; }
 
     uint32 GetShards(ObjectGuid guid) const;
     void AddShards(ObjectGuid guid, uint32 amount);
@@ -168,6 +172,8 @@ private:
     std::unordered_map<ObjectGuid, uint32> _paidRerolls;
     GuidSet _viewers;
     uint32 _extraSlots = 0;
+    // Boon of Safekeeping stacks the run holds.
+    uint32 _lockStacks = 0;
     bool _open = false;
 };
 

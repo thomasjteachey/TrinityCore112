@@ -911,6 +911,9 @@ namespace VioletHoldBoons
     // rare-and-better cards (card tier 3+) this much more likely, in percent
     // (the Shop.FortunePercentPerStack tuning knob, 50 by default).
     TC_GAME_API uint32 GetFortunePercentPerStack();
+    // Boon of Safekeeping: shared shop locks per stack the run holds (the
+    // Shop.SafekeepingLocks tuning knob, 1 by default).
+    TC_GAME_API uint32 GetSafekeepingLocksPerStack();
 
     inline uint32 DisplayPerStack(Boon boon)
     {
@@ -919,6 +922,7 @@ namespace VioletHoldBoons
             case Boon::Tempo:       return uint32(TEMPO_MS_PER_STACK);
             case Boon::Devastation: return DEVASTATION_PCT_PER_STACK;
             case Boon::Fortune:     return GetFortunePercentPerStack();
+            case Boon::Safekeeping: return GetSafekeepingLocksPerStack();
             default:                return 1;
         }
     }

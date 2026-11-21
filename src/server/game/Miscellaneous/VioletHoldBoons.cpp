@@ -288,7 +288,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // Shop boons: only in a shop run (IsShopOnlyBoon). Their grants are exempt
     // from the stacking multiplier: one stack is one shard, slot or reroll.
     { Boon::Gambler,     SPELL_BOON_GAMBLER,     1, 3, MASK_ALL, 3, "Boon of the Gambler", "free shop reroll every wave", "" },
-    { Boon::Safekeeping, SPELL_BOON_SAFEKEEPING, 1, 1, MASK_ALL, 4, "Boon of Safekeeping", "lock up to 3 cards in the shop: a locked card never rerolls, and still gets cheaper", "" },
+    { Boon::Safekeeping, SPELL_BOON_SAFEKEEPING, 1, 3, MASK_ALL, 4, "Boon of Safekeeping", "lock in the shop, for the whole party: a locked card never rerolls, and still gets cheaper", "" },
     { Boon::Tithes,      SPELL_BOON_TITHES,      2, 6, MASK_ALL, 4, "Boon of Tithes",      "shards for every cleared wave", "" },
     { Boon::Bazaar,      SPELL_BOON_BAZAAR,      1, 3, MASK_ALL, 3, "Boon of the Bazaar",  "card in the shop, for the whole party", "" },
     { Boon::Usurer,      SPELL_BOON_USURER,      1, 1, MASK_ALL, 2, "Boon of the Usurer",  "every cleared wave, 1 extra shard for every 10 you are holding (up to 5)", "" },
@@ -483,6 +483,7 @@ int32 RunHeld(Player const* player, Boon boon)
         case Boon::SecondOpinion:
         case Boon::Crucible:
         case Boon::Bazaar:
+        case Boon::Safekeeping:
             break;
         default:
             return -1;
@@ -513,6 +514,8 @@ int32 RunHeld(Player const* player, Boon boon)
         case Boon::Crucible:      return run->HasCrucible(player) ? 1 : 0;
         // The slots the party's Bazaar picks have added to the shop.
         case Boon::Bazaar:        return int32(run->GetShop().GetExtraSlots());
+        // The party's shared locks (owner 2026-11-21: run-wide, up to 3).
+        case Boon::Safekeeping:   return int32(run->GetShop().GetLockStacks());
         default:               return 0;
     }
 }
@@ -1009,6 +1012,11 @@ bool IsShopOnlyBoon(Boon boon)
 uint32 GetFortunePercentPerStack()
 {
     return uint32(std::max<int32>(0, VioletHoldTuning::Int("Shop.FortunePercentPerStack")));
+}
+
+uint32 GetSafekeepingLocksPerStack()
+{
+    return uint32(std::max<int32>(0, VioletHoldTuning::Int("Shop.SafekeepingLocks")));
 }
 
 namespace
@@ -1779,6 +1787,13 @@ PickResult Take(Player* player, Offer offer)
                 for (uint8 i = 0; i < grantStacks; ++i)
                     run->AddShopSlot();
             break;
+        case Boon::Safekeeping:
+            if (BattlegroundVHR* run = GetRunOf(player))
+            {
+                run->GetShop().AddLockStacks(grantStacks);
+                run->NotifyShopChanged();
+            }
+            break;
         case Boon::Fellowship:
             if (BattlegroundVHR* run = GetRunOf(player))
                 for (uint8 i = 0; i < grantStacks; ++i)
@@ -2296,7 +2311,6 @@ std::string DescribeOffer(Player const* viewer, Offer offer)
         case Boon::Overflow:
         case Boon::SecondOpinion:
         case Boon::Crucible:
-        case Boon::Safekeeping:
         case Boon::Usurer:
             return Trinity::StringFormat("{}: {}{}", info.name, info.summary, blocked);
         case Boon::Level:

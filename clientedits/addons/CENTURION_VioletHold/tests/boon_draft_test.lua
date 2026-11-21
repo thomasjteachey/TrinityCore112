@@ -231,7 +231,7 @@ local SHOPCARDS = {
 	[27] = { line = "^27^B^3^0^0^S90291^Boon of the Vampire^+3%^of damage dealt returned as health^0^3^30^%^0", base = 8 },
 	[4] = { line = "^4^B^2^0^0^S90243^Boon of Haste^+6%^attack speed^0^6^255^%^0", base = 5 },
 };
--- list: { { code, waves discounted [, locked by, locked by me (1/0)] }, ... }
+-- list: { { code, waves discounted [, locked by, locked by me (1/0) [, may unlock (1/0)]] }, ... }
 -- extra: "^<reroll cost>^<free rerolls>^<locks used>^<locks>^<interest>" (default: 2 shards, nothing held)
 local function shopDeal(shards, list, extra)
 	fire("VHBOON:DEAL:" .. SHOPTAG .. "^9^25^0^0^0^0^0^Baku^4^Kaelen^7");
@@ -241,7 +241,7 @@ local function shopDeal(shards, list, extra)
 		local price = math.max(1, math.floor(def.base * 0.75 ^ entry[2] + 0.5));
 		fire("VHBOON:CARD:" .. SHOPTAG .. def.line);
 		fire("VHBOON:PRICE:" .. SHOPTAG .. "^" .. entry[1] .. "^" .. price .. "^" .. def.base .. "^" .. entry[2]
-			.. "^" .. (entry[3] or "") .. "^" .. (entry[4] or 0));
+			.. "^" .. (entry[3] or "") .. "^" .. (entry[4] or 0) .. (entry[5] and ("^" .. entry[5]) or ""));
 	end
 	fire("VHBOON:SHOW:" .. SHOPTAG);
 end
@@ -330,6 +330,18 @@ check(not rerollButton.enabled and rerollButton.text == "Rerolling...", "Reroll 
 now = now + 3;
 frame.scripts.OnUpdate(frame);
 check(rerollButton.enabled, "a reroll nobody answers stops waiting");
+
+-- Run-wide Safekeeping: the party shares its locks, so a party member's lock
+-- can be taken off when the server says so
+shopDeal(10, { { 302, 0, "Baku", 1, 1 }, { 4, 0 }, { 27, 2, "Kaelen", 0, 1 } }, "^2^0^2^2^0");
+theirLock = card(27).col.lock;
+check(theirLock.shown and theirLock.clickable, "a shared lock somebody else put on can be taken off");
+check(string.find(theirLock.tip or "", "Kaelen", 1, true) and string.find(theirLock.tip or "", "shares", 1, true),
+	"the shared lock still says whose it is, and that locks are shared (got " .. tostring(theirLock.tip) .. ")");
+theirLock.scripts.OnClick(theirLock);
+check(lastSent() == "VHBOON:LOCK:" .. SHOPTAG .. ":27", "clicking it sends LOCK (got " .. tostring(lastSent()) .. ")");
+check(card(4).col.lock.shown and not card(4).col.lock.clickable, "with every shared lock in use, an open card cannot be locked");
+check(string.find(card(4).col.lock.tip or "", "2 of the party's 2", 1, true), "the open padlock counts the party's locks (got " .. tostring(card(4).col.lock.tip) .. ")");
 
 shopDeal(1, { { 302, 0 }, { 4, 0 } });
 check(not rerollButton.enabled, "Reroll is off when you cannot pay for it");

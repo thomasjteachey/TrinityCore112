@@ -102,6 +102,7 @@ void VioletHoldShop::Reset()
     _paidRerolls.clear();
     _viewers.clear();
     _extraSlots = 0;
+    _lockStacks = 0;
     _open = false;
 }
 
@@ -291,16 +292,16 @@ bool VioletHoldShop::Reroll(Player const* who, std::vector<Player const*> const&
     return true;
 }
 
-uint32 VioletHoldShop::GetLocksMax(Player const* who) const
+uint32 VioletHoldShop::GetLocksMax() const
 {
-    return who && GetStacks(who, Boon::Safekeeping) ? uint32(VioletHoldTuning::Int("Shop.SafekeepingLocks")) : 0;
+    return _lockStacks * VioletHoldBoons::GetSafekeepingLocksPerStack();
 }
 
-uint32 VioletHoldShop::GetLocksUsed(ObjectGuid guid) const
+uint32 VioletHoldShop::GetLocksUsed() const
 {
-    return uint32(std::count_if(_slots.begin(), _slots.end(), [guid](Slot const& slot)
+    return uint32(std::count_if(_slots.begin(), _slots.end(), [](Slot const& slot)
     {
-        return slot.filled && slot.lockedBy == guid;
+        return slot.filled && slot.lockedBy;
     }));
 }
 
@@ -311,16 +312,15 @@ VioletHoldShop::LockResult VioletHoldShop::ToggleLock(Player const* who, Offer o
         return LockResult::NoCard;
 
     Slot& slot = _slots[size_t(index)];
-    if (slot.lockedBy == who->GetGUID())
+    // The locks are the party's: whoever put this one on, anyone takes it off.
+    if (slot.lockedBy)
     {
         slot.lockedBy.Clear();
         return LockResult::Unlocked;
     }
-    if (slot.lockedBy)
-        return LockResult::NotYours;
-    if (!GetLocksMax(who))
+    if (!GetLocksMax())
         return LockResult::NoLocks;
-    if (GetLocksUsed(who->GetGUID()) >= GetLocksMax(who))
+    if (GetLocksUsed() >= GetLocksMax())
         return LockResult::AllInUse;
 
     slot.lockedBy = who->GetGUID();

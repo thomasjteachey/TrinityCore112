@@ -56,7 +56,7 @@ Knob const kKnobs[] =
     { "Shop.DiscountPercent",        Kind::Int, 25, 0, 100, 0, "how much cheaper a card that stays gets, per wave" },
     { "Shop.RerollCost",             Kind::Int, 2, 0, 1000, 0, "first paid reroll of a wave" },
     { "Shop.RerollCostStep",         Kind::Int, 1, 0, 100, 0, "each paid reroll after that, this much more" },
-    { "Shop.SafekeepingLocks",       Kind::Int, 3, 0, 8, 0, "cards a Safekeeping holder may lock" },
+    { "Shop.SafekeepingLocks",       Kind::Int, 1, 0, 8, 0, "shared shop locks per Boon of Safekeeping stack the run holds (up to 3 stacks)" },
     { "Shop.UsurerShardsPer",        Kind::Int, 10, 1, 1000, 0, "Usurer: 1 interest shard per this many held" },
     { "Shop.UsurerMax",              Kind::Int, 5, 0, 1000, 0, "Usurer: most interest a wave" },
     { "Shop.FortunePercentPerStack", Kind::Int, 50, 0, 1000, 0, "Fortune: rare+ card weight bonus per stack" },

@@ -878,7 +878,8 @@ local function DrawShopCard(col, card, index, left)
 	end
 	col.tag:SetWidth(math.max(76, (col.tagText:GetStringWidth() or 12) + 13 + 5 + 26));
 
-	-- the padlock: yours (gold, click to take it off), somebody else's (lilac),
+	-- the padlock: yours (gold, click to take it off), somebody else's (lilac;
+	-- the party's locks are shared, so the server may let you take it off),
 	-- or an empty one you could put on (faint, click to lock)
 	local s = draft.shop;
 	local lock = col.lock;
@@ -890,11 +891,16 @@ local function DrawShopCard(col, card, index, left)
 		lock:Show();
 	elseif ( card.lockedBy ) then
 		lock.icon:SetVertexColor(ARCANE.r, ARCANE.g, ARCANE.b, 1);
-		lock.tip = "Locked by " .. card.lockedBy .. ": it won't reroll.";
+		if ( card.canUnlock ) then
+			lock.tip = "Locked by " .. card.lockedBy .. ": it won't reroll. The party shares its locks: click to unlock.";
+			lock.clickable = true;
+		else
+			lock.tip = "Locked by " .. card.lockedBy .. ": it won't reroll.";
+		end
 		lock:Show();
 	elseif ( (s.locksMax or 0) > 0 ) then
 		lock.icon:SetVertexColor(0.85, 0.82, 0.95, 0.35);
-		lock.tip = string.format("Lock this card so it won't reroll (%d of %d locks in use).", s.locksUsed or 0, s.locksMax);
+		lock.tip = string.format("Lock this card so it won't reroll (%d of the party's %d locks in use).", s.locksUsed or 0, s.locksMax);
 		lock.clickable = (s.locksUsed or 0) < s.locksMax;
 		lock:Show();
 	else
@@ -1340,6 +1346,8 @@ function handlers.PRICE(f)
 			card.discounts = tonumber(f[5]) or 0;
 			card.lockedBy = (f[6] and f[6] ~= "") and f[6] or nil;
 			card.lockedByMe = f[7] == "1";
+			-- the locks are the party's: anyone may take one off
+			card.canUnlock = f[8] == "1";
 			return;
 		end
 	end

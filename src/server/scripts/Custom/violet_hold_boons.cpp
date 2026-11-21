@@ -182,7 +182,7 @@ bool IsRunWideBoon(Boon boon, Player const* viewer = nullptr)
         if (boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::SecondOpinion || boon == Boon::Crucible)
             return false;
     return boon == Boon::Greed || boon == Boon::Hoarder || boon == Boon::Fellowship || boon == Boon::Abundance
-        || boon == Boon::SecondOpinion || boon == Boon::Crucible || boon == Boon::Bazaar;
+        || boon == Boon::SecondOpinion || boon == Boon::Crucible || boon == Boon::Bazaar || boon == Boon::Safekeeping;
 }
 
 // The card's frame colour, read off the roll weight so a card that looks rare
@@ -790,7 +790,8 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
         SendShopToViewers(run);
     }
 
-    // Boon of Safekeeping: lock a card on the board, or take your lock off it.
+    // Boon of Safekeeping: lock a card on the board with one of the party's
+    // shared locks, or take any lock off it.
     void ToggleLock(Player* player, Offer offer)
     {
         BattlegroundVHR* run = GetRun(me);
@@ -811,11 +812,7 @@ struct npc_violet_hold_boon_brokerAI : public ScriptedAI
                 break;
             case VioletHoldShop::LockResult::AllInUse:
                 if (session)
-                    session->SendNotification("All %u of your locks are in use.", shop.GetLocksMax(player));
-                break;
-            case VioletHoldShop::LockResult::NotYours:
-                if (session)
-                    session->SendNotification("Somebody else has locked that card.");
+                    session->SendNotification("All %u of the party's locks are in use.", shop.GetLocksMax());
                 break;
             default:
                 break;
@@ -898,16 +895,18 @@ private:
             shop.GetShards(viewer->GetGUID()), shop.GetWavePayFor(viewer) - interest, shop.GetKillPayFor(viewer),
             VioletHoldShop::GetRerollChancePercent(), VioletHoldShop::GetDiscountPercent(),
             shop.GetRerollCostFor(viewer), shop.GetFreeRerollsLeft(viewer),
-            shop.GetLocksUsed(viewer->GetGUID()), shop.GetLocksMax(viewer), interest));
+            shop.GetLocksUsed(), shop.GetLocksMax(), interest));
 
         for (VioletHoldShop::Slot const& slot : shop.GetSlots())
         {
             if (!slot.filled)
                 continue;
             Battleground::SendSquadFeedLine(viewer, CardLine(viewer, tag, slot.offer, false, roster));
-            Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:PRICE:{}^{}^{}^{}^{}^{}^{}", tag,
+            // ...^<locked by>^<mine>^<may unlock>: the locks are the party's,
+            // so anyone may take one off (addons up to 1.00177 ignore it).
+            Battleground::SendSquadFeedLine(viewer, Trinity::StringFormat("VHBOON:PRICE:{}^{}^{}^{}^{}^{}^{}^{}", tag,
                 slot.offer.Encode(), VioletHoldShop::GetPriceFor(slot, viewer), slot.basePrice, uint32(slot.discounts),
-                Field(LockerName(slot)), slot.lockedBy == viewer->GetGUID() ? 1 : 0));
+                Field(LockerName(slot)), slot.lockedBy == viewer->GetGUID() ? 1 : 0, slot.lockedBy ? 1 : 0));
         }
 
         // The window's next-wave button:
