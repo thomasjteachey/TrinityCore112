@@ -162,7 +162,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     // Four more party boons, all offered only to a party of two or more
     // (CanTake). Herald and the Pack Leader are one per run (IsRunUnique).
     { Boon::Inheritance,  SPELL_BOON_INHERITANCE,  1,   1, MASK_ALL,      3, "Boon of Inheritance",  "when you die, your stacking boons pass to the living party until the wave ends (unique)", "" },
-    { Boon::Kinship,      SPELL_BOON_KINSHIP,      1,   1, MASK_ALL,      3, "Boon of Kinship",      "+10% damage for every living ally (unique)", "" },
+    { Boon::Kinship,      SPELL_BOON_KINSHIP,      1,   1, MASK_ALL,      3, "Boon of Kinship",      "+10% damage for every other player with a Boon of Kinship (unique)", "" },
     { Boon::FocusFire,    SPELL_BOON_FOCUS_FIRE,   1,   1, MASK_ALL,      4, "Boon of Focus Fire",   "+10% damage to a target an ally hit in the last 3 sec (unique)", "" },
     { Boon::Herald,       SPELL_BOON_HERALD,       1,   1, MASK_ALL,      2, "Boon of the Herald",   "as each wave opens, your whole party gets 30% haste and 100% movement speed for 10 sec (one per run)", "" },
     { Boon::PackLeader,   SPELL_BOON_PACK_LEADER,  1,   1, MASK_ALL,      2, "Boon of the Pack Leader", "allies within 30 yd of you take 15% less damage (one per run)", "" },
@@ -287,12 +287,12 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::GuardianFlame, SPELL_BOON_GUARDIAN_FLAME, 1, 1, ClassBit(CLASS_SHAMAN), 0, "Boon of the Guardian Flame", "every Searing Totem hit permanently lowers the target's damage by 5%, stacking up to 75%", "" },
     // Shop boons: only in a shop run (IsShopOnlyBoon). Their grants are exempt
     // from the stacking multiplier: one stack is one shard, slot or reroll.
-    { Boon::Gambler,     SPELL_BOON_GAMBLER,     1, 3, MASK_ALL, 6, "Boon of the Gambler", "free shop reroll every wave", "" },
+    { Boon::Gambler,     SPELL_BOON_GAMBLER,     1, 3, MASK_ALL, 3, "Boon of the Gambler", "free shop reroll every wave", "" },
     { Boon::Safekeeping, SPELL_BOON_SAFEKEEPING, 1, 1, MASK_ALL, 4, "Boon of Safekeeping", "lock up to 3 cards in the shop: a locked card never rerolls, and still gets cheaper", "" },
-    { Boon::Tithes,      SPELL_BOON_TITHES,      2, 6, MASK_ALL, 7, "Boon of Tithes",      "shards for every cleared wave", "" },
+    { Boon::Tithes,      SPELL_BOON_TITHES,      2, 6, MASK_ALL, 4, "Boon of Tithes",      "shards for every cleared wave", "" },
     { Boon::Bazaar,      SPELL_BOON_BAZAAR,      1, 3, MASK_ALL, 3, "Boon of the Bazaar",  "card in the shop, for the whole party", "" },
-    { Boon::Usurer,      SPELL_BOON_USURER,      1, 1, MASK_ALL, 5, "Boon of the Usurer",  "every cleared wave, 1 extra shard for every 10 you are holding (up to 5)", "" },
-    { Boon::Bounties,    SPELL_BOON_BOUNTIES,    1, 3, MASK_ALL, 6, "Boon of Bounties",    "shard for every killing blow", "" },
+    { Boon::Usurer,      SPELL_BOON_USURER,      1, 1, MASK_ALL, 2, "Boon of the Usurer",  "every cleared wave, 1 extra shard for every 10 you are holding (up to 5)", "" },
+    { Boon::Bounties,    SPELL_BOON_BOUNTIES,    1, 3, MASK_ALL, 3, "Boon of Bounties",    "shard for every killing blow", "" },
     { Boon::Haggler,     SPELL_BOON_HAGGLER,     1, 2, MASK_ALL, 4, "Boon of the Haggler", "shard off every price in the shop (never below 1)", "" },
     // One stack reads as FORTUNE_PCT_PER_STACK% (DisplayPerStack).
     { Boon::Fortune,     SPELL_BOON_FORTUNE,     1, 3, MASK_ALL, 4, "Boon of Fortune",     "chance of rare and better cards in the shop, for the whole party", "%" }
@@ -1011,6 +1011,50 @@ uint32 GetFortunePercentPerStack()
     return uint32(std::max<int32>(0, VioletHoldTuning::Int("Shop.FortunePercentPerStack")));
 }
 
+namespace
+{
+// Boons carded above what their table weight gives (owner 2026-11-20): the
+// rare greed boons go epic, Communion goes artifact. 0 = the weight decides.
+// `.vhr boon <name> tier` / BoonTiers override this too.
+uint8 GetDefaultTierOverride(Boon boon)
+{
+    switch (boon)
+    {
+        case Boon::Safekeeping:
+        case Boon::Bazaar:
+        case Boon::Haggler:
+        case Boon::Fortune:
+            return 4;
+        case Boon::Communion:
+            return 6;
+        default:
+            return 0;
+    }
+}
+
+uint8 GetTierOverride(uint8 boonIndex)
+{
+    if (Optional<uint8> const tuned = VioletHoldTuning::GetBoonTier(boonIndex))
+        return *tuned;
+    return boonIndex < uint8(Boon::Max) ? GetDefaultTierOverride(Boon(boonIndex)) : 0;
+}
+
+// The roll odds of a boon moved to `tier`, in quarters: what that tier's own
+// cards roll at (tier 4 a class spell, 5 a legendary, 6 an artifact).
+uint32 GetTierQuarters(uint8 tier)
+{
+    switch (tier)
+    {
+        case 1:  return 10 * ROLL_QUARTERS_PER_WEIGHT;
+        case 2:  return 6 * ROLL_QUARTERS_PER_WEIGHT;
+        case 3:  return 3 * ROLL_QUARTERS_PER_WEIGHT;
+        case 4:  return CLASS_SPELL_WEIGHT * ROLL_QUARTERS_PER_WEIGHT;
+        case 5:  return 2 * ROLL_QUARTERS_PER_WEIGHT;
+        default: return ARTIFACT_ROLL_QUARTERS;
+    }
+}
+}
+
 uint8 GetRarityTier(Offer offer)
 {
     if (offer.kind == Offer::Kind::Item)
@@ -1019,6 +1063,8 @@ uint8 GetRarityTier(Offer offer)
         return 4;
     if (offer.index >= uint8(Boon::Max))
         return 1;
+    if (uint8 const tier = GetTierOverride(offer.index))
+        return tier;
     if (IsArtifact(Boon(offer.index)))
         return 6;
     uint8 const weight = kBoons[offer.index].weight;
@@ -1437,6 +1483,13 @@ uint32 GetOfferQuarters(Offer const& offer)
             // A balancing override (.vhr boon <name> weight, BoonWeights) wins.
             if (Optional<uint32> const tuned = VioletHoldTuning::GetBoonQuarters(offer.index))
                 return *tuned;
+            // Taken out of the pool (owner 2026-11-20); a weight override
+            // above still brings it back.
+            if (Boon(offer.index) == Boon::Overkill)
+                return 0;
+            // Moved to another card tier: that tier's odds.
+            if (uint8 const tier = GetTierOverride(offer.index))
+                return GetTierQuarters(tier);
             // Class boons: a little rarer than any one legendary weapon.
             if (IsArtifact(Boon(offer.index)))
                 return ARTIFACT_ROLL_QUARTERS;
@@ -2727,14 +2780,14 @@ std::vector<Player*> PartySide(BattlegroundVHR const* run, WorldObject const& re
     return out;
 }
 
-// Kinship's count: the holder's living allies, Fellowship champions included,
-// reflections not (a quarter of a player each, and Multitudes calls them by
-// the dozen).
-uint32 CountLivingAllies(BattlegroundVHR const* run, Player const* holder)
+// Kinship's count: the other players in the run holding Kinship too (owner
+// 2026-11-20). Players only - Fellowship champions and reflections never
+// carry it (copiesAcross).
+uint32 CountOtherKinshipHolders(BattlegroundVHR const* run, Player const* holder)
 {
     uint32 count = 0;
-    for (Player const* ally : PartySide(run, *holder, true, false))
-        if (ally != holder && !run->IsFleetingAlly(ally->GetGUID()))
+    for (Player const* member : PartySide(run, *holder, false, true))
+        if (member != holder && member->HasAura(SPELL_BOON_KINSHIP))
             ++count;
     return count;
 }
@@ -2851,7 +2904,7 @@ int32 GetPartyDamageBonusPct(Unit const* attacker, Unit const* victim)
 
     int32 pct = 0;
     if (kinship)
-        pct += KINSHIP_PCT_PER_ALLY * int32(CountLivingAllies(run, holder));
+        pct += KINSHIP_PCT_PER_HOLDER * int32(CountOtherKinshipHolders(run, holder));
     if (focusFire && run->WasHitByOtherAlly(victim->GetGUID(), holder->GetGUID(), GameTime::GetGameTimeMS(), FOCUS_FIRE_WINDOW_MS))
         pct += FOCUS_FIRE_PCT;
     return pct;

@@ -33,10 +33,12 @@
 // worldserver.conf (`.reload config`), then its default. Every read happens
 // at use, so a change applies from the next card, wave or run it touches.
 //
-// Per-boon overrides work the same way: `.vhr boon <name> weight|price <n>`,
-// or Centurion.VioletHold.BoonWeights / Centurion.VioletHold.Shop.BoonPrices
-// as "phoenix:0.5 greed:0" lists. Weight is in the table's units (8-10 is a
-// plain common boon); 0 takes a boon out of every roll.
+// Per-boon overrides work the same way: `.vhr boon <name> weight|price|tier <n>`,
+// or Centurion.VioletHold.BoonWeights / Centurion.VioletHold.Shop.BoonPrices /
+// Centurion.VioletHold.BoonTiers as "phoenix:0.5 greed:0" lists. Weight is in
+// the table's units (8-10 is a plain common boon); 0 takes a boon out of every
+// roll. Tier is the card's rarity, 1 common .. 4 epic .. 6 artifact: its
+// colour, its shop price, and (without a weight override) its roll odds.
 //
 // A few knobs mirror existing World config values (PrepSeconds and friends):
 // setting one changes the live World value until the next `.reload config`.
@@ -56,7 +58,8 @@ namespace VioletHoldTuning
     // price, when overridden; nothing when the table and tiers decide.
     TC_GAME_API Optional<uint32> GetBoonQuarters(uint8 boonIndex);
     TC_GAME_API Optional<uint32> GetBoonPrice(uint8 boonIndex);
-    // `.vhr boon <name> [weight <w> | price <n> | reset]`.
+    TC_GAME_API Optional<uint8> GetBoonTier(uint8 boonIndex);
+    // `.vhr boon <name> [weight <w> | price <n> | tier <1-6> | reset]`.
     TC_GAME_API std::string BoonCommand(std::string const& name, std::string const& what, std::string const& value);
 }
 

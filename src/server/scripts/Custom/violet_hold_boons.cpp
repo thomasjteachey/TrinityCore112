@@ -1337,6 +1337,7 @@ public:
     // `.vhr boon <name>`                    its weight and shop price
     // `.vhr boon <name> weight <w>`         roll weight (8-10 = plain common, 0 = never offered)
     // `.vhr boon <name> price <shards>`     its shop price
+    // `.vhr boon <name> tier <1-6>`         its card tier: colour, price, and odds (1 common .. 4 epic .. 6 artifact)
     // `.vhr boon <name> reset`
     static bool HandleBoon(ChatHandler* handler, std::string name, Optional<std::string> what, Optional<std::string> value)
     {

@@ -996,7 +996,8 @@ namespace VioletHoldBoons
 
     // Kinship and Focus Fire: the % more damage `attacker` (a player holding
     // either) deals to `victim`. 0 for everyone else.
-    constexpr int32 KINSHIP_PCT_PER_ALLY = 10;
+    // Boon of Kinship: per OTHER player in the run who holds it too.
+    constexpr int32 KINSHIP_PCT_PER_HOLDER = 10;
     constexpr int32 FOCUS_FIRE_PCT = 10;
     constexpr uint32 FOCUS_FIRE_WINDOW_MS = 3000;
     TC_GAME_API int32 GetPartyDamageBonusPct(Unit const* attacker, Unit const* victim);

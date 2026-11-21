@@ -132,6 +132,7 @@ std::mutex Lock;
 std::unordered_map<std::string, int32> Overrides;            // knob -> value
 std::unordered_map<uint8, uint32> BoonQuarterOverrides;       // boon -> quarters
 std::unordered_map<uint8, uint32> BoonPriceOverrides;         // boon -> shards
+std::unordered_map<uint8, uint8> BoonTierOverrides;           // boon -> card tier 1-6
 
 // Config lists, parsed once per distinct text.
 struct ParsedList
@@ -139,7 +140,7 @@ struct ParsedList
     std::string text;
     std::map<uint8, float> values;
 };
-ParsedList WeightList, PriceList;
+ParsedList WeightList, PriceList, TierList;
 
 std::string Lower(std::string const& text)
 {
@@ -355,6 +356,7 @@ void ResetAll()
     Overrides.clear();
     BoonQuarterOverrides.clear();
     BoonPriceOverrides.clear();
+    BoonTierOverrides.clear();
 }
 
 Optional<uint32> GetBoonQuarters(uint8 boonIndex)
@@ -383,6 +385,23 @@ Optional<uint32> GetBoonPrice(uint8 boonIndex)
     return {};
 }
 
+Optional<uint8> GetBoonTier(uint8 boonIndex)
+{
+    std::lock_guard<std::mutex> guard(Lock);
+    auto const itr = BoonTierOverrides.find(boonIndex);
+    if (itr != BoonTierOverrides.end())
+        return itr->second;
+    std::map<uint8, float> const& list = ParseList(TierList, "Centurion.VioletHold.BoonTiers");
+    auto const fromConfig = list.find(boonIndex);
+    if (fromConfig != list.end())
+    {
+        long const tier = std::lround(fromConfig->second);
+        if (tier >= 1 && tier <= 6)
+            return uint8(tier);
+    }
+    return {};
+}
+
 std::string BoonCommand(std::string const& name, std::string const& what, std::string const& value)
 {
     Optional<uint8> const boon = FindBoon(name);
@@ -402,14 +421,23 @@ std::string BoonCommand(std::string const& name, std::string const& what, std::s
         else
             BoonPriceOverrides[*boon] = uint32(std::lround(*v));
     }
+    else if (verb == "tier")
+    {
+        Optional<uint32> v = Trinity::StringTo<uint32>(value);
+        if (!v || *v < 1 || *v > 6)
+            return "'" + value + "' is not a tier: 1 common, 2 uncommon, 3 rare, 4 epic, 5 legendary, 6 artifact.";
+        std::lock_guard<std::mutex> guard(Lock);
+        BoonTierOverrides[*boon] = uint8(*v);
+    }
     else if (verb == "reset")
     {
         std::lock_guard<std::mutex> guard(Lock);
         BoonQuarterOverrides.erase(*boon);
         BoonPriceOverrides.erase(*boon);
+        BoonTierOverrides.erase(*boon);
     }
     else if (!verb.empty())
-        return "Use: .vhr boon <name> [weight <w> | price <shards> | reset]";
+        return "Use: .vhr boon <name> [weight <w> | price <shards> | tier <1-6> | reset]";
 
     Optional<uint32> const quarters = GetBoonQuarters(*boon);
     Optional<uint32> const price = GetBoonPrice(*boon);
@@ -417,6 +445,10 @@ std::string BoonCommand(std::string const& name, std::string const& what, std::s
         ? (*quarters ? Trinity::StringFormat("{:.2f} (override)", float(*quarters) / VioletHoldBoons::ROLL_QUARTERS_PER_WEIGHT) : std::string("0 - never offered"))
         : (VioletHoldBoons::IsArtifact(info.boon) ? std::string("artifact rate") : Trinity::StringFormat("{} (table{})", uint32(info.weight), info.weight ? "" : ", very rare"));
     std::string const priceText = price ? Trinity::StringFormat("{} shards (override)", *price) : std::string("its tier's price");
-    return Trinity::StringFormat("{} (spell {}): weight {}, shop price {}.", info.name, info.spellId, weightText, priceText);
+    VioletHoldBoons::Offer offer;
+    offer.kind = VioletHoldBoons::Offer::Kind::Boon;
+    offer.index = *boon;
+    return Trinity::StringFormat("{} (spell {}): tier {}, weight {}, shop price {}.", info.name, info.spellId,
+        uint32(VioletHoldBoons::GetRarityTier(offer)), weightText, priceText);
 }
 }

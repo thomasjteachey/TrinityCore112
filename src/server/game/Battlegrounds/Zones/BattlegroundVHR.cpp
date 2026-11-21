@@ -1734,7 +1734,8 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
 
     // Speed is deliberately not in the roll - the party is not chasing anyone -
     // nor Restoration, whose health and mana the wave clear has just refilled.
-    // Reset Cooldowns and Spawn a Clone of You are the strongest of the six
+    // Reset Cooldowns, Spawn a Clone of You and Mana Surge's free instant
+    // spells (owner 2026-11-20: "as rare as the clones") are the strongest
     // and roll half as often as the rest. Mana Surge is for casters, so it
     // only rolls while the party has one (a caster spec, not a feral druid,
     // retribution paladin or enhancement shaman).
@@ -1751,7 +1752,7 @@ uint32 BattlegroundVHR::SpawnWaveRewardBuffs()
         { BG_VHR_GO_GLACIAL_STASIS_BUFF,    2, false },
         { BG_VHR_GO_VOLATILE_CORE_BUFF,     2, false },
         { BG_VHR_GO_BRIGHT_REFLECTION_BUFF, 1, false },
-        { BG_VHR_GO_MANA_SURGE_BUFF,        2, true  }
+        { BG_VHR_GO_MANA_SURGE_BUFF,        1, true  }
     };
     std::vector<Player const*> party;
     CollectHumanPlayers(party);
