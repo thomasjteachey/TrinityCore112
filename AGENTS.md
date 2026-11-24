@@ -11,7 +11,8 @@
   finished build and **does** restart. If anyone is logged in other
   than the owner's own accounts (`BROKILODELUXE` / "Baku", and the alt account
   `acct3`), say who is on and **ask before triggering the build** — batching
-  several commits into one later build is usually the right answer. Check with:
+  several commits into one later build is usually the right answer. Playerbot
+  accounts do not count as logged-in players for this rule. Check with:
   `sqlq.sh <realm>characters "SELECT name, account FROM characters WHERE online = 1"`,
   resolving account ids against `auth.account.username`.
 
