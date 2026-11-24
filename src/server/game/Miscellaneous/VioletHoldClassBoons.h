@@ -513,6 +513,9 @@ namespace VioletHoldClassBoons
     // Long Reach: Unit::GetMeleeRange (auto attack and the server's melee
     // spell range). The record aura's +10 yd SPELLMOD_RANGE tells the client.
     TC_GAME_API float GetExtraMeleeReach(Unit const* unit);
+    // Diversion: allow Distract to select enemies in combat so its effect
+    // handler can replace the distraction with a stun.
+    TC_GAME_API bool CanDistractCombatTarget(WorldObject const* caster, SpellInfo const* spellInfo);
     // Diversion: Spell::EffectDistract, before its "already fighting" bail-out
     // - true when the target was stunned instead of distracted.
     TC_GAME_API bool DivertsIntoStun(Unit* caster, Unit* target);

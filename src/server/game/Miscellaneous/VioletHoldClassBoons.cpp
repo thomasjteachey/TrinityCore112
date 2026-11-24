@@ -1976,6 +1976,13 @@ float GetExtraMeleeReach(Unit const* unit)
     return Holds(unit, SPELL_LONG_REACH) ? LONG_REACH_YARDS : 0.0f;
 }
 
+bool CanDistractCombatTarget(WorldObject const* caster, SpellInfo const* spellInfo)
+{
+    Unit const* unit = caster ? caster->ToUnit() : nullptr;
+    return spellInfo && spellInfo->Id == 1725 && unit && unit->GetClass() == CLASS_ROGUE
+        && Holds(unit, SPELL_DIVERSION);
+}
+
 bool DivertsIntoStun(Unit* caster, Unit* target)
 {
     if (!caster || !target || caster == target || !target->IsAlive() || caster->GetClass() != CLASS_ROGUE
