@@ -646,6 +646,11 @@ bool JudgesEverySeal(Unit const* caster)
     return caster && caster->GetClass() == CLASS_PALADIN && Holds(caster, SPELL_SEALKEEPER);
 }
 
+bool KeepsJudgementSeals(Unit const* caster)
+{
+    return caster && caster->GetClass() == CLASS_PALADIN && Holds(caster, SPELL_JUDGEMENT_DAY);
+}
+
 void CollectJudgementSplash(Unit* caster, Unit* mainTarget, std::vector<Unit*>& out)
 {
     if (!mainTarget || !Holds(caster, SPELL_JUDGEMENT_DAY))

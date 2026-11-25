@@ -222,7 +222,7 @@ namespace VioletHoldClassBoons
     };
 
     constexpr float JUGGERNAUT_RADIUS          = 8.0f;
-    constexpr float JUDGEMENT_DAY_RADIUS       = 20.0f;   // around the judged target
+    constexpr float JUDGEMENT_DAY_RADIUS       = 25.0f;   // around the judged target
     constexpr float SHATTERED_WARD_RADIUS      = 10.0f;
     constexpr float CONTAGION_RADIUS           = 20.0f;
     constexpr float SINISTER_CLEAVE_REACH      = 5.0f;    // beyond both combat reaches
@@ -274,6 +274,8 @@ namespace VioletHoldClassBoons
     // freshest (spell_paladin.cpp, Zealot's Persistence's path). Judgement Day
     // then carries every one of them to each enemy it splashes.
     TC_GAME_API bool JudgesEverySeal(Unit const* caster);
+    // Judgement Day: casting Judgement leaves all active seals on the paladin.
+    TC_GAME_API bool KeepsJudgementSeals(Unit const* caster);
     // Judgement Day: every other enemy within JUDGEMENT_DAY_RADIUS of the judged
     // target, who is judged too (spell_paladin.cpp).
     TC_GAME_API void CollectJudgementSplash(Unit* caster, Unit* mainTarget, std::vector<Unit*>& out);

@@ -1658,7 +1658,7 @@ private:
 
             // Violet Hold Judgement Day: the same judgement - every seal's,
             // for a Sealkeeper - on every enemy around the target, before the
-            // seals are spent below.
+            // seals are spent below unless Judgement Day keeps them active.
             std::vector<Unit*> splash;
             VioletHoldClassBoons::CollectJudgementSplash(caster, hitUnit, splash);
             for (Unit* enemy : splash)
@@ -1669,16 +1669,18 @@ private:
             }
         }
 
-        // Remove all seal spells. Chain-independent on purpose: the Seal of
+        // Normally remove all seal spells. Chain-independent on purpose: the Seal of
         // Righteousness ranks are split across two chains in spell_ranks
         // (20154 has no chain row, 21084 heads ranks 2+), so ranked lookups
         // miss ranks 2+ and left SoR up after judging. This also catches a
-        // second seal lingering in the seal-twist grace window.
-        caster->RemoveAppliedAuras([](AuraApplication const* aurApp)
-        {
-            SpellInfo const* sealInfo = aurApp->GetBase()->GetSpellInfo();
-            return sealInfo->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || sealInfo->Id == 20164;
-        });
+        // second seal lingering in the seal-twist grace window. Judgement Day
+        // keeps every active seal, including Sealkeeper's additional ones.
+        if (!VioletHoldClassBoons::KeepsJudgementSeals(caster))
+            caster->RemoveAppliedAuras([](AuraApplication const* aurApp)
+            {
+                SpellInfo const* sealInfo = aurApp->GetBase()->GetSpellInfo();
+                return sealInfo->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || sealInfo->Id == 20164;
+            });
     }
 
     void Register() override

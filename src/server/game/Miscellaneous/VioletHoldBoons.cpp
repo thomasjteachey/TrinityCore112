@@ -178,7 +178,7 @@ BoonInfo const kBoons[uint8(Boon::Max)] =
     { Boon::Warlord,       94342, 1, 1, ClassBit(CLASS_WARRIOR), 0, "Boon of the Warlord",       "Shield Wall, Recklessness and Retaliation no longer share a cooldown", "" },
     { Boon::Sealkeeper,    94343, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Sealkeeper",    "every seal can be up at once and Judgement judges all of them; your seals cost no mana, have 0.5 sec less global cooldown and last twice as long", "" },
     { Boon::RadiantHost,   94344, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of the Radiant Host",  "all of your Auras can be active at once", "" },
-    { Boon::JudgementDay,  94345, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Judgement Day",     "Judgement also strikes every enemy within 20 yd of your target", "" },
+    { Boon::JudgementDay,  94345, 1, 1, ClassBit(CLASS_PALADIN), 0, "Boon of Judgement Day",     "Judgement also strikes every enemy within 25 yd of your target and does not consume your seals", "" },
     { Boon::PointBlank,    94346, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of Point Blank",       "no dead zone; Auto Shot keeps firing while moving, and Aimed Shot and Multi-Shot can be cast while moving", "" },
     { Boon::Trapper,       94347, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Trapper",       "your traps no longer share a cooldown and can be laid in combat, you can have one of each trap down, and Freezing Trap no longer breaks on damage", "" },
     { Boon::Barrage,       94348, 1, 1, ClassBit(CLASS_HUNTER),  0, "Boon of the Barrage",       "Multi-Shot hits every non-crowd-controlled target within range of you, regardless of where you aim", "" },
