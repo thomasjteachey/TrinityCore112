@@ -1110,8 +1110,15 @@ void OnUnitDying(Unit* victim, Unit* attacker)
 
     // Shadowstalker: the rogue's own killing blow (not a pet's) puts them
     // straight back in Stealth, under 3 sec of total immunity so the fight
-    // around them cannot knock it off at once. Triggered: in combat, off
-    // Stealth's cooldown, and starting none.
+    // around them cannot knock it off at once. Triggered, so it works in
+    // combat and starts no cooldown of its own.
+    //
+    // Stealth's 10 sec cooldown has to be cleared first, as Vanish does
+    // (spell_rog_vanish). It is a category cooldown, but SpellHistory files it
+    // under Stealth's own spell id, and a triggered cast skips only the
+    // category lookup, not that entry. So a rogue who opened from Stealth less
+    // than 10 sec before the kill had the cast fail silently: no Stealth, no
+    // stealth bar, only the immunity.
     Player* rogue = attacker ? attacker->ToPlayer() : nullptr;
     if (rogue && rogue != victim && rogue->IsAlive() && rogue->GetClass() == CLASS_ROGUE
         && Holds(rogue, SPELL_SHADOWSTALKER))
@@ -1119,7 +1126,10 @@ void OnUnitDying(Unit* victim, Unit* attacker)
         rogue->CastSpell(rogue, SPELL_SHADOWSTALKER_VEIL, TRIGGERED_FULL_MASK);
         if (!rogue->HasStealthAura())
             if (uint32 stealth = HighestKnown(rogue, SPELLFAMILY_ROGUE, "Stealth"))
+            {
+                rogue->GetSpellHistory()->ResetCooldown(stealth, true);
                 rogue->CastSpell(rogue, stealth, TRIGGERED_FULL_MASK);
+            }
     }
 }
 
