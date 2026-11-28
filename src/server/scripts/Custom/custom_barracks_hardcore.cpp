@@ -780,6 +780,36 @@ namespace BarracksHardcore
         return true;
     }
 
+    // Whether this player has War Mode on AND it is armed where they stand.
+    //
+    // A War Mode player who is not armed - a starter zone, a capital, a
+    // sanctuary, a dungeon, or an open-world zone beneath their level where
+    // the pause holds - cannot be attacked by anybody, the same as someone who
+    // has it off. That is what lets the two share a party there: nobody in it
+    // is fair game while the rest are not.
+    //
+    // The Battle Ring is left out. It arms everyone on the sand whatever their
+    // setting, so the War Mode player is no more a combatant there than the
+    // friend beside them, and pulling them out of the party for stepping
+    // between the ropes would only punish the hourly event.
+    bool IsWarModeCombatant(Player const* player)
+    {
+        if (!s_enabled || !player || !player->IsInWorld())
+            return false;
+
+        if (!IsWarModeOptedIn(player))
+            return false;
+
+        if (player->IsInGurubashiBattleRing())
+            return false;
+
+        // IsFfaArmed takes a mutable Player only because the helpers it shares
+        // with ApplyFfaState do; it changes nothing.
+        return IsFfaArmed(const_cast<Player*>(player));
+    }
+
+    // A party may mix War Mode settings only while every War Mode member in it
+    // is idle. Refused at the invite when either side is armed.
     bool WarModeBlocksGrouping(Player const* left, Player const* right)
     {
         if (!s_enabled || !left || !right)
@@ -800,7 +830,11 @@ namespace BarracksHardcore
         if (Tournament::IsTournamentCharacter(left) || Tournament::IsTournamentCharacter(right))
             return false;
 
-        return IsWarModeOptedIn(left) != IsWarModeOptedIn(right);
+        if (IsWarModeOptedIn(left) == IsWarModeOptedIn(right))
+            return false;
+
+        // Only one of them has it on, so only one of these can answer true.
+        return IsWarModeCombatant(left) || IsWarModeCombatant(right);
     }
 
     // Whether this party member's War Mode disagrees with the given player's.
@@ -826,12 +860,38 @@ namespace BarracksHardcore
         return IsOptedIn(memberGuid.GetCounter()) != IsWarModeOptedIn(player);
     }
 
-    // Changing your flag takes you out of a party that does not share it.
+    // Whether this member's War Mode disagrees with the player's AND the War
+    // Mode one of the pair is armed right now - a split that is not allowed.
     //
-    // OnCanGroupInvite refuses to BUILD a split party, but it only guards the
-    // moment of joining: a legitimate party becomes illegal the instant somebody
-    // flips their flag at the flagger. Without this the flagger is a way AROUND
-    // the grouping rule rather than the thing that enforces it.
+    // An offline or loading member is never armed here: they are not in the
+    // world to be asked. That is safe rather than a hole, because the per-tick
+    // check below removes a War Mode player from a mixed party the moment they
+    // are armed, which includes the first tick after they log back in.
+    bool MemberSplitIsArmed(Player const* player, ObjectGuid memberGuid)
+    {
+        if (!MemberDisagreesOnWarMode(player, memberGuid))
+            return false;
+
+        if (IsWarModeCombatant(player))
+            return true;
+
+        Player const* member = ObjectAccessor::FindPlayer(memberGuid);
+        return member && IsWarModeCombatant(member);
+    }
+
+    // Changing your flag takes you out of a party it makes illegal.
+    //
+    // OnCanGroupInvite refuses to BUILD an armed split party, but it only
+    // guards the moment of joining: a legitimate party becomes illegal the
+    // instant somebody flips their flag at the flagger. Without this the
+    // flagger is a way AROUND the grouping rule rather than the thing that
+    // enforces it.
+    //
+    // A flip that leaves the party mixed but idle - the flagger stands in a
+    // town, so this is the usual case - keeps the party. The flipper is the
+    // one who leaves when it does not: switching War Mode OFF beside a War
+    // Mode friend who is armed would otherwise have the friend thrown out for
+    // a choice somebody else made.
     void LeavePartyIfWarModeSplit(Player* player)
     {
         if (!s_enabled || !player)
@@ -847,7 +907,7 @@ namespace BarracksHardcore
             if (slot.guid == player->GetGUID())
                 continue;
 
-            if (MemberDisagreesOnWarMode(player, slot.guid))
+            if (MemberSplitIsArmed(player, slot.guid))
             {
                 split = true;
                 break;
@@ -860,10 +920,81 @@ namespace BarracksHardcore
         // Said before the removal, so it arrives with the party frame still up
         // and reads as a consequence rather than a mystery.
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "You have left your party: War Mode is now %s and they do not share it.",
+            "You have left your party: War Mode is now %s, they do not share it, "
+            "and War Mode is armed here.",
             IsWarModeOptedIn(player) ? "on" : "off");
 
         player->RemoveFromGroup();
+    }
+
+    // War Mode players to take out of a mixed party, gathered on map threads
+    // and acted on from the world thread. Group membership is shared between
+    // every map its members stand on, so it is not changed from inside one
+    // map's update.
+    std::mutex s_armedSplitLock;
+    std::unordered_set<ObjectGuid> s_armedSplitQueue;
+
+    // Whether this War Mode player is armed in a party with somebody who has
+    // it off - who that is, or an empty guid.
+    ObjectGuid FindArmedSplitMember(Player const* player)
+    {
+        if (!s_enabled || !player)
+            return ObjectGuid::Empty;
+
+        Group const* group = player->GetGroup();
+        if (!group || !IsWarModeCombatant(player))
+            return ObjectGuid::Empty;
+
+        for (Group::MemberSlot const& slot : group->GetMemberSlots())
+            if (slot.guid != player->GetGUID() && MemberDisagreesOnWarMode(player, slot.guid))
+                return slot.guid;
+
+        return ObjectGuid::Empty;
+    }
+
+    // Per player tick. Cheapest test first: almost nobody is a grouped War
+    // Mode player standing somewhere armed, and only they walk the party.
+    void QueueIfArmedInMixedParty(Player* player)
+    {
+        if (!player->GetGroup() || FindArmedSplitMember(player).IsEmpty())
+            return;
+
+        std::lock_guard<std::mutex> guard(s_armedSplitLock);
+        s_armedSplitQueue.insert(player->GetGUID());
+    }
+
+    // World thread. Re-checked rather than trusted: the player may have left
+    // the party, turned back, or logged out since the tick that queued them.
+    void DrainArmedSplitQueue()
+    {
+        std::unordered_set<ObjectGuid> queued;
+        {
+            std::lock_guard<std::mutex> guard(s_armedSplitLock);
+            if (s_armedSplitQueue.empty())
+                return;
+            queued.swap(s_armedSplitQueue);
+        }
+
+        for (ObjectGuid const& guid : queued)
+        {
+            Player* player = ObjectAccessor::FindPlayer(guid);
+            if (!player || !player->IsInWorld() || player->IsBeingTeleported())
+                continue;
+
+            ObjectGuid const other = FindArmedSplitMember(player);
+            if (other.IsEmpty())
+                continue;
+
+            std::string name;
+            sCharacterCache->GetCharacterNameByGuid(other, name);
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "You have left your party: War Mode is armed here, and %s has it off. "
+                "A party can mix War Mode settings only where War Mode is idle - starter "
+                "zones, capitals, sanctuaries, dungeons and zones below your level.",
+                name.c_str());
+
+            player->RemoveFromGroup();
+        }
     }
 
     // The war-mode badge. Tracks the OPT-IN rather than the armed state on
@@ -2659,8 +2790,12 @@ public:
     }
 
     // War Mode is a decision about whether you can be attacked, so a party
-    // split down the middle on it cannot work: half of it is fair game in the
-    // open world and half is not.
+    // split down the middle on it cannot work where War Mode is armed: half of
+    // it is fair game in the open world and half is not. Where the War Mode
+    // side is idle - a starter zone, a capital, a sanctuary, a dungeon, a zone
+    // below their level - nobody in the party can be attacked, so the party is
+    // allowed, and it lasts until a War Mode member walks somewhere that arms
+    // them (QueueIfArmedInMixedParty).
     //
     // The invite is the one choke point both directions pass through, so it
     // does not matter who invited whom. The core refuses with
@@ -2675,12 +2810,16 @@ public:
         if (!target || !WarModeBlocksGrouping(player, target))
             return true;
 
+        bool const selfArmed = IsWarModeCombatant(player);
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "%s has War Mode %s and you have it %s. You cannot group until you both "
-            "set it the same way.",
+            "%s has War Mode %s and you have it %s, and War Mode is armed where %s. "
+            "A party can mix War Mode settings only where War Mode is idle - starter "
+            "zones, capitals, sanctuaries, dungeons and zones below the War Mode "
+            "player's level.",
             target->GetName().c_str(),
             IsWarModeOptedIn(target) ? "on" : "off",
-            IsWarModeOptedIn(player) ? "on" : "off");
+            IsWarModeOptedIn(player) ? "on" : "off",
+            selfArmed ? "you are" : "they are");
         return false;
     }
 
@@ -2693,33 +2832,55 @@ public:
     //
     // Every member slot is asked, offline members included, plus the leader
     // explicitly - a group is not created until its first accept, and until
-    // then the leader is only an inviter, not a slot.
+    // then the leader is only an inviter, not a slot. An offline War Mode
+    // member cannot be asked whether they are armed and is let through; the
+    // per-tick check takes them out of the party if they log in armed.
     bool OnCanGroupAccept(Player* player, Group* group) override
     {
         if (!s_enabled || !player || !group)
             return true;
 
         ObjectGuid disagreeing;
-        if (MemberDisagreesOnWarMode(player, group->GetLeaderGUID()))
+        bool mixed = MemberDisagreesOnWarMode(player, group->GetLeaderGUID());
+        if (MemberSplitIsArmed(player, group->GetLeaderGUID()))
             disagreeing = group->GetLeaderGUID();
         else
             for (Group::MemberSlot const& slot : group->GetMemberSlots())
-                if (slot.guid != player->GetGUID() && MemberDisagreesOnWarMode(player, slot.guid))
+            {
+                if (slot.guid == player->GetGUID())
+                    continue;
+
+                if (MemberDisagreesOnWarMode(player, slot.guid))
+                    mixed = true;
+
+                if (MemberSplitIsArmed(player, slot.guid))
                 {
                     disagreeing = slot.guid;
                     break;
                 }
+            }
 
         if (disagreeing.IsEmpty())
+        {
+            // Allowed, but on terms worth knowing before they walk out of town.
+            if (mixed)
+                ChatHandler(player->GetSession()).PSendSysMessage(
+                    "This party mixes War Mode settings. That holds only while War Mode is "
+                    "idle - any member with it on leaves the party on reaching a place where "
+                    "it arms them.");
             return true;
+        }
 
         std::string name;
         sCharacterCache->GetCharacterNameByGuid(disagreeing, name);
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "You have War Mode %s and %s has it %s. You cannot join a party that does "
-            "not share your War Mode setting.",
+            "You have War Mode %s and %s has it %s, and War Mode is armed where %s. "
+            "A party can mix War Mode settings only where War Mode is idle - starter "
+            "zones, capitals, sanctuaries, dungeons and zones below the War Mode "
+            "player's level.",
             IsWarModeOptedIn(player) ? "on" : "off", name.c_str(),
-            IsWarModeOptedIn(player) ? "off" : "on");
+            IsWarModeOptedIn(player) ? "off" : "on",
+            IsWarModeCombatant(player) ? "you are" : "they are");
         return false;
     }
 
@@ -2731,6 +2892,7 @@ public:
         EnforceAlwaysPvP(player);
         ApplyFfaState(player);
         ApplyWarModeAura(player);
+        QueueIfArmedInMixedParty(player);
         SweepLooseFieldKitThrottled(player);
         WatchMovementDivergence(player);
     }
@@ -3377,6 +3539,13 @@ public:
         LoadHardcoreConfig();
         if (s_enabled)
             CharacterDatabase.DirectExecute("CREATE TABLE IF NOT EXISTS character_ffa_optin (guid INT UNSIGNED NOT NULL, PRIMARY KEY (guid)) ENGINE=InnoDB");
+    }
+
+    // Mixed War Mode parties are broken up here, on the world thread, for the
+    // players the map threads flagged this tick.
+    void OnUpdate(uint32 /*diff*/) override
+    {
+        DrainArmedSplitQueue();
     }
 };
 
